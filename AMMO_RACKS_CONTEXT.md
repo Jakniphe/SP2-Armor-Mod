@@ -1,7 +1,7 @@
 # Ammo racks and cannon changes: context for Claude
 
-Reference for the ammo-rack feature and what it changes in cannons, damage and vehicle death. Branch
-`ammo-rack`, built on v0.7.0. Player summary: `PATCH_NOTES.md`.
+Reference for the ammo-rack feature and what it changes in cannons, damage and vehicle death, as of v0.8.1.
+Player summary: `PATCH_NOTES.md`.
 
 ## Goal
 Armored vehicles are killed through damaged modules, not part explosions: the armor shell stays intact and the
@@ -10,22 +10,26 @@ Vehicles without armor die as in the base game.
 
 ## Files
 New:
-- `AmmoRacks.cs`: runtime. Registries (`Craft` → `Group` → `Rack`), feeding, weight, damage and cook-off, the
+- `AmmoRacks.cs`: runtime. Registries (`Craft` with its `Rack`s, a `Feed` per rack-fed cannon, and the `Group`s that
+  name the variables), feeding, weight, damage and cook-off, the
   explosion and its blast, the knocked-out state, and the rack Harmony patches (end of file).
 - `AmmoRound.cs`: a round's size, mass, energy and explosive pounds, from the cannon's `CannonData`.
 - `RackGrid.cs`: measures a rack's shape, packs the rounds, line-vs-rounds test, removal order, rounds mesh.
 - `RackVisualizer.cs`: see-through racks with their rounds in the designer.
 - `AmmoRackXRay.cs`: live rounds of your own racks in the X-ray.
 - `VehicleRules.cs`: whether the game may explode a vehicle, which parts take the mod's damage, and the kill.
+- `RackLinks.cs`: keeps the cannons' rack ids right when the game renumbers or deletes parts in the designer.
 - `Net/RackFireSync.cs`: gives other players' copies of the cook-off fires the owner's look (message 202).
 
 Changed: `FragmentSpawner.cs`, `ShellFlight.cs`, `Net/NetSync.cs`, `PartTags.cs`, `ArmorFragmentsPlugin.cs`,
 `UI/DesignerSection.cs`, `XRayView.cs`, `ModuleOutputs.cs`, `ArmorFragments.csproj` (see the end).
 
 ## Tags
-- `[AMM g=<group> o=<order>]` on a fuselage: an ammo rack. `g` = group name (empty = default group "Ammo"),
-  `o` = empty order (lower first; none = after the numbered ones).
-- `[CAN ... g=<group>]`: the cannon draws from that group's racks.
+- `[AMM g=<group> o=<order>]` on a fuselage: an ammo rack. `g` = the name of its Funky Trees variables (empty =
+  "Ammo"; racks with the same `g` share them),
+  `o` = empty order: a cannon empties its racks from the lowest up (none = after the numbered ones, then part id).
+- `[CAN ... r=<id>,<id>]`: the part ids of the racks the cannon draws from, picked in the designer. No `r` (or no
+  id that is still a rack) = the game's Ammo Count. Several cannons can list the same rack.
 - `[VNT]` on a fuselage: a cook-off vent.
 - In the designer, armor is exclusive with `[MOD]`, `[AMM]` and `[VNT]` (armor takes no damage). Hollow/cut
   fuselages and armor hold no rounds.
@@ -36,7 +40,9 @@ Changed: `FragmentSpawner.cs`, `ShellFlight.cs`, `Net/NetSync.cs`, `PartTags.cs`
   energy; length = max(caliber, volume / area).
 - Round mass = shell + 1 kg per litre of case.
 - Explosive pounds per round = energy (kJ) x 0.53 x 1.1 / 718 (5 cm KwK 39 ≈ 0.58 lb).
-- A group's racks are sized for the biggest round among its cannons.
+- A rack is sized for the round of the cannons that list it (the biggest, with a warning, if they differ; the
+  designer's picker leaves out a rack that already feeds a cannon of another size). A rack no cannon lists holds
+  nothing.
 
 ## Shape and packing (`RackGrid`)
 - Frame: Z along the fuselage (`JFuselageData` offset), X/Y across; rounds lie along Z.
@@ -53,12 +59,15 @@ Changed: `FragmentSpawner.cs`, `ShellFlight.cs`, `Net/NetSync.cs`, `PartTags.cs`
 
 ## Feeding and weight
 - `AmmoRackVariablesPatch` (postfix of `VariableSystemScript.RefreshVariables`) registers the racks and creates
-  the Funky Trees variables `<group>_rounds`, `<group>_fire`, `<group>_boom`.
-- `SyncCannons` writes the group's rounds into `CannonScript._currentAmmo`. `AmmoRackFirePatch`
-  (`CannonScript.Fire`): no shot when the group has no round it can feed (`Group.Available`: burning or
-  broken-off racks don't count); each shot takes a round from the first rack in order that can feed.
+  the Funky Trees variables `<group>_rounds` (rounds the group's racks can still feed), `<group>_fire`,
+  `<group>_boom`.
+- `Build`: every `[AMM]` part becomes a `Rack`; every `[CAN]` with at least one listed id that is a rack becomes a
+  `Feed` with its racks sorted by `o`, then part id. A cannon with no such rack is left to the game.
+- `SyncCannons` writes each feed's rounds into its `CannonScript._currentAmmo`. `AmmoRackFirePatch`
+  (`CannonScript.Fire`): no shot when the cannon's racks have no round they can feed (`Feed.Available`: burning or
+  broken-off racks don't count); each shot takes a round from its first rack in order that can feed.
 - `AmmoCountVisibilityPatch` (`PartModifierData.GetGenericDesignerPropertyVisibilityCallback`) hides Ammo Count
-  on rack-fed cannons.
+  on a cannon that lists at least one rack.
 - Weight: the rack's `PartData.MassScale` is raised by its rounds' mass (`RecalculateLoadedMass`); the body
   applies mass changes over 100 kg. The center of mass doesn't follow.
 - A rack no longer `ConnectedToMainCockpit` keeps its rounds but doesn't feed.
@@ -134,11 +143,22 @@ Changed: `FragmentSpawner.cs`, `ShellFlight.cs`, `Net/NetSync.cs`, `PartTags.cs`
   remain) and let the shooter run the per-piece check, sending "through rounds" and "missed" as two hits.
 
 ## Designer and X-ray
-- `DesignerSection`: rack rows (Status, Rounds held, Layout, Lost to shape, Space, Round, Shell, Rounds weight,
-  variables, See-through toggle); cannon rows (Ammo group, Ammo from, Rounds, Round, Shell); on every cannon
+- `DesignerSection`: rack rows (Empty order, Status, Feeds, Rounds held, Layout, Lost to shape, Space, Round,
+  Shell, Rounds weight, variables, See-through toggle); cannon rows (its racks in emptying order, Add rack /
+  Remove rack, Rounds, Round, Shell); on every cannon
   Shell energy, Shell mass, Muzzle velocity, Penetration at 0/30/60 deg = energy / (`ArmorResistance` x caliber
   area) x cos (HE: "none (HE bursts)"). Live rows refresh every 0.5 s on a signature change (`LiveBlock`).
   The vent toggle is on fuselages.
+- Picking racks: Add rack / Remove rack call the game's `DesignerTools.SelectChoosePartTool` (the picker wheels
+  use for their engine), which hides every part the filter rejects until one is clicked. Add's filter
+  (`AmmoRacks.DesignCanPick`): a rack not yet listed, not fed to a cannon of another round size. The click
+  rewrites `r=` through the normal commit (one undo step).
+- Keeping ids right (`RackLinks.cs`): the game renumbers parts and tells parts that point at others through
+  `IPartIDChangedListener.OnPartIDsRemapped`, which a name can't receive. Patches do the same for `r=`:
+  `Assembly.Absorb` (subassemblies, paste: old ids captured in the prefix), `SymmetryUtility.DuplicateParts`
+  (clone: copy i is part i of the selection), `SymmetryUtility.RemapSymmetricPartIDs` (symmetric copy i points at
+  copy i of each rack). Ids outside the map are kept, as the game does. `Assembly.RemovePart` on the designer's
+  craft takes the deleted id out of every cannon's list.
 - `RackVisualizer`: ghost copies of rack meshes (still clickable), rounds as cylinders, up to 20,000 drawn,
   hidden for the screenshot dialog.
 - `AmmoRackXRay`: rounds of your own racks; burning = orange, exploded = empty.
@@ -151,7 +171,8 @@ Changed: `FragmentSpawner.cs`, `ShellFlight.cs`, `Net/NetSync.cs`, `PartTags.cs`
   its back face).
 - `ShellFlight.cs`: passes `shell.CaliberMm` to `DepositCrossings`.
 - `Net/NetSync.cs`: `PartMessagePatch` accepts 202 and reads the part id.
-- `PartTags.cs`: `AmmoRackTag`, `VentTag`, `CannonTag.Group`; regex `(ARM|CAN|MOD|AMM|VNT)`.
+- `PartTags.cs`: `AmmoRackTag`, `VentTag`, `CannonTag.Racks` (`r=`), `TagCodec.WithCannonRacks`; regex
+  `(ARM|CAN|MOD|AMM|VNT)`.
 - `ArmorFragmentsPlugin.cs`: settings, globals, ticks (`AmmoRacks`, `RackFireSync`, `RackVisualizer`,
   `AmmoRackXRay`).
 - `UI/DesignerSection.cs`: the rows and toggles above; `Tick` runs `RefreshLiveRows` and `PollProjectileType`.

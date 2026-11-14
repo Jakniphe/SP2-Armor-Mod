@@ -97,7 +97,7 @@ namespace ArmorFragments
             if (fuselage.IsHollow) return Fail("Hollow: holds nothing", "hollow fuselages can't hold rounds");
             if (IsCut(fuselage)) return Fail("Cut: holds nothing", "cut fuselages can't hold rounds");
             if (round.Diameter <= 0f || round.Length <= 0f)
-                return Fail("No cannon in group", "no cannon in this rack's group");
+                return Fail("No cannon draws from it", "no cannon draws from this rack");
 
             // The frame, in the part's local axes.
             Vector3 offset = fuselage.Offset;

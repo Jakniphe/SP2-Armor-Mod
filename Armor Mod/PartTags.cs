@@ -24,7 +24,9 @@ namespace ArmorFragments
     internal sealed class CannonTag
     {
         public float ShellHardness = 100f; // k: percent, 100 = reference (ricochet)
-        public string Group;               // g: ammo rack group it draws from (null = the default group)
+
+        // r: part ids of the ammo racks it draws from, comma-separated (empty = the game's Ammo Count).
+        public List<int> Racks = new List<int>();
 
         // Explosive ammunition only (the game's Projectile Type: Explosive):
         public float? Fuse;                // z: meters after the impact at which the shell bursts (none = no fuse: HE)
@@ -32,11 +34,11 @@ namespace ArmorFragments
         public float? Brittleness;         // q: how easily the casing breaks into small fragments, percent (none = the setting's default)
     }
 
-    // Fuselage used as an ammo rack: it holds the rounds of the cannons in its group (see AmmoRacks.cs).
+    // Fuselage used as an ammo rack: it holds the rounds of the cannons that list it in [CAN r=] (see AmmoRacks.cs).
     internal sealed class AmmoRackTag
     {
-        public string Group;               // g: group name, shared with the cannons' [CAN g=] (null = the default group)
-        public int? Order;                 // o: racks empty from the lowest number up (null = after the numbered ones)
+        public string Group;               // g: names its Funky Trees variables, <group>_rounds... (null = the default group)
+        public int? Order;                 // o: a cannon empties its racks from the lowest number up (null = after the numbered ones)
     }
 
     // Part that reacts to fragment damage (engine, tank, propeller, some fuselages).
@@ -113,7 +115,7 @@ namespace ArmorFragments
                         Fuse = Optional(values, "z"),
                         FillerPercent = Optional(values, "e"),
                         Brittleness = Optional(values, "q"),
-                        Group = ReadText(block.Groups[2].Value, "g"),
+                        Racks = ReadIds(ReadText(block.Groups[2].Value, "r")),
                     };
                 }
                 else if (kind == "MOD")
@@ -153,7 +155,7 @@ namespace ArmorFragments
                        (tags.Cannon.Fuse.HasValue ? " z=" + Number(tags.Cannon.Fuse.Value) : "") +
                        (tags.Cannon.FillerPercent.HasValue ? " e=" + Number(tags.Cannon.FillerPercent.Value) : "") +
                        (tags.Cannon.Brittleness.HasValue ? " q=" + Number(tags.Cannon.Brittleness.Value) : "") +
-                       (string.IsNullOrEmpty(tags.Cannon.Group) ? "" : " g=" + tags.Cannon.Group) + "]");
+                       IdsPair(tags.Cannon.Racks) + "]");
             if (tags.Module != null)
                 Append(name, string.IsNullOrEmpty(tags.Module.Variable)
                     ? "[MOD]" : "[MOD v=" + tags.Module.Variable + "]");
@@ -165,6 +167,47 @@ namespace ArmorFragments
                 Append(name, "[VNT]");
 
             return name.Length == 0 ? fallback : name.ToString();
+        }
+
+        // The name with only the [CAN] block's r= list replaced (removed when 'racks' is empty); the rest of
+        // the name is kept exactly as it is.
+        public static string WithCannonRacks(string name, IList<int> racks)
+        {
+            string text = name ?? "";
+            Match block = CannonBlock.Match(text);
+            if (!block.Success) return text;
+
+            string pairs = RacksPair.Replace(block.Groups[1].Value, "") + IdsPair(racks);
+            return text.Substring(0, block.Index) + "[CAN" + pairs + "]" + text.Substring(block.Index + block.Length);
+        }
+
+        private static readonly Regex CannonBlock = new Regex(@"\[CAN((?:\s+[a-z]+=[^\s\]]+)*)\s*\]");
+        private static readonly Regex RacksPair = new Regex(@"\s+r=[^\s\]]+");
+
+        private static string IdsPair(IList<int> ids)
+        {
+            if (ids == null || ids.Count == 0) return "";
+            StringBuilder text = new StringBuilder(" r=");
+            for (int i = 0; i < ids.Count; i++)
+            {
+                if (i > 0) text.Append(',');
+                text.Append(ids[i].ToString(CultureInfo.InvariantCulture));
+            }
+            return text.ToString();
+        }
+
+        // "12,15" -> [12, 15] (no repeats, in order).
+        private static List<int> ReadIds(string text)
+        {
+            List<int> ids = new List<int>();
+            if (string.IsNullOrEmpty(text)) return ids;
+            foreach (string item in text.Split(','))
+            {
+                int id;
+                if (int.TryParse(item, NumberStyles.Integer, CultureInfo.InvariantCulture, out id) && !ids.Contains(id))
+                    ids.Add(id);
+            }
+            return ids;
         }
 
         private static Dictionary<string, float> ReadPairs(string text)
