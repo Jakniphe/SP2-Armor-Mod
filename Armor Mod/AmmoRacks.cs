@@ -380,7 +380,7 @@ namespace ArmorFragments
 
             if (rack.Burning && Time.time >= rack.ExplodeAt)
             {
-                Explode(rack);
+                ExplodeWithPartners(rack);
             }
             else if (rack.Part == null && rack.Grid.Remaining > 0)
             {
@@ -388,7 +388,7 @@ namespace ArmorFragments
                 {
                     // Already cooking off and the part is gone: nothing left to burn.
                     ArmorFragmentsPlugin.Log.LogInfo("Ammo rack '" + rack.Label + "' was destroyed while burning");
-                    Explode(rack);
+                    ExplodeWithPartners(rack);
                 }
                 else
                 {
@@ -660,7 +660,7 @@ namespace ArmorFragments
             ArmorFragmentsPlugin.Log.LogInfo("Ammo rack '" + rack.Label + "' was destroyed" + (partGone ? " (part gone)" : "") +
                 " with " + rack.Grid.Remaining + " rounds in it (damage level rose by " + Fmt(rise, "F3") + "): it cooks off");
 
-            if (partGone) Explode(rack);
+            if (partGone) ExplodeWithPartners(rack);
             else Ignite(rack, rack.Attacker, "destroyed");
         }
 
@@ -757,50 +757,98 @@ namespace ArmorFragments
             SyncCannons(rack.Craft);
         }
 
-        private static void Explode(Rack rack)
+        // Racks of one vehicle due to explode within this many seconds of each other go up as one blast.
+        private const float TogetherWindow = 0.5f;
+
+        // A rack explodes, with every other burning rack of its vehicle that is due within TogetherWindow.
+        private static void ExplodeWithPartners(Rack first)
         {
-            int rounds = rack.Grid.Remaining;
-            rack.Exploded = true;
-            rack.Burning = false;
-            rack.Grid.EmptyAll();
+            List<Rack> racks = new List<Rack> { first };
+            foreach (Rack other in first.Craft.Racks)
+                if (other != first && other.Burning && !other.Exploded && other.ExplodeAt <= Time.time + TogetherWindow)
+                    racks.Add(other);
+            Explode(racks);
+        }
 
-            try
+        // One blast for these racks: their explosive adds up (capped at MaxBlastLb), measured from their center.
+        private static void Explode(List<Rack> racks)
+        {
+            Rack first = racks[0];
+            List<Rack> live = new List<Rack>();                                  // racks that still had rounds
+            Dictionary<Rack, Vector3> centers = new Dictionary<Rack, Vector3>();
+            Dictionary<Rack, float> rackPounds = new Dictionary<Rack, float>();
+            float pounds = 0f;
+            Vector3 weighted = Vector3.zero;
+            int? attacker = null;
+
+            foreach (Rack rack in racks)
             {
-                if (rack.Fire != null && !rack.Fire.Destroyed) rack.Fire.DestroyEffect();
-                if (rack.Fire != null) RackFireSync.Send(rack.Part, RackFireSync.RackFireOut);
-            }
-            catch (Exception e)
-            {
-                ArmorFragmentsPlugin.Log.LogWarning("Ammo rack fire effect could not be removed: " + e.Message);
+                int rounds = rack.Grid.Remaining;
+                Vector3 center = rack.Part != null ? rack.Grid.WorldCenter(rack.Part.transform) : rack.LastPosition;
+                rack.Exploded = true;
+                rack.Burning = false;
+                rack.Grid.EmptyAll();
+
+                try
+                {
+                    if (rack.Fire != null && !rack.Fire.Destroyed) rack.Fire.DestroyEffect();
+                    if (rack.Fire != null) RackFireSync.Send(rack.Part, RackFireSync.RackFireOut);
+                }
+                catch (Exception e)
+                {
+                    ArmorFragmentsPlugin.Log.LogWarning("Ammo rack fire effect could not be removed: " + e.Message);
+                }
+
+                if (rounds <= 0)
+                {
+                    ArmorFragmentsPlugin.Log.LogInfo("Ammo rack '" + rack.Label + "' burned out with no rounds left");
+                    continue;
+                }
+
+                // Sized in pounds of explosive: each round adds its propellant's explosive equivalent
+                // (AmmoRound.ExplosiveLb: ~0.58 lb for a 50 mm round at 835 m/s, so a Pz III's ~90 rounds make ~55 lb).
+                float lb = rounds * rack.Round.ExplosiveLb * ArmorFragmentsPlugin.BlastStrength.Value;
+                ArmorFragmentsPlugin.Log.LogInfo("Ammo rack '" + rack.Label + "' exploded: " + rounds + " rounds of " +
+                    Fmt(rack.Round.CaliberMm, "F0") + " mm = " + Fmt(lb, "F1") + " lb of explosive");
+
+                live.Add(rack);
+                centers[rack] = center;
+                rackPounds[rack] = lb;
+                pounds += lb;
+                weighted += center * lb;
+                if (!attacker.HasValue) attacker = rack.Attacker;
+                rack.Group.Boomed = true;   // <group>_boom: detachers wired to it fire now (turret toss)
             }
 
-            if (rounds <= 0)
+            if (live.Count == 0)
             {
-                ArmorFragmentsPlugin.Log.LogInfo("Ammo rack '" + rack.Label + "' burned out with no rounds left");
+                SyncCannons(first.Craft);
                 return;
             }
 
-            // Sized in pounds of explosive: each round adds its propellant's explosive equivalent
-            // (AmmoRound.ExplosiveLb: ~0.58 lb for a 50 mm round at 835 m/s, so a Pz III's ~90 rounds make ~55 lb),
-            // capped at MaxBlastLb.
-            float pounds = Mathf.Min(rounds * rack.Round.ExplosiveLb * ArmorFragmentsPlugin.BlastStrength.Value,
-                                     ArmorFragmentsPlugin.MaxBlastLb.Value);
-            float size = BangSize(pounds);
-            Vector3 center = rack.Part != null ? rack.Grid.WorldCenter(rack.Part.transform) : rack.LastPosition;
+            float total = Mathf.Min(pounds, ArmorFragmentsPlugin.MaxBlastLb.Value);
+            Vector3 blastCenter = pounds > 0f ? weighted / pounds : centers[live[0]];
+            List<string> labels = new List<string>();
+            foreach (Rack rack in live) labels.Add("'" + rack.Label + "'");
+            string names = string.Join(" + ", labels.ToArray());
+            ArmorFragmentsPlugin.Log.LogInfo("Cook-off of " + names + ": " + Fmt(total, "F1") + " lb of explosive" +
+                (live.Count > 1 ? " (" + live.Count + " racks together)" : "") +
+                (total < pounds ? " (capped from " + Fmt(pounds, "F1") + " lb at MaxBlastLb)" : "") +
+                ", blast size " + Fmt(BangSize(total), "F2") + " (120 lb makes " + Fmt(BangSize(BangReferenceLb), "F2") + ")");
 
-            ArmorFragmentsPlugin.Log.LogInfo("Ammo rack '" + rack.Label + "' exploded: " + rounds + " rounds of " +
-                Fmt(rack.Round.CaliberMm, "F0") + " mm = " + Fmt(pounds, "F1") + " lb of explosive (blast size " +
-                Fmt(size, "F2") + "; a 250 lb bomb is 0.80)");
-
-            rack.Group.Boomed = true;   // <group>_boom: detachers wired to it fire now (turret toss)
-            KnockOut(rack.Aircraft);    // before the cook: no game explosion may blow the shell apart
-            Vector3 ventAt = Blast(rack, center, pounds);   // before the wreck: it may destroy the vent part
-            WreckInsides(rack, center, ventAt, pounds);
-            SyncCannons(rack.Craft);
+            KnockOut(first.Aircraft);    // before the cook: no game explosion may blow the shell apart
+            Blast(live, centers, rackPounds, blastCenter, total, attacker);   // before the wreck: it may destroy a vent
+            WreckInsides(live, blastCenter, total, attacker);
+            SyncCannons(first.Craft);
 
             // A rack going up is the vehicle's kill switch: the game's own death (kill credit, kill cam, respawn),
             // when it actually explodes, not while it burns. A rack that broke off the vehicle first doesn't kill it.
-            if (!rack.BrokenOff) VehicleRules.Kill(rack.Aircraft, "ammo rack '" + rack.Label + "' exploded");
+            foreach (Rack rack in live)
+            {
+                if (rack.BrokenOff) continue;
+                VehicleRules.Kill(first.Aircraft, "ammo rack " + names + " exploded");
+                break;
+            }
         }
 
         // ---- Knocked out -----------------------------------------------------------------
@@ -828,11 +876,12 @@ namespace ArmorFragments
         // ---- The blast: one bang, then a jet of fire -------------------------------------------
         //
         // A cook-off is:
-        //  1. One bang: a single explosion (AmmoRacks.BlastType, BombExplosion by default) at the vehicle's
-        //     cook-off vent ([VNT] part, the nearest one: a turret ring or hatch), or just above the rack with
-        //     no vent, sized by the pounds of explosive like the game's own bombs. Only for show.
-        //  2. A jet of fire out of the vent for 3 to 10 s (more pounds, longer): the game's own fire effect,
-        //     scaled up and stretched upward, with denser flames.
+        //  1. One bang: a single explosion (AmmoRacks.BlastType, BombExplosion by default) at the rack (racks going
+        //     up together: at their center, weighted by their explosive), sized by the pounds of explosive like the
+        //     game's own bombs. Only for show.
+        //  2. A jet of fire out of each rack's nearest cook-off vent ([VNT] part: a turret ring or hatch), or out of
+        //     the rack with no vent, for 3 to 10 s (more pounds, longer): the game's own fire effect, scaled up and
+        //     stretched upward, with denser flames. Racks going up together through the same vent make one jet.
         //  3. It then settles smoothly into the half-size burn-out fire, which never goes out (KeepBurning).
         // The game's blast does nothing (AmmoRackBlastPatch): WreckInsides does all the cook-off's damage.
 
@@ -864,59 +913,93 @@ namespace ArmorFragments
         // The game's bombs: explosion size per pound ("Boom 25", 250 lb = 0.8).
         private const float BombSizePerLb = 0.8f / 250f;
 
-        // The bang: sized like the game's bombs by the pounds ("Boom 25", 250 lb = 0.8), times BlastVisualPercent.
+        // The bang: a BangReferenceLb charge is sized like the game's bombs ("Boom 25", 250 lb = 0.8); other charges
+        // grow with the cube root of their pounds, as a blast's reach does (Hopkinson-Cranz), so a cook-off of
+        // low-velocity rounds (little propellant) still shows a cloud. Times BlastVisualPercent.
         // Only for show: AmmoRackBlastPatch gives the game's blast nothing to act on.
+        private const float BangReferenceLb = 120f;
+
         private static float BangSize(float pounds)
         {
-            return pounds * BombSizePerLb * Mathf.Max(ArmorFragmentsPlugin.BlastVisualPercent.Value, 0f) / 100f;
+            if (pounds <= 0f) return 0f;
+            float size = BangReferenceLb * BombSizePerLb * Mathf.Pow(pounds / BangReferenceLb, 1f / 3f);
+            return size * Mathf.Max(ArmorFragmentsPlugin.BlastVisualPercent.Value, 0f) / 100f;
         }
 
         // Scales the fire jet's flare-up (size and extra flames).
         private const float JetSize = 1f / 3f;
 
-        // Returns where the blast comes out of the vehicle (the vent, or just above the rack).
-        private static Vector3 Blast(Rack rack, Vector3 center, float pounds)
+        private static void Blast(List<Rack> racks, Dictionary<Rack, Vector3> centers, Dictionary<Rack, float> rackPounds,
+                                  Vector3 center, float pounds, int? attacker)
         {
-            PartScript vent = NearestVent(rack.Aircraft, center);
-            PartScript firePart = vent != null ? vent : rack.Part;
-            Vector3 at = vent != null ? vent.transform.position : center + Vector3.up * 0.5f;
+            AircraftScript aircraft = racks[0].Aircraft;
 
-            // 1. The bang.
+            // Each rack's fire comes out of its nearest vent (no vent: out of the rack itself); racks sharing a vent
+            // make one jet, sized by their explosive together.
+            List<PartScript> fireParts = new List<PartScript>();
+            Dictionary<PartScript, float> jetPounds = new Dictionary<PartScript, float>();
+            Dictionary<PartScript, List<string>> jetLabels = new Dictionary<PartScript, List<string>>();
+            foreach (Rack rack in racks)
+            {
+                PartScript vent = NearestVent(aircraft, centers[rack]);
+                PartScript firePart = vent != null ? vent : rack.Part;
+                if (firePart == null) continue;
+                if (!jetPounds.ContainsKey(firePart))
+                {
+                    fireParts.Add(firePart);
+                    jetPounds[firePart] = 0f;
+                    jetLabels[firePart] = new List<string>();
+                }
+                jetPounds[firePart] += rackPounds[rack];
+                jetLabels[firePart].Add(rack.Label);
+            }
+
+            // 1. The bang, at the rack. Its message to other players needs a part of the vehicle to place it on.
             float size = BangSize(pounds);
             if (size > 0.0001f && FlightSceneScript.Instance != null)
             {
-                Recent.Add(new RecentBlast { Position = at, Time = Time.time, Owner = rack.Aircraft });
+                Recent.Add(new RecentBlast { Position = center, Time = Time.time, Owner = aircraft });
+                PartScript reference = null;
+                foreach (Rack rack in racks)
+                    if (rack.Part != null) { reference = rack.Part; break; }
+                if (reference == null && fireParts.Count > 0) reference = fireParts[0];
                 // Sent before the explosion, so other players' mods keep it off their copy of this vehicle too.
-                RackFireSync.SendBlast(firePart, at);
-                FlightSceneScript.Instance.CreateExplosion(ArmorFragmentsPlugin.BlastType.Value, at, size, null,
-                                                           rack.Attacker, null, ExplosiveWeaponImpactType.Structure);
+                RackFireSync.SendBlast(reference, center);
+                FlightSceneScript.Instance.CreateExplosion(ArmorFragmentsPlugin.BlastType.Value, center, size, null,
+                                                           attacker, null, ExplosiveWeaponImpactType.Structure);
             }
 
-            // 2-3. The jet: it flares up at once (wider with more pounds, x 2.5 upward, more flames, all scaled by
-            // JetSize) and settles into the burn-out.
-            float duration = Mathf.Clamp(2f + pounds / 15f, 3f, 10f);
-            float width = Mathf.Max(FireScale * 1.5f, Mathf.Clamp(1f + pounds / 25f, 1.5f, 5f) * JetSize);
-            StartJet(firePart, rack.Label, duration, new Vector3(width, width * 2.5f, width), 1f + pounds / 20f * JetSize);
-            if (firePart != null) BurningVents.Add(firePart);
+            // 2-3. The jets: each flares up at once (wider with more pounds, x 2.5 upward, more flames, all scaled
+            // by JetSize) and settles into the burn-out.
+            List<string> jets = new List<string>();
+            foreach (PartScript firePart in fireParts)
+            {
+                float lb = Mathf.Min(jetPounds[firePart], pounds);
+                float duration = Mathf.Clamp(2f + lb / 15f, 3f, 10f);
+                float width = Mathf.Max(FireScale * 1.5f, Mathf.Clamp(1f + lb / 25f, 1.5f, 5f) * JetSize);
+                string label = string.Join(" + ", jetLabels[firePart].ToArray());
+                StartJet(firePart, label, duration, new Vector3(width, width * 2.5f, width), 1f + lb / 20f * JetSize);
+                BurningVents.Add(firePart);
+                jets.Add("'" + firePart.Part.Name + "' (" + Fmt(width, "F1") + " x " + Fmt(width * 2.5f, "F1") +
+                         " for " + Fmt(duration, "F1") + " s)");
+            }
 
             // 4. Every other vent of the vehicle catches the small burn-out fire too, a little later each (0.5 to
             //    2 s: the fire spreading through the hull). A vent already burning gets no second fire.
             int others = 0;
-            foreach (PartScript other in Vents(rack.Aircraft))
+            foreach (PartScript other in Vents(aircraft))
             {
-                if (other == vent || BurningVents.Contains(other)) continue;
+                if (jetPounds.ContainsKey(other) || BurningVents.Contains(other)) continue;
                 BurningVents.Add(other);
                 PendingFires.Add(new PendingFire { At = Time.time + UnityEngine.Random.Range(0.5f, 2f), Part = other });
                 others++;
             }
 
-            ArmorFragmentsPlugin.Log.LogInfo("Ammo rack '" + rack.Label + "' cooks off " +
-                (vent != null ? "through '" + vent.Part.Name + "'" : "(no [VNT] part: above the rack)") + ": one " +
-                ArmorFragmentsPlugin.BlastType.Value + " of size " + Fmt(size, "F2") + ", then a fire jet " +
-                Fmt(width, "F1") + " x " + Fmt(width * 2.5f, "F1") + " for " + Fmt(duration, "F1") +
-                " s, settling into a burn-out that never goes out" +
+            ArmorFragmentsPlugin.Log.LogInfo("Cook-off: one " + ArmorFragmentsPlugin.BlastType.Value + " of size " +
+                Fmt(size, "F2") + " at the rack" + (racks.Count > 1 ? "s" : "") + ", then fire jet(s) out of " +
+                (jets.Count > 0 ? string.Join(", ", jets.ToArray()) : "nothing (the rack is gone, no vent)") +
+                ", settling into a burn-out that never goes out" +
                 (others > 0 ? "; " + others + " other vent(s) catch fire too" : ""));
-            return at;
         }
 
         // Vents ([VNT] parts) burning since a cook-off, and the other vents' fires still to light.
@@ -1085,14 +1168,18 @@ namespace ArmorFragments
         //    wrecked), up to twice it closer in; in between it grows with ln(P), as damage does with pressure.
         //  - R is the distance to the part's nearest surface (its colliders), not its center.
         // Example at 25%: 96 lb (42 rounds of 100 mm) is 10.9 kg of TNT: wrecks within 2.7 m, damages out to 4.8 m.
-        // It is the cook-off's only damage (the bang is just for show: AmmoRackBlastPatch), inside and outside:
-        //  - Its own vehicle, from the rack: only its damage modules and racks on an armored vehicle (VehicleRules).
-        //  - Every other vehicle around, from where the blast leaves the hull (the vent, or just above the rack):
-        //    by the same rules (armor never; armored vehicles in modules and racks; others in every part). A
-        //    remote player's vehicle is damaged over the network, as fragments are.
-        // Racks hit this way roll their own chance (chain).
-        private static void WreckInsides(Rack rack, Vector3 center, Vector3 ventAt, float pounds)
+        // It is the cook-off's only damage (the bang is just for show: AmmoRackBlastPatch), measured from the rack
+        // (racks going up together: their center) for every vehicle, its own and the others around, by the same
+        // rules (armor never; armored vehicles in modules and racks; others in every part). Armor in the way
+        // shields, the burning vehicle's own hull included. A remote player's vehicle is damaged over the
+        // network, as fragments are. Racks hit this way roll their own chance (chain).
+        private static void WreckInsides(List<Rack> racks, Vector3 center, float pounds, int? attacker)
         {
+            AircraftScript aircraft = racks[0].Aircraft;
+            HashSet<PartScript> exploding = new HashSet<PartScript>();
+            foreach (Rack rack in racks)
+                if (rack.Part != null) exploding.Add(rack.Part);
+
             float tntKg = pounds * 0.4536f * Mathf.Clamp(ArmorFragmentsPlugin.CookOffTNTEfficiency.Value, 0f, 100f) / 100f;
             if (tntKg <= 0f) return;
             float cubeRoot = Mathf.Pow(tntKg, 1f / 3f);
@@ -1101,10 +1188,9 @@ namespace ArmorFragments
             float reach = ScaledDistanceAt(onsetKPa) * cubeRoot;       // m: no damage beyond
             float wreckWithin = ScaledDistanceAt(wreckKPa) * cubeRoot;  // m: for the log
 
-            // Every part near the rack (its own vehicle) or near the vent (everyone else), at its nearest surface.
+            // Every part around the rack, of any vehicle, at its nearest surface.
             Dictionary<PartScript, Vector3> nearest = new Dictionary<PartScript, Vector3>();
-            Collect(nearest, center, reach, rack, true);
-            Collect(nearest, ventAt, reach, rack, false);
+            Collect(nearest, center, reach, exploding);
 
             int inside = 0, outside = 0, shielded = 0;
             float halvingMm = Mathf.Max(ArmorFragmentsPlugin.CookOffArmorHalvingMm.Value, 0.1f);
@@ -1113,18 +1199,16 @@ namespace ArmorFragments
             {
                 PartScript part = pair.Key;
                 if (part == null || part.Part == null) continue;
-                bool own = part.Aircraft == rack.Aircraft;
+                bool own = part.Aircraft == aircraft;
                 if (!VehicleRules.TakesModDamage(part, TagCodec.Parse(part.Part.Name))) continue;
 
-                Vector3 origin = own ? center : ventAt;
-                float distance = Vector3.Distance(pair.Value, origin);
+                float distance = Vector3.Distance(pair.Value, center);
                 if (distance >= reach) continue;
 
                 // Armor in the way shields in proportion to how much of it there is: every
-                // CookOffArmorHalvingMm of effective thickness halves the pressure. Outside, the burning vehicle's
-                // own armor doesn't count (the blast is already out, at the vent).
+                // CookOffArmorHalvingMm of effective thickness halves the pressure.
                 float pressure = Overpressure(Mathf.Max(distance, 0.05f) / cubeRoot);
-                float armorMm = ArmorBetween(origin, pair.Value, part, own ? null : rack.Aircraft);
+                float armorMm = ArmorBetween(center, pair.Value, part);
                 if (armorMm > 0f) pressure *= Mathf.Pow(0.5f, armorMm / halvingMm);
                 if (pressure <= onsetKPa)
                 {
@@ -1135,9 +1219,9 @@ namespace ArmorFragments
                 float damage = part.MaxHealth * Mathf.Clamp(share, 0f, 2f);
                 if (damage <= 0f) continue;
 
-                Vector3 away = pair.Value - origin;
+                Vector3 away = pair.Value - center;
                 Vector3 direction = away.sqrMagnitude > 1e-6f ? away.normalized : Vector3.up;
-                if (ApplyBlastDamage(part, damage, pair.Value, direction, rack.Attacker))
+                if (ApplyBlastDamage(part, damage, pair.Value, direction, attacker))
                 {
                     if (own) inside++;
                     else
@@ -1147,16 +1231,17 @@ namespace ArmorFragments
                     }
                 }
             }
-            ArmorFragmentsPlugin.Log.LogInfo("Ammo rack '" + rack.Label + "' cook-off: " + Fmt(pounds, "F0") + " lb at " +
-                Fmt(ArmorFragmentsPlugin.CookOffTNTEfficiency.Value, "F0") + "% = " + Fmt(tntKg, "F1") + " kg of TNT; wrecks within " +
-                Fmt(wreckWithin, "F1") + " m, damages out to " + Fmt(reach, "F1") + " m; damaged " + inside +
-                " module(s) / rack(s) inside, " + outside + " part(s) of " + others.Count + " other vehicle(s) outside" +
+            ArmorFragmentsPlugin.Log.LogInfo("Cook-off blast: " + Fmt(pounds, "F0") + " lb at " +
+                Fmt(ArmorFragmentsPlugin.CookOffTNTEfficiency.Value, "F0") + "% = " + Fmt(tntKg, "F1") + " kg of TNT, from the rack" +
+                (racks.Count > 1 ? "s" : "") + "; wrecks within " + Fmt(wreckWithin, "F1") + " m, damages out to " +
+                Fmt(reach, "F1") + " m; damaged " + inside + " module(s) / rack(s) of this vehicle, " + outside +
+                " part(s) of " + others.Count + " other vehicle(s)" +
                 (shielded > 0 ? "; " + shielded + " part(s) in range saved by armor in the way" : ""));
         }
 
         // Effective armor (mm) on the straight line from the blast to a part: each [ARM] part crossed counts its
-        // thickness / cos(angle), as for shells (the angle limited to ~78 deg). Parts of 'skip' don't count.
-        private static float ArmorBetween(Vector3 from, Vector3 to, PartScript target, AircraftScript skip)
+        // thickness / cos(angle), as for shells (the angle limited to ~78 deg).
+        private static float ArmorBetween(Vector3 from, Vector3 to, PartScript target)
         {
             Vector3 line = to - from;
             float distance = line.magnitude;
@@ -1170,7 +1255,6 @@ namespace ArmorFragments
                 if (hit.collider == null || hit.collider.GetComponentInParent<CannonProjectileScript>() != null) continue;
                 PartScript part = hit.collider.GetComponentInParent<PartScript>();
                 if (part == null || part == target || part.Part == null || !counted.Add(part)) continue;
-                if (skip != null && part.Aircraft == skip) continue;
                 ArmorTag armor = TagCodec.Parse(part.Part.Name).Armor;
                 if (armor == null) continue;
                 float cos = Mathf.Abs(Vector3.Dot(hit.normal, direction));
@@ -1179,15 +1263,15 @@ namespace ArmorFragments
             return total;
         }
 
-        // Parts with a collider within 'radius' of 'from': own = the rack's own vehicle only, else everyone else.
-        private static void Collect(Dictionary<PartScript, Vector3> nearest, Vector3 from, float radius, Rack rack, bool own)
+        // Parts of any vehicle with a collider within 'radius' of 'from', except the exploding racks.
+        private static void Collect(Dictionary<PartScript, Vector3> nearest, Vector3 from, float radius, HashSet<PartScript> exploding)
         {
             foreach (Collider collider in Physics.OverlapSphere(from, radius, ~0, QueryTriggerInteraction.Ignore))
             {
                 if (collider == null) continue;
                 if (collider.GetComponentInParent<CannonProjectileScript>() != null) continue;   // a shell in flight
                 PartScript part = collider.GetComponentInParent<PartScript>();
-                if (part == null || part == rack.Part || (part.Aircraft == rack.Aircraft) != own) continue;
+                if (part == null || exploding.Contains(part)) continue;
 
                 MeshCollider mesh = collider as MeshCollider;
                 Vector3 point = mesh != null && !mesh.convex ? collider.bounds.ClosestPoint(from) : collider.ClosestPoint(from);

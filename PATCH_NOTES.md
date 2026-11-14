@@ -6,6 +6,9 @@ Ammo racks are fuselages that hold a cannon's ammunition. When hit through their
 - Cannons pick their own ammo racks with "Add rack" and "Remove rack". Cannons of different sizes each draw from their own racks, instead of every cannon sharing every rack.
 - With no rack picked, a cannon uses its Ammo Count slider.
 - Vehicles built on 0.8.0: pick the racks once on each cannon.
+- The cook-off blast and its bang come from the rack, for every vehicle around; the vent only carries the fire. Armor in the way, the burning vehicle's own hull included, shields what's behind it.
+- Racks exploding at the same moment go up as one blast, with one fire jet per vent.
+- The bang's size grows with the cube root of the explosive, like the blast's reach, so low-velocity rounds (little propellant) still make a visible cloud. A full 120 lb rack looks the same as before.
 
 Setting up
 - Turn on "Ammo rack" on a fuselage (`[AMM]`) and "Cannon" on the gun (`[CAN]`). On the cannon, "Add rack" opens the game's part picker: click the racks it draws from (as a wheel picks its engine). A cannon can draw from several racks, and cannons that fire the same round can share one. With no rack picked, the cannon keeps its Ammo Count slider.
@@ -19,8 +22,9 @@ Cook-off
 - The explosion kills the vehicle (a normal kill: credit, kill cam, respawn), while the hull stays intact.
 
 Explosion
-- Sized by the propellant left in the rack, as a real blast: pressure falls with distance. A full 100 mm rack wrecks modules within 2.7 m and damages them out to 4.8 m.
-- It damages your vehicle's modules and racks, and other vehicles nearby. Armor in the way shields what's behind it. Armor itself is never damaged.
+- Sized by the propellant left in the rack, as a real blast from the rack: pressure falls with distance. A full 100 mm rack wrecks modules within 2.7 m and damages them out to 4.8 m.
+- It damages your vehicle's modules and racks, and other vehicles nearby. Armor in the way, your own hull included, shields what's behind it. Armor itself is never damaged.
+- Racks that explode at the same moment make one blast: their explosive adds up, up to the `MaxBlastLb` cap.
 
 Armored vehicles keep their shape
 - On vehicles with armor, the game no longer blows up parts or the vehicle from damage, and only damage modules and ammo racks take damage from shells and fragments. They are killed by an ammo rack exploding.

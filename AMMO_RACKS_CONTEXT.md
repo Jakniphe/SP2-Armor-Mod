@@ -94,23 +94,29 @@ Changed: `FragmentSpawner.cs`, `ShellFlight.cs`, `Net/NetSync.cs`, `PartTags.cs`
 - `Ignite`: knocks the vehicle out, lights the game's fire at half size (`DressBurnOut`; `KeepBurning` sets
   `_duration` to MaxValue and `_requiresFuel` false), and explodes after `CookOffBurnSeconds` (10). A burning rack
   doesn't feed.
-- `Explode`: pounds = rounds left x `ExplosiveLb` x `BlastStrength`, capped at `MaxBlastLb` (120); sets `_boom`;
-  after the blast, `VehicleRules.Kill` kills the vehicle (unless the rack broke off first). A rack that burns out
-  with no rounds left doesn't explode and doesn't kill.
-- `Blast` (returns where the blast leaves the hull: the nearest `[VNT]`, or 0.5 m above the rack):
-  - Bang: `CreateExplosion(BlastType, at, size, ...)`, size = lb x 0.8/250 x `BlastVisualPercent` (75%). Visual
-    only: `AmmoRackBlastPatch` gives `HandleExplosiveBlast` an empty part list for blasts in `Recent` (3 m, 3 s).
-  - Jet: the vent's fire scaled up (`JetSize` 1/3), stretched x2.5 upward with more flames, easing over
+- `ExplodeWithPartners`: a rack due to explode takes with it every other burning rack of its vehicle due within
+  `TogetherWindow` (0.5 s); `Explode(racks)` makes one blast of them.
+- `Explode`: pounds = sum of rounds left x `ExplosiveLb` x `BlastStrength`, the total capped at `MaxBlastLb` (120);
+  the blast center is the racks' centers weighted by their pounds; sets `_boom`; after the blast,
+  `VehicleRules.Kill` kills the vehicle (unless every rack broke off first; a vehicle already dead is left alone).
+  A rack that burns out with no rounds left doesn't explode and doesn't kill.
+- `Blast`:
+  - Bang at the blast center: `CreateExplosion(BlastType, center, size, ...)`, size = 120 x 0.8/250 x
+    (lb / 120)^(1/3) x `BlastVisualPercent` (75%): a 120 lb charge is sized like the game's bombs, others by the
+    cube root (as the blast's reach), so low-velocity rounds still show a cloud. Visual only: `AmmoRackBlastPatch` gives `HandleExplosiveBlast` an empty part list
+    for blasts in `Recent` (3 m, 3 s).
+  - Jet: out of each rack's nearest `[VNT]` (none: the rack itself), one per vent for racks sharing it, sized by
+    their pounds: the fire scaled up (`JetSize` 1/3), stretched x2.5 upward with more flames, easing over
     clamp(2 + lb/15, 3, 10) s into the half-size endless fire. Other vents light the half-size fire 0.5 to 2 s
     later.
-- `WreckInsides(rack, center, ventAt, lb)`: all the cook-off's damage.
+- `WreckInsides(racks, center, lb, attacker)`: all the cook-off's damage.
   - W = lb x 0.4536 x `CookOffTNTEfficiency` (25%) kg of TNT; Z = R / W^(1/3); Mills (1987)
     P = 1772/Z³ − 114/Z² + 108/Z kPa; damage = MaxHealth x clamp(ln(P / `CookOffDamageKPa`) /
     ln(`CookOffWreckKPa` / `CookOffDamageKPa`), 0, 2) (200 and 1000 kPa).
-  - Own vehicle from the rack center, other vehicles from the vent (`Physics.OverlapSphere`, nearest collider
-    point, projectile colliders skipped). Who takes damage: `VehicleRules.TakesModDamage`.
-  - Shielding: `ArmorBetween` sums [ARM] thickness / max(cos, 0.2) on the line (each part once);
-    P x 0.5^(mm / `CookOffArmorHalvingMm` (10)). Outside targets ignore the burning vehicle's own armor.
+  - Every vehicle from the blast center (`Physics.OverlapSphere`, nearest collider point, projectile colliders and
+    the exploding racks skipped). Who takes damage: `VehicleRules.TakesModDamage`.
+  - Shielding: `ArmorBetween` sums [ARM] thickness / max(cos, 0.2) on the line (each part once), the burning
+    vehicle's own armor included; P x 0.5^(mm / `CookOffArmorHalvingMm` (10)).
   - Remote vehicles are damaged through `NetworkAircraft.DamagePart`. Racks hit roll their own chance.
 
 ## Vehicle death (`VehicleRules`)
