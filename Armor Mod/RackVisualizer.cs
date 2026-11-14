@@ -37,6 +37,7 @@ namespace ArmorFragments
             public readonly List<MeshRenderer> Ghosts = new List<MeshRenderer>();
             public readonly List<Renderer> Hidden = new List<Renderer>();
             public bool ShownSelected;
+            public bool ShownHidden;
         }
 
         private static readonly Dictionary<PartScript, Visual> Visuals = new Dictionary<PartScript, Visual>();
@@ -68,7 +69,7 @@ namespace ArmorFragments
             foreach (Visual visual in Visuals.Values)
             {
                 foreach (Renderer renderer in visual.Hidden)
-                    if (renderer != null) renderer.forceRenderingOff = true;
+                    if (renderer != null) renderer.forceRenderingOff = !visual.ShownHidden;
                 foreach (MeshRenderer ghost in visual.Ghosts)
                     if (ghost != null) ghost.gameObject.SetActive(true);
                 if (visual.Rounds != null) visual.Rounds.SetActive(true);
@@ -102,8 +103,8 @@ namespace ArmorFragments
                           ArmorFragmentsPlugin.AmmoRacksEnabled.Value && ArmorFragmentsPlugin.ShowRacksInDesigner.Value &&
                           Materials();
 
-            // The racks of the aircraft being designed, and their groups.
-            Dictionary<PartScript, string> racks = new Dictionary<PartScript, string>();
+            // The racks of the aircraft being designed.
+            List<PartScript> racks = new List<PartScript>();
             if (active)
             {
                 foreach (PartData data in aircraft.Aircraft.Assembly.Parts)
@@ -112,22 +113,22 @@ namespace ArmorFragments
                     if (part == null) continue;
                     PartTags tags = TagCodec.Parse(data.Name);
                     if (tags.AmmoRack == null || tags.Armor != null || !IsFuselage(part)) continue;
-                    racks[part] = AmmoRacks.GroupName(tags.AmmoRack.Group);
+                    racks.Add(part);
                 }
             }
 
             foreach (PartScript part in Visuals.Keys.ToList())
             {
-                if (part != null && racks.ContainsKey(part)) continue;
+                if (part != null && racks.Contains(part)) continue;
                 Remove(Visuals[part]);
                 Visuals.Remove(part);
             }
 
-            foreach (KeyValuePair<PartScript, string> rack in racks)
+            foreach (PartScript rack in racks)
             {
-                string signature = AmmoRacks.DesignRackSignature(rack.Key, rack.Value);
+                string signature = AmmoRacks.DesignRackSignature(rack);
                 Visual visual;
-                if (Visuals.TryGetValue(rack.Key, out visual))
+                if (Visuals.TryGetValue(rack, out visual))
                 {
                     if (visual.Signature == signature && Intact(visual))
                     {
@@ -136,7 +137,7 @@ namespace ArmorFragments
                     }
                     Remove(visual);
                 }
-                Visuals[rack.Key] = Build(rack.Key, rack.Value, signature);
+                Visuals[rack] = Build(rack, signature);
             }
         }
 
@@ -149,7 +150,7 @@ namespace ArmorFragments
 
         // ---- Building and removing ---------------------------------------------------------
 
-        private static Visual Build(PartScript part, string group, string signature)
+        private static Visual Build(PartScript part, string signature)
         {
             Visual visual = new Visual { Part = part, Signature = signature };
             int layer = part.gameObject.layer;
@@ -182,7 +183,7 @@ namespace ArmorFragments
             AmmoRound round;
             int cannons;
             bool mixed;
-            if (AmmoRacks.DesignRound(part, group, out round, out cannons, out mixed))
+            if (AmmoRacks.DesignRound(part, out round, out cannons, out mixed))
             {
                 RackGrid grid = RackGrid.Measure(part, round);
                 if (ArmorFragmentsPlugin.DebugDumpShape.Value)
@@ -234,8 +235,21 @@ namespace ArmorFragments
 
         private static void KeepHidden(Visual visual)
         {
+            if (visual.ShownHidden) return;
             foreach (Renderer renderer in visual.Hidden)
                 if (renderer != null && !renderer.forceRenderingOff) renderer.forceRenderingOff = true;
+        }
+
+        // A part picker (Add rack, a wheel's engine...) hides the parts that can't be picked: a hidden rack shows
+        // the game's own hidden look instead of its see-through copy and rounds.
+        private static void ShowHidden(Visual visual, bool hidden)
+        {
+            foreach (Renderer renderer in visual.Hidden)
+                if (renderer != null) renderer.forceRenderingOff = !hidden;
+            foreach (MeshRenderer ghost in visual.Ghosts)
+                if (ghost != null) ghost.enabled = !hidden;
+            Renderer rounds = visual.Rounds != null ? visual.Rounds.GetComponent<Renderer>() : null;
+            if (rounds != null) rounds.enabled = !hidden;
         }
 
         // Every frame (cheap): tint the selected rack, since the game's highlight is on the hidden mesh.
@@ -244,6 +258,13 @@ namespace ArmorFragments
             foreach (Visual visual in Visuals.Values)
             {
                 if (visual.Part == null || visual.Part.PartMaterialScript == null) continue;
+                bool hidden = visual.Part.PartMaterialScript.IsHidden;
+                if (hidden != visual.ShownHidden)
+                {
+                    visual.ShownHidden = hidden;
+                    ShowHidden(visual, hidden);
+                }
+
                 bool selected = visual.Part.PartMaterialScript.IsSelected;
                 if (selected == visual.ShownSelected) continue;
                 visual.ShownSelected = selected;
