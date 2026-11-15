@@ -30,6 +30,7 @@ namespace ArmorFragments
             public Vector3[] FaceCenter = new Vector3[ArmorFaces.Count];   // area-weighted, part's local space
             public Vector3[] FaceNormal = new Vector3[ArmorFaces.Count];   // average outward, part's local space
             public Vector3 Center;       // the armor's center of mass, part's local space
+            public float HoleWallKg;     // armored walls of holes carved into the block
         }
 
         private static readonly Dictionary<PartData, Entry> Cache = new Dictionary<PartData, Entry>();
@@ -53,6 +54,13 @@ namespace ArmorFragments
             faceKg = entry.FaceKg;
             faceAreaM2 = entry.FaceAreaM2;
             return true;
+        }
+
+        // Weight of the block's armored hole walls (kg); 0 if none or not measured yet.
+        public static float HoleWallKg(PartData part)
+        {
+            Entry entry = Get(part);
+            return entry != null && entry.Ready ? entry.HoleWallKg : 0f;
         }
 
         // Where the armor's weight sits, in the part's local space (as PartData.CenterOfMass), and how much it is
@@ -106,6 +114,19 @@ namespace ArmorFragments
         {
             float key = 0f;
             foreach (PartModifierData modifier in part.Modifiers) key += modifier.Mass;
+
+            // A hole carved into the block changes its mesh, not always its own mass.
+            Mesh hull = null;
+            if (part.PartScript != null)
+            {
+                Assets.Scripts.Craft.MeshGen.ProceduralPartMeshRenderer renderer = FaceHighlight.HullRenderer(part.PartScript);
+                hull = renderer != null ? renderer.Mesh : null;
+            }
+            if (hull != null) key += hull.vertexCount * 1000f + hull.bounds.size.sqrMagnitude;
+
+            // Its cutters moved, or their hole wall armor changed.
+            if (part.PartScript != null && ArmorSurface.IsCarved(part.PartScript))
+                key += ArmorSurface.CutterKey(part.PartScript).GetHashCode() * 1e-6f;
             return key;
         }
 
@@ -144,6 +165,13 @@ namespace ArmorFragments
                 entry.Kg += entry.FaceKg[i];
                 weighted += entry.FaceKg[i] * (entry.FaceCenter[i] - entry.FaceNormal[i] * (mm * 0.0005f));
             }
+
+            // Armored walls of holes carved into it ([HOL] on the cutter).
+            Vector3 wallCenter;
+            entry.HoleWallKg = ArmorSurface.WallKg(script, out wallCenter);
+            entry.Kg += entry.HoleWallKg;
+            weighted += entry.HoleWallKg * wallCenter;
+
             entry.Center = entry.Kg > 0f ? weighted / entry.Kg : Vector3.zero;
             entry.Ready = true;
             entry.ShapeKey = ShapeKey(part);
@@ -155,6 +183,7 @@ namespace ArmorFragments
                     if (entry.FaceKg[i] > 0f)
                         faces.Add(ArmorFaces.Names[i] + " " + entry.FaceKg[i].ToString("F0") + " kg (" +
                                   entry.FaceAreaM2[i].ToString("F2") + " m2)");
+                if (entry.HoleWallKg > 0f) faces.Add("hole walls " + entry.HoleWallKg.ToString("F0") + " kg");
                 ArmorFragmentsPlugin.Log.LogInfo("Armor '" + name + "' weighs " + entry.Kg.ToString("F0") + " kg of steel" +
                     (faces.Count > 0
                         ? ": " + string.Join(", ", faces.ToArray()) + "; its weight sits at " + entry.Center.ToString("F2") +
@@ -164,49 +193,39 @@ namespace ArmorFragments
         }
 
         // Outer surface area (m2) of each face of the block, its middle and its average outward direction (in the
-        // part's local space), from the block's visible mesh (or its colliders).
+        // part's local space), from the block's outer surface (ArmorSurface: its visible mesh without the walls of
+        // carved holes, or its colliders).
         private static bool FaceAreas(PartScript part, Entry entry)
         {
-            List<KeyValuePair<Mesh, Transform>> sources = FaceHighlight.Sources(part);
-            if (sources.Count == 0) return false;
+            Vector3[] local = ArmorSurface.OuterLocal(part);
+            if (local.Length == 0) return false;
 
             float[] into = entry.FaceAreaM2;
             Vector3[] centers = new Vector3[ArmorFaces.Count];
             Vector3[] normals = new Vector3[ArmorFaces.Count];
             ArmorFaces.Shape shape = ArmorFaces.ShapeOf(part);
+            Transform frame = part.transform;
             bool any = false;
-            foreach (KeyValuePair<Mesh, Transform> source in sources)
+            for (int t = 0; t + 2 < local.Length; t += 3)
             {
-                Mesh mesh = source.Key;
-                Transform from = source.Value;
-                Vector3[] points = mesh.vertices;
-                for (int sub = 0; sub < mesh.subMeshCount; sub++)
-                {
-                    if (mesh.GetTopology(sub) != MeshTopology.Triangles) continue;
-                    int[] triangles = mesh.GetTriangles(sub);
-                    for (int t = 0; t + 2 < triangles.Length; t += 3)
-                    {
-                        Vector3 a = from.TransformPoint(points[triangles[t]]);
-                        Vector3 b = from.TransformPoint(points[triangles[t + 1]]);
-                        Vector3 c = from.TransformPoint(points[triangles[t + 2]]);
-                        Vector3 cross = Vector3.Cross(b - a, c - a);
-                        float twice = cross.magnitude;
-                        if (twice < 1e-10f) continue;
+                Vector3 a = frame.TransformPoint(local[t]);
+                Vector3 b = frame.TransformPoint(local[t + 1]);
+                Vector3 c = frame.TransformPoint(local[t + 2]);
+                Vector3 cross = Vector3.Cross(b - a, c - a);
+                float twice = cross.magnitude;
+                if (twice < 1e-10f) continue;
 
-                        Vector3 middle = (a + b + c) / 3f;
-                        int face = ArmorFaces.Classify(shape, middle, cross / twice);
-                        if (face < 0) continue;   // an inner wall of a hollow block
-                        float area = 0.5f * twice;
-                        into[face] += area;
-                        centers[face] += middle * area;
-                        normals[face] += cross * 0.5f;   // area x outward direction
-                        any = true;
-                    }
-                }
+                Vector3 middle = (a + b + c) / 3f;
+                int face = ArmorFaces.Classify(shape, middle, cross / twice);
+                if (face < 0) continue;   // an inner wall of a hollow block
+                float area = 0.5f * twice;
+                into[face] += area;
+                centers[face] += middle * area;
+                normals[face] += cross * 0.5f;   // area x outward direction
+                any = true;
             }
             if (!any) return false;
 
-            Transform frame = part.transform;
             for (int i = 0; i < ArmorFaces.Count; i++)
             {
                 if (into[i] <= 0f) continue;
@@ -224,6 +243,7 @@ namespace ArmorFragments
             if (Time.unscaledTime < nextPrune) return;
             nextPrune = Time.unscaledTime + 10f;
             Prune();
+            ArmorSurface.Prune();
         }
 
         private static void Prune()

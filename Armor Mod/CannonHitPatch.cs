@@ -104,10 +104,13 @@ namespace ArmorFragments
                     Vector3 outward = Vector3.Dot(contact.normal, direction) > 0f ? -contact.normal : contact.normal;
                     int face = ArmorFaces.Classify(part, contact.point, outward);
                     float mm = face >= 0 ? armor.Faces[face] : 0f;
+                    bool hole = mm > 0f && !ArmorSurface.SurfaceAt(part, contact.point, direction);
+                    if (hole) mm = 0f;
                     if (mm <= 0f)
                     {
-                        ArmorFragmentsPlugin.Log.LogInfo("It touched an open face (" +
-                            (face >= 0 ? ArmorFaces.Names[face] : "inner wall") + "): the shell flies on into the block");
+                        ArmorFragmentsPlugin.Log.LogInfo("It touched " + (hole ? "a hole carved in the " : "an open face (") +
+                            (face >= 0 ? ArmorFaces.Names[face] : "inner wall") + (hole ? " face" : ")") +
+                            ": the shell flies on into the block");
                         ShellFlight.Continue(contact.point, direction, shell, cannon, null, null, 0f,
                                              FragmentSpawner.ShellLeadIn, RayKind.None,
                                              ArmorFragmentsPlugin.ApplyDamage.Value, false, 1, false, 0, part);

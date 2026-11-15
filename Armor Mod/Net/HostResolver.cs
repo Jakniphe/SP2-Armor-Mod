@@ -296,6 +296,7 @@ namespace ArmorFragments
                     Vector3 outward = Vector3.Dot(hit.Normal, direction) > 0f ? -hit.Normal : hit.Normal;
                     int face = ArmorFaces.Classify(hit.Target, hit.Point, outward);
                     float mm = face >= 0 ? armor.Faces[face] : 0f;
+                    if (mm > 0f && !ArmorSurface.SurfaceAt(hit.Target, hit.Point, direction)) mm = 0f;   // a carved hole
                     if (mm <= 0f)
                     {
                         ShellFlight.Continue(hit.Point, direction, shell, cannon, null, null, 0f, 0f, RayKind.None,

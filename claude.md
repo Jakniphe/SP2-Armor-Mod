@@ -356,5 +356,13 @@ Armadura por face (Jakniphe, branch `face-armor`). Resumo para o jogador: `PATCH
 - **Peso (`ArmorMass.cs`):** área de cada face na malha do bloco × espessura × 7850 kg/m³, somada em `PartData.LoadedMass` (patch no getter: física, designer e rodas veem; nada vai para o arquivo). O centro de massa da peça (`PartData.CenterOfMass`) vai na direção do aço, pela fração de massa da armadura; enquanto `PartData.GenerateXml` grava a peça o getter devolve o valor guardado. O painel mostra "Armor weight" e o peso por face; em voo o log lista o peso e o centro de cada bloco.
 - **Log:** a face atingida ("Back face, 20 mm, from inside") e, por nuvem de fragmentos, em que superfícies eles ricochetearam e em que ângulos.
 
-## v0.9.0.1 (versão atual)
+## v0.9.0.1
 Painel da armadura: o peso por face ganha uma linha por face (Front, Back, Left, Right, Top, Bottom; "open" para face aberta) abaixo de "Armor weight", em vez de uma linha só.
+
+## v0.9.1.1 (versão atual)
+Correções e acréscimos na armadura por face (Jakniphe, branch `armor-fixes`).
+- **Faces:** `ArmorFaces.Classify` escolhe, para cada pedaço da superfície, a face cuja direção para fora (paredes laterais inclinadas pelo afunilamento e pelo trapézio, pontas ao longo do bloco) é a mais próxima da normal. Uma superfície fatiada ou cortada é uma face só em toda a largura; ponta cortada continua ponta até 45°.
+- **Superfície do bloco (`ArmorSurface.cs`):** só a malha do casco (`JFuselageScript._renderer`), nunca decalques ou textos. Furos de peças de corte (carving) ficam abertos: as paredes do furo não são face (no designer pela camada de pintura ≥ 5 dos submeshes; em voo, onde a malha é uma peça só, por olharem para dentro dos colisores convexos), e onde uma linha cruza o colisor sem superfície visível o furo é aberto (`SurfaceAt`, só em blocos com cortadores). Usado pela cor das faces, pelo peso, pelos raios (`Boundaries`) e pelo primeiro contato (`CannonHitPatch`, `HostResolver`).
+- **Paredes blindadas de furo:** um cortador que corta armadura mostra "Hole wall armor" (`[HOL t=]`); as paredes dos furos que ele faz viram placas dessa espessura (face `HoleWall`), com peso e cor. Cada parede é do cortador em cuja caixa (`ManifoldLocalBounds`) está.
+- **Simetria (`ArmorSymmetry.cs`):** a cópia espelhada (`SymmetryUtility.DuplicatePart` com mirrored) troca Left/Right; com a simetria ligada, editar a armadura muda os parceiros (espelhado pelo offset lateral negado ou, sem offset, pelo modo de simetria), com um passo de desfazer para a nave toda.
+- **Designer:** azul mais forte, a cor segue a camada atual do bloco (arrastado) e "Per face" fica como estava ao trocar de bloco.
