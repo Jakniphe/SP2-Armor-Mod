@@ -117,7 +117,7 @@ namespace ArmorFragments
         internal static ConfigEntry<bool> DebugDumpShape;        // local: diagnostic file
 
         // Shown in the log and the panel, to tell which build the game is really running.
-        public const string Version = "0.9.0";
+        public const string Version = "0.9.0.1";
 
         private void Update()
         {
