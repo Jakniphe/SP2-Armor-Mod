@@ -1,0 +1,517 @@
+using System;
+using System.Collections.Generic;
+using Assets.Scripts.Craft;
+using Assets.Scripts.Craft.Parts;
+using Assets.Scripts.Flight.Cameras;
+using HarmonyLib;
+using UnityEngine;
+using UnityEngine.InputSystem;
+
+namespace ArmorFragments
+{
+    // What the damage maps know about one plate's mesh.
+    internal sealed class PlateInfo
+    {
+        public PartScript Part;
+        public PlateGeometry Geometry;
+        public PartMaterialScript.RendererMaterialMap Map;
+        public Mesh Mesh;
+        public Matrix4x4 ToPart;    // the mesh's vertices to the part's local frame
+        public float ThicknessM;    // the plate's thickness from its tag, meters
+    }
+
+    // DAMAGE MAPS. Every shot that resolves on an armor plate leaves a mark on it (a dent, a hole, a groove, pits), and
+    // the mark counts: a hole lets shells and fragments through, a dent makes the plate thinner there.
+    //
+    // Two layers that never wait for each other:
+    //  1. The MODEL (here, instant): a short list of holes and dents per plate, in plate coordinates. The energy model
+    //     asks it ("is this point a hole?", "how thin is the plate here?") and nothing else decides the game.
+    //  2. The LOOK (VehicleMaps, DamageWorker): the same impacts, drawn into the plate's normal and hole maps by a worker
+    //     thread, and shown a small rectangle at a time when they are ready (and the shell's ray has arrived).
+    internal static class PlateDamageMaps
+    {
+        private const string Tag = "[DMAP] ";
+        private const int MaxRecords = 64;      // holes and dents kept per plate (the oldest go)
+        private const int MaxPitsPerCloud = 96; // fragment marks drawn per plate for one burst
+
+        private struct Hole { public bool Front; public float U, V, R; }
+        private struct Dent { public float U, V, R, D; }
+
+        private sealed class PlateState
+        {
+            public PlateInfo Info;
+            public readonly List<Hole> Holes = new List<Hole>();
+            public readonly List<Dent> Dents = new List<Dent>();
+        }
+
+        private static readonly Dictionary<PartScript, PlateInfo> Infos = new Dictionary<PartScript, PlateInfo>();
+        private static readonly HashSet<PartScript> NoInfo = new HashSet<PartScript>();
+        private static readonly Dictionary<PartScript, PlateState> States = new Dictionary<PartScript, PlateState>();
+        private static readonly Dictionary<AircraftScript, VehicleMaps> Vehicles = new Dictionary<AircraftScript, VehicleMaps>();
+        private static readonly HashSet<AircraftScript> Refused = new HashSet<AircraftScript>();
+        private static readonly List<Delivery> Holding = new List<Delivery>();
+        private static int counter;
+        private static int frame;
+        private static double lastDeliverMs;
+
+        public static bool Visuals
+        {
+            get { return ArmorFragmentsPlugin.DamageMapsEnabled.Value; }
+        }
+
+        public static bool Weakens
+        {
+            get { return ArmorFragmentsPlugin.DamageMapsWeakenArmor.Value; }
+        }
+
+        // What the panel shows.
+        public static string Message = "";
+
+        public static string Status
+        {
+            get
+            {
+                int plates = 0;
+                foreach (VehicleMaps v in Vehicles.Values) plates += v.Plates.Count;
+                return Vehicles.Count + " vehicle(s), " + plates + " plate(s), " + States.Count + " damaged, queue " +
+                       (DamageWorker.Pending + Holding.Count) + ", last stamp " + (DamageWorker.LastMs10 / 10f).ToString("F1") +
+                       " ms (worker), " + lastDeliverMs.ToString("F2") + " ms (main thread)";
+            }
+        }
+
+        // ---- The plate's mesh -------------------------------------------------------------------
+
+        public static PlateInfo InfoOf(PartScript part)
+        {
+            PlateInfo info;
+            if (Infos.TryGetValue(part, out info)) return info;
+            if (NoInfo.Contains(part)) return null;
+
+            info = Build(part);
+            if (info == null) NoInfo.Add(part);
+            else Infos[part] = info;
+            return info;
+        }
+
+        private static PlateInfo Build(PartScript part)
+        {
+            PartMaterialScript materials = part.PartMaterialScript;
+            if (materials == null) return null;
+
+            foreach (PartMaterialScript.RendererMaterialMap map in materials.RendererMaps)
+            {
+                Renderer renderer = map.Renderer;
+                if (renderer == null || !map.MeshIsUnique) continue;   // a shared mesh is never touched
+                Mesh mesh = map.Mesh;
+                if (mesh == null || !mesh.isReadable || mesh.vertexCount < 3) continue;
+
+                Matrix4x4 toPart = part.transform.worldToLocalMatrix * renderer.localToWorldMatrix;
+                PlateGeometry geometry = PlateGeometry.Build(mesh, toPart);
+                if (geometry == null) continue;
+
+                ArmorTag armor = TagCodec.Parse(part.Part.Name).Armor;
+                if (geometry.Curved)
+                    ArmorFragmentsPlugin.Log.LogInfo(Tag + "plate '" + part.Part.Name + "' is not a slab (depth " + geometry.Depth.ToString("F2") +
+                        " m of " + geometry.SizeU.ToString("F2") + " x " + geometry.SizeV.ToString("F2") + "): its maps are flat approximations");
+                return new PlateInfo
+                {
+                    Part = part, Geometry = geometry, Map = map, Mesh = mesh, ToPart = toPart,
+                    ThicknessM = (armor != null ? armor.Thickness : 20f) * 0.001f,
+                };
+            }
+            return null;
+        }
+
+        // ---- What the model asks ------------------------------------------------------------------
+
+        // Is this point of the plate a hole? 'worldNormal' is the surface normal on the side that was hit.
+        public static bool InHole(PartScript part, Vector3 worldPoint, Vector3 worldNormal)
+        {
+            if (States.Count == 0 || !Weakens) return false;
+            PlateState state;
+            if (!States.TryGetValue(part, out state) || state.Holes.Count == 0) return false;
+
+            PlateGeometry g = state.Info.Geometry;
+            bool front = Vector3.Dot(g.N, part.transform.InverseTransformDirection(worldNormal)) > 0f;
+            Vector2 at = g.ToPlane(part.transform.InverseTransformPoint(worldPoint));
+            foreach (Hole hole in state.Holes)
+            {
+                if (hole.Front != front) continue;
+                float du = at.x - hole.U, dv = at.y - hole.V;
+                if (du * du + dv * dv < hole.R * hole.R) return true;
+            }
+            return false;
+        }
+
+        // The plate as it is at this point: thinner where it is dented. Returns the same tag if nothing changed.
+        public static ArmorTag Weakened(PartScript part, ArmorTag tag, Vector3 worldPoint)
+        {
+            if (States.Count == 0 || !Weakens) return tag;
+            PlateState state;
+            if (!States.TryGetValue(part, out state) || state.Dents.Count == 0) return tag;
+
+            PlateGeometry g = state.Info.Geometry;
+            Vector2 at = g.ToPlane(part.transform.InverseTransformPoint(worldPoint));
+            float thickness = Mathf.Max(tag.Thickness * 0.001f, 0.001f);
+            float lost = 0f;
+            foreach (Dent dent in state.Dents)
+            {
+                float du = at.x - dent.U, dv = at.y - dent.V;
+                float rho = Mathf.Sqrt(du * du + dv * dv) / dent.R;
+                if (rho >= 1f) continue;
+                float bowl = 1f - rho * rho;
+                lost += dent.D * bowl * bowl;
+            }
+            float factor = Mathf.Clamp(1f - lost / thickness, 0.4f, 1f);
+            if (factor > 0.999f) return tag;
+            return new ArmorTag { Thickness = tag.Thickness * factor, Hardness = tag.Hardness, Brittleness = tag.Brittleness };
+        }
+
+        // ---- What the model tells ------------------------------------------------------------------
+
+        // A shot has been resolved on 'part'.
+        //   direction: the way the shell was going (for a ricochet: the way it bounced off)
+        //   strength:  0..1, how hard it was compared with what the plate could take
+        //   delay:     seconds until the shell's ray arrives (the mark appears then)
+        public static void OnImpact(PartScript part, ArmorTag armor, DamageKind kind, Vector3 point, Vector3 normalFacing,
+                                    Vector3 direction, float caliberMeters, float strength, float angle, float delay)
+        {
+            if (!Visuals && !Weakens) return;
+            if (part == null || part.Aircraft == null || part.Aircraft.LoadContext != CraftLoadContext.Flight) return;
+
+            PlateInfo info = InfoOf(part);
+            if (info == null) return;
+
+            PlateGeometry g = info.Geometry;
+            Vector3 normalLocal = part.transform.InverseTransformDirection(normalFacing).normalized;
+            Vector3 directionLocal = part.transform.InverseTransformDirection(direction).normalized;
+            Vector2 at = g.ToPlane(part.transform.InverseTransformPoint(point));
+            Vector2 along = g.DirectionToPlane(directionLocal);
+
+            float thickness = armor != null ? armor.Thickness * 0.001f : info.ThicknessM;
+            PlateImpact impact = new PlateImpact
+            {
+                Kind = kind,
+                Front = Vector3.Dot(g.N, normalLocal) > 0f,
+                U = at.x, V = at.y,
+                DirU = along.x, DirV = along.y,
+                Angle = angle,
+                Caliber = caliberMeters,
+                Strength = strength,
+                Thickness = thickness,
+                Seed = unchecked(part.Part.Id * 7919 + (++counter) * 104729),
+            };
+
+            if (Weakens) Record(part, info, impact);
+            if (Visuals) Show(part, new[] { impact }, delay);
+        }
+
+        // A fragment stopped in a plate (a pit) or went through it (a small hole). Gathered until the next frame.
+        private sealed class PitBuffer
+        {
+            public readonly List<PlateImpact> Impacts = new List<PlateImpact>();
+            public float Delay = float.MaxValue;
+        }
+
+        private static readonly Dictionary<PartScript, PitBuffer> Pits = new Dictionary<PartScript, PitBuffer>();
+
+        public static void OnFragment(PartScript part, bool passed, Vector3 point, Vector3 normalFacing, Vector3 direction,
+                                      float diameterMeters, float strength, float delay)
+        {
+            if (!Visuals || part == null || part.Aircraft == null || part.Aircraft.LoadContext != CraftLoadContext.Flight) return;
+
+            PlateInfo info = InfoOf(part);
+            if (info == null) return;
+
+            PitBuffer buffer;
+            if (!Pits.TryGetValue(part, out buffer)) Pits[part] = buffer = new PitBuffer();
+            if (buffer.Impacts.Count >= MaxPitsPerCloud) return;
+
+            PlateGeometry g = info.Geometry;
+            Vector3 normalLocal = part.transform.InverseTransformDirection(normalFacing).normalized;
+            Vector2 at = g.ToPlane(part.transform.InverseTransformPoint(point));
+            buffer.Delay = Mathf.Min(buffer.Delay, delay);
+            buffer.Impacts.Add(new PlateImpact
+            {
+                Kind = passed ? DamageKind.SmallHole : DamageKind.Pit,
+                Front = Vector3.Dot(g.N, normalLocal) > 0f,
+                U = at.x, V = at.y,
+                Caliber = diameterMeters,
+                Strength = strength,
+                Thickness = info.ThicknessM,
+                Seed = unchecked(part.Part.Id * 7919 + (++counter) * 104729),
+            });
+        }
+
+        // The model's record of the impact: holes let things through, dents make the plate thinner there.
+        private static void Record(PartScript part, PlateInfo info, PlateImpact impact)
+        {
+            PlateState state;
+            if (!States.TryGetValue(part, out state)) States[part] = state = new PlateState { Info = info };
+
+            float caliber = Mathf.Max(impact.Caliber, 0.002f);
+            switch (impact.Kind)
+            {
+                case DamageKind.Blocked:
+                    AddDent(state, impact.U, impact.V, caliber * (0.85f + 0.5f * impact.Strength), caliber * (0.08f + 0.32f * impact.Strength));
+                    break;
+
+                case DamageKind.Penetrated:
+                {
+                    AddDent(state, impact.U, impact.V, caliber * 0.85f, caliber * 0.10f);
+                    AddHole(state, impact.Front, impact.U, impact.V, caliber * 0.5f);
+
+                    Vector2 dir = new Vector2(impact.DirU, impact.DirV);
+                    dir = dir.sqrMagnitude < 0.0001f ? new Vector2(1f, 0f) : dir.normalized;
+                    float lateral = Mathf.Min(impact.Thickness * Mathf.Tan(Mathf.Clamp(impact.Angle, 0f, 85f) * Mathf.Deg2Rad), 0.6f);
+                    AddHole(state, !impact.Front, impact.U + dir.x * lateral, impact.V + dir.y * lateral, caliber * 0.5f * 1.15f);
+                    break;
+                }
+            }
+        }
+
+        private static void AddDent(PlateState state, float u, float v, float radius, float depth)
+        {
+            if (state.Dents.Count >= MaxRecords) state.Dents.RemoveAt(0);
+            state.Dents.Add(new Dent { U = u, V = v, R = radius, D = depth });
+        }
+
+        private static void AddHole(PlateState state, bool front, float u, float v, float radius)
+        {
+            if (state.Holes.Count >= MaxRecords) state.Holes.RemoveAt(0);
+            state.Holes.Add(new Hole { Front = front, U = u, V = v, R = radius });
+        }
+
+        // The look: hand the impacts to the worker thread, if the plate can be shown.
+        private static void Show(PartScript part, PlateImpact[] impacts, float delay)
+        {
+            VehicleMaps maps = VehicleFor(part.Aircraft);
+            if (maps == null) return;
+            PlateVisual plate = maps.PlateFor(part);
+            if (plate == null) return;
+
+            DamageWorker.Enqueue(new DamageWorker.Job
+            {
+                Owner = maps, Plate = plate, Impacts = impacts, DeliverAt = Time.time + Mathf.Max(delay, 0f),
+            });
+        }
+
+        private static VehicleMaps VehicleFor(AircraftScript aircraft)
+        {
+            VehicleMaps maps;
+            if (Vehicles.TryGetValue(aircraft, out maps)) return maps;
+            if (Refused.Contains(aircraft)) return null;
+
+            // Not too many at once: the vehicle that has been quiet longest gives its atlas back.
+            int most = Mathf.Max(ArmorFragmentsPlugin.DamageMapsMaxVehicles.Value, 1);
+            while (Vehicles.Count >= most)
+            {
+                AircraftScript oldest = null;
+                float oldestTime = float.MaxValue;
+                foreach (KeyValuePair<AircraftScript, VehicleMaps> pair in Vehicles)
+                {
+                    if (pair.Value.LastUsed < oldestTime) { oldestTime = pair.Value.LastUsed; oldest = pair.Key; }
+                }
+                if (oldest == null) break;
+                ArmorFragmentsPlugin.Log.LogInfo(Tag + "too many vehicles with damage maps: '" + oldest.name + "' gives its atlas back");
+                Vehicles[oldest].Dispose(oldest != null);
+                Vehicles.Remove(oldest);
+            }
+
+            maps = VehicleMaps.Create(aircraft);
+            if (maps == null)
+            {
+                Refused.Add(aircraft);
+                ArmorFragmentsPlugin.Log.LogInfo(Tag + "no damage maps for '" + aircraft.name + "': " + VehicleMaps.LastFailure);
+                return null;
+            }
+            Vehicles[aircraft] = maps;
+            return maps;
+        }
+
+        // ---- Every frame ------------------------------------------------------------------------
+
+        public static void Tick()
+        {
+            string message;
+            while (DamageWorker.Messages.TryDequeue(out message)) ArmorFragmentsPlugin.Log.LogWarning(message);
+
+            // The fragment marks of the frame go to the worker.
+            if (Pits.Count > 0)
+            {
+                foreach (KeyValuePair<PartScript, PitBuffer> pair in Pits)
+                    if (pair.Key != null && pair.Value.Impacts.Count > 0)
+                        Show(pair.Key, pair.Value.Impacts.ToArray(), pair.Value.Delay);
+                Pits.Clear();
+            }
+
+            // What the worker has finished goes into the atlases, a few rectangles a frame (and not before the shell's
+            // ray has arrived), never more than a couple of milliseconds.
+            Delivery done;
+            while (DamageWorker.Done.TryDequeue(out done)) Holding.Add(done);
+            if (Holding.Count > 0)
+            {
+                System.Diagnostics.Stopwatch watch = System.Diagnostics.Stopwatch.StartNew();
+                float now = Time.time;
+                int delivered = 0;
+                for (int i = 0; i < Holding.Count && delivered < 16; )
+                {
+                    Delivery d = Holding[i];
+                    if (d.Owner.Disposed) { Holding.RemoveAt(i); continue; }
+                    if (d.DeliverAt > now) { i++; continue; }
+
+                    try
+                    {
+                        lastDeliverMs = d.Owner.Deliver(d);
+                    }
+                    catch (Exception e)
+                    {
+                        ArmorFragmentsPlugin.Log.LogWarning(Tag + "a rectangle could not be delivered: " + e.Message);
+                    }
+                    Holding.RemoveAt(i);
+                    delivered++;
+                    if (watch.Elapsed.TotalMilliseconds > 2.0) break;
+                }
+            }
+
+            if (++frame % 120 == 0) Prune();
+            TickTest();
+        }
+
+        // Aircraft that are gone: free their atlases and forget their plates.
+        private static void Prune()
+        {
+            List<AircraftScript> gone = null;
+            foreach (AircraftScript aircraft in Vehicles.Keys)
+                if (aircraft == null) (gone ?? (gone = new List<AircraftScript>())).Add(aircraft);
+            if (gone != null)
+                foreach (AircraftScript aircraft in gone)
+                {
+                    Vehicles[aircraft].Dispose(false);
+                    Vehicles.Remove(aircraft);
+                }
+
+            List<PartScript> parts = null;
+            foreach (PartScript part in States.Keys)
+                if (part == null) (parts ?? (parts = new List<PartScript>())).Add(part);
+            if (parts != null)
+                foreach (PartScript part in parts) States.Remove(part);
+
+            parts = null;
+            foreach (PartScript part in Infos.Keys)
+                if (part == null) (parts ?? (parts = new List<PartScript>())).Add(part);
+            if (parts != null)
+                foreach (PartScript part in parts) Infos.Remove(part);
+            NoInfo.RemoveWhere(p => p == null);
+            Refused.RemoveWhere(a => a == null);
+        }
+
+        // Everything back as it was: the plates' looks and the model's holes and dents (the armor is whole again).
+        public static void Clear()
+        {
+            foreach (VehicleMaps maps in Vehicles.Values) maps.Dispose(maps.Aircraft != null);
+            Vehicles.Clear();
+            States.Clear();
+            Refused.Clear();
+            Pits.Clear();
+            Holding.Clear();
+            Message = "Cleared";
+        }
+
+        // ---- Test impacts (panel) ----------------------------------------------------------------
+
+        private static bool testPending;
+        private static DamageKind testKind;
+        private static float testAt;
+
+        public static void RequestTest(DamageKind kind)
+        {
+            testPending = true;
+            testKind = kind;
+            testAt = Time.unscaledTime + 3f;
+            Message = "Put the mouse over a plate: 3 s";
+        }
+
+        private static void TickTest()
+        {
+            if (!testPending) return;
+            float left = testAt - Time.unscaledTime;
+            if (left > 0f)
+            {
+                Message = "Put the mouse over a plate: " + Mathf.CeilToInt(left) + " s";
+                return;
+            }
+            testPending = false;
+
+            try
+            {
+                CameraManagerScript manager = CameraManagerScript.Instance;
+                Camera camera = manager != null && manager.MainCamera != null ? manager.MainCamera : Camera.main;
+                if (camera == null) { Message = "No camera"; return; }
+
+                Vector2 screen = new Vector2(Screen.width * 0.5f, Screen.height * 0.5f);
+                Mouse mouse = Mouse.current;
+                if (mouse != null) screen = mouse.position.ReadValue();
+
+                Ray ray = camera.ScreenPointToRay(screen);
+                int mask = -1 & ~LayerMask.GetMask("WorldSpaceUI");
+                RaycastHit[] hits = Physics.RaycastAll(ray, 2000f, mask, QueryTriggerInteraction.Ignore);
+                Array.Sort(hits, (x, y) => x.distance.CompareTo(y.distance));
+                foreach (RaycastHit hit in hits)
+                {
+                    PartScript part = hit.collider.GetComponentInParent<PartScript>();
+                    if (part == null) continue;
+
+                    float angle = Vector3.Angle(ray.direction, -hit.normal);
+                    Vector3 direction = ray.direction;
+                    if (testKind == DamageKind.Ricochet) direction = Vector3.Reflect(ray.direction, hit.normal);
+                    OnImpact(part, TagCodec.Parse(part.Part.Name).Armor, testKind, hit.point, hit.normal, direction,
+                             0.075f, 0.7f, Mathf.Min(angle, 85f), 0f);
+                    Message = "Test " + testKind + " on '" + part.Part.Name + "'";
+                    ArmorFragmentsPlugin.Log.LogInfo(Tag + Message + ", angle " + angle.ToString("F0") + " deg");
+                    return;
+                }
+                Message = "No part under the mouse";
+            }
+            catch (Exception e)
+            {
+                Message = "Test failed: " + e.Message;
+                ArmorFragmentsPlugin.Log.LogError(Tag + "test failed: " + e);
+            }
+        }
+    }
+
+    // In flight a group of parts merges the meshes of its parts into one when it initializes. A plate that is merged has
+    // no renderer of its own, so its look cannot be changed afterwards. With the setting on, armor plates are marked
+    // "do not merge" just before that, and keep their own renderer (a few more draw calls).
+    [HarmonyPatch(typeof(PartGroupScript), "Initialize")]
+    internal static class PlateMergePatch
+    {
+        private static void Prefix(PartGroupScript __instance)
+        {
+            try
+            {
+                if (!ArmorFragmentsPlugin.KeepPlatesApart.Value) return;
+                BodyScript body = __instance.Body;
+                AircraftScript aircraft = body != null ? body.Aircraft : null;
+                if (aircraft == null || aircraft.LoadContext != CraftLoadContext.Flight) return;
+
+                int plates = 0;
+                foreach (PartScript part in __instance.Parts)
+                {
+                    if (part == null || part.Part == null || part.PartMaterialScript == null) continue;
+                    if (TagCodec.Parse(part.Part.Name).Armor == null) continue;
+                    foreach (PartMaterialScript.RendererMaterialMap map in part.PartMaterialScript.RendererMaps)
+                        map.ExcludeFromMeshCombine = true;
+                    plates++;
+                }
+                if (plates > 0)
+                    ArmorFragmentsPlugin.Log.LogInfo("[DMAP] " + plates + " armor plate(s) of a group kept out of the mesh merge");
+            }
+            catch (Exception e)
+            {
+                ArmorFragmentsPlugin.Log.LogWarning("[DMAP] plate merge patch failed: " + e.Message);
+            }
+        }
+    }
+}

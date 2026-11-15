@@ -74,9 +74,13 @@ namespace ArmorFragments
         internal static ConfigEntry<float> GurneySpeed;
         internal static ConfigEntry<float> DetonationSidewaysBias;
         internal static ConfigEntry<float> DefaultFuse;
-        internal static ConfigEntry<bool> KeepPlatesApart;     // local: armor plates keep their own renderer in flight
-        internal static ConfigEntry<bool> ProbeHoleCullOff;    // local: damage probe
-        internal static ConfigEntry<float> ProbeTileMeters;    // local: damage probe
+        internal static ConfigEntry<bool> KeepPlatesApart;          // local: armor plates keep their own renderer in flight
+        internal static ConfigEntry<bool> DamageMapsEnabled;        // local: marks on the plates
+        internal static ConfigEntry<bool> DamageMapsWeakenArmor;    // global: holes let shots through, dents thin the plate
+        internal static ConfigEntry<float> DamageMapsDensity;       // local: pixels per meter of the maps
+        internal static ConfigEntry<float> DamageMapsNormalStrength;// local: how deep the dents look
+        internal static ConfigEntry<bool> DamageMapsHoleBothSides;  // local: draw both sides of a holed plate
+        internal static ConfigEntry<int> DamageMapsMaxVehicles;     // local: vehicles with maps at once
         internal static ConfigEntry<float> FragmentArmorFactor;
         internal static ConfigEntry<float> DefaultShellBrittleness;
         internal static ConfigEntry<float> SimShellBrittleness;
@@ -135,7 +139,7 @@ namespace ArmorFragments
             RackVisualizer.Tick();
             AmmoRackXRay.Tick();
             ImpactCamera.Tick();
-            DamageProbe.Tick();
+            PlateDamageMaps.Tick();
         }
 
         private void Awake()
@@ -324,14 +328,25 @@ namespace ArmorFragments
                     "How much more of the casing flies sideways than along the shell's axis when it bursts. " +
                     "0 = the same in every direction, 1 = mostly sideways (as the casing of a real shell does).",
                     new AcceptableValueRange<float>(0f, 1f)));
-            KeepPlatesApart = Config.Bind("DamageMaps", "KeepPlatesApart", false,
+            KeepPlatesApart = Config.Bind("DamageMaps", "KeepPlatesApart", true,
                 "Armor plates keep their own renderer in flight instead of being merged into their group's mesh (a few more draw calls). " +
-                "Needed for the damage probe (and, later, for damage maps): a merged plate cannot be changed. Takes effect when a flight starts.");
-            ProbeHoleCullOff = Config.Bind("DamageMaps", "ProbeHoleCullOff", false,
-                "Damage probe, hole test: draw both sides of the surface (shows the inside of the plate through the hole). Off = back faces are not drawn.");
-            ProbeTileMeters = Config.Bind("DamageMaps", "ProbeTileMeters", 0.5f,
-                new ConfigDescription("Damage probe: width in meters of the square window the dent or hole is drawn in.",
-                    new AcceptableValueRange<float>(0.1f, 3f)));
+                "Needed for the damage maps: a merged plate cannot be changed. Takes effect when a flight starts.");
+            DamageMapsEnabled = Config.Bind("DamageMaps", "Enabled", true,
+                "Shots leave marks on armor plates: dents, holes, grooves and pits, drawn into the plate's normal map and hole mask.");
+            DamageMapsWeakenArmor = Config.Bind("DamageMaps", "WeakenArmor", true,
+                "The marks count: a hole lets shells and fragments through, a dent makes the plate thinner there. " +
+                "(Not synchronized between players yet: each computer keeps the marks of the shots it worked out.)");
+            DamageMapsDensity = Config.Bind("DamageMaps", "PixelsPerMeter", 256f,
+                new ConfigDescription("How detailed the maps are: pixels per meter of plate. More = finer marks, more memory.",
+                    new AcceptableValueRange<float>(64f, 1024f)));
+            DamageMapsNormalStrength = Config.Bind("DamageMaps", "NormalStrength", 1.5f,
+                new ConfigDescription("How deep the dents look (the normal map's strength).",
+                    new AcceptableValueRange<float>(0.2f, 5f)));
+            DamageMapsHoleBothSides = Config.Bind("DamageMaps", "HoleBothSides", true,
+                "A plate with a hole is drawn on both sides (shows the inside of the plate through the hole). Off = back faces are not drawn.");
+            DamageMapsMaxVehicles = Config.Bind("DamageMaps", "MaxVehicles", 6,
+                new ConfigDescription("Most vehicles with damage maps at once (each has an atlas of up to 20 MB). The one hit longest ago gives it back.",
+                    new AcceptableValueRange<int>(1, 20)));
             FragmentArmorFactor = Config.Bind("Energy", "FragmentArmorFactor", 1f,
                 new ConfigDescription(
                     "A fragment that meets armor pays what a shell would (ArmorResistance x thickness x its own cross-section) " +
@@ -517,7 +532,7 @@ namespace ArmorFragments
                 DefaultShellHardness, ArmorResistance, RicochetFriction, RicochetRandomness,
                 DamagePerKiloJoule, DensityModifier, ConstantForceLoss, SimpleFragments,
                 FillerHE, FillerAPHE, GurneySpeed, DetonationSidewaysBias, DefaultFuse,
-                FragmentArmorFactor, DefaultShellBrittleness,
+                FragmentArmorFactor, DefaultShellBrittleness, DamageMapsWeakenArmor,
                 SimpleFragmentArea, MaxPartsPerFragment, SpreadBaseAngle, AxisTilt, SpreadAnisotropy,
                 MaxDeflection, MaxPlates, MaxRicochets, ArmorRicochetAngle, ArmorRicochetMultiplier,
                 FragmentRicochetAngle, FragmentRicochetMultiplier,

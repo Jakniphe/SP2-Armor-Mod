@@ -72,7 +72,7 @@ namespace ArmorFragments.UI
                 BuildRicochet();
                 BuildRays();
                 BuildTools();
-                BuildDamageProbe();
+                BuildDamageMaps();
                 BuildLog();
             }
             catch (Exception e)
@@ -363,23 +363,33 @@ namespace ArmorFragments.UI
                 "Seconds an impact bubble takes to shrink away.", 0.05f, " s");
         }
 
-        // Phase 1 of the damage maps: a probe (see DamageProbe.cs). Nothing here changes shots or damage.
-        private void BuildDamageProbe()
+        // Marks on armor plates (see DamageMaps/).
+        private void BuildDamageMaps()
         {
-            builder.Header("Damage probe", collapsed: true);
+            builder.Header("Damage maps", collapsed: true);
+            ToggleSetting(ArmorFragmentsPlugin.DamageMapsEnabled, "Marks on armor",
+                "Shots leave dents, holes, grooves and pits on armor plates.");
             ToggleSetting(ArmorFragmentsPlugin.KeepPlatesApart, "Keep armor plates out of the mesh merge",
-                "Turn on BEFORE the flight starts: the game merges the meshes of a group when the flight begins, and a merged plate cannot be changed.");
-            ToggleSetting(ArmorFragmentsPlugin.ProbeHoleCullOff, "Hole test: draw both sides",
-                "Shows the inside of the plate through the hole. Off = the back faces are not drawn.");
-            FloatSetting(ArmorFragmentsPlugin.ProbeTileMeters, "Window size",
-                "Width of the square window the dent or hole is drawn in.", 0.05f, " m");
-            Live("Probe", () => DamageProbe.Message);
+                "Needed for the marks. Takes effect when a flight starts: the game merges the meshes of a group then, and a merged plate cannot be changed.");
+            if (!NetSync.GlobalLocked)
+                ToggleSetting(ArmorFragmentsPlugin.DamageMapsWeakenArmor, "Marks weaken the armor",
+                    "A hole lets shells and fragments through; a dent makes the plate thinner there. Not synchronized between players yet.");
+            ToggleSetting(ArmorFragmentsPlugin.DamageMapsHoleBothSides, "Holes: draw both sides",
+                "Shows the inside of the plate through a hole.");
+            FloatSetting(ArmorFragmentsPlugin.DamageMapsDensity, "Detail",
+                "Pixels per meter of plate. Applies to vehicles that get their maps from now on.", 16f, " px/m");
+            FloatSetting(ArmorFragmentsPlugin.DamageMapsNormalStrength, "Dent depth",
+                "How deep the dents look.", 0.1f, "x");
+            IntSetting(ArmorFragmentsPlugin.DamageMapsMaxVehicles, "Vehicles at once",
+                "Vehicles with maps at the same time. The one hit longest ago gives its maps back.");
+            Live("Maps", () => PlateDamageMaps.Status);
+            Live("Test", () => PlateDamageMaps.Message);
             builder.Buttons(new List<KeyValuePair<string, Action>>
             {
-                new KeyValuePair<string, Action>("Dent", () => DamageProbe.Request(DamageProbe.Kind.Dent)),
-                new KeyValuePair<string, Action>("Hole", () => DamageProbe.Request(DamageProbe.Kind.HoleLit)),
-                new KeyValuePair<string, Action>("Animate", DamageProbe.Animate),
-                new KeyValuePair<string, Action>("Reset", DamageProbe.Reset),
+                new KeyValuePair<string, Action>("Test: dent", () => PlateDamageMaps.RequestTest(DamageKind.Blocked)),
+                new KeyValuePair<string, Action>("Test: hole", () => PlateDamageMaps.RequestTest(DamageKind.Penetrated)),
+                new KeyValuePair<string, Action>("Test: groove", () => PlateDamageMaps.RequestTest(DamageKind.Ricochet)),
+                new KeyValuePair<string, Action>("Clear", PlateDamageMaps.Clear),
             });
         }
 

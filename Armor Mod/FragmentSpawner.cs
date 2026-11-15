@@ -114,6 +114,19 @@ namespace ArmorFragments
                 return ImpactOutcome.Blocked;
             }
 
+            // The marks of earlier shots: a hole lets the shell through as if the plate were not there, and a dent
+            // makes the plate thinner where it was hit (see DamageMaps/).
+            Vector3 facingNormal = Vector3.Dot(normal, direction) > 0f ? -normal : normal;
+            if (PlateDamageMaps.InHole(armor, point, facingNormal))
+            {
+                ArmorFragmentsPlugin.Log.LogInfo(tag + "The shell hit a hole in the plate and flies on");
+                LastImpact.Record(tag + "Through a hole", angle, 0f, 0, 0, 0f);
+                ShellFlight.Continue(point + direction * SurfaceOffset, direction, shell, cannonTag, null, armor, leadTime, 0f,
+                                     RayKind.None, applyDamage, simulated, plate, true, bounces);
+                return ImpactOutcome.Penetrated;
+            }
+            armorTag = PlateDamageMaps.Weakened(armor, armorTag, point);
+
             // 1) Ricochet: does this shell bounce off this armor at this angle? The critical angle
             //    depends on the hardnesses, the speed and the caliber against the thickness.
             string criticalBreakdown;
@@ -134,6 +147,9 @@ namespace ArmorFragments
                 LastImpact.Absorbed = shell.Energy - energyOut;
                 LastImpact.Residual = energyOut;
 
+                if (!simulated && applyDamage)
+                    PlateDamageMaps.OnImpact(armor, armorTag, DamageKind.Ricochet, point, n, reflected, shell.CaliberMm * 0.001f,
+                                             1f - energyOut / Mathf.Max(shell.Energy, 1f), angle, leadTime);
                 LastImpact.Record(tag + "Armor ricochet", angle, Mathf.Min(armorTolerated, 90f), 0, 1, 0f);
                 ArmorFragmentsPlugin.Log.LogInfo(
                     tag + "Armor ricochet: angle " + angle.ToString("F0") + " >= critical " +
@@ -164,6 +180,9 @@ namespace ArmorFragments
             {
                 LastImpact.Record(tag + "Blocked (" + comparison + ")", angle, Mathf.Min(armorTolerated, 90f), 0, 0, 0f);
                 ArmorFragmentsPlugin.Log.LogInfo(tag + "Shell blocked by armor: " + comparison);
+                if (!simulated && applyDamage)
+                    PlateDamageMaps.OnImpact(armor, armorTag, DamageKind.Blocked, point, facingNormal, direction,
+                                             shell.CaliberMm * 0.001f, Mathf.Clamp01(shellEnergy / Mathf.Max(absorbed, 1f)), angle, leadTime);
 
                 // A shell with a fuse that the plate stops bursts where it stopped: on the plate's surface.
                 if (shell.HasFuse)
@@ -211,6 +230,10 @@ namespace ArmorFragments
                 tag + "Fragments: " + partsHit + " of " + fragments.Length + " rays hit a part, " +
                 ricochets + " ricochets, total damage " + totalDamage.ToString("F1") +
                 (applyDamage ? "" : " (not applied)"));
+
+            if (!simulated && applyDamage)
+                PlateDamageMaps.OnImpact(armor, armorTag, DamageKind.Penetrated, point, facingNormal, direction,
+                                         shell.CaliberMm * 0.001f, Mathf.Clamp01(absorbed / Mathf.Max(shellEnergy, 1f)), angle, leadTime);
 
             // 4) The shell is not spent by the plate: what the plate did not take and did not turn into
             //    fragments goes on, bent a little toward the plate's normal. (An explosive shell with a fuse
@@ -580,6 +603,15 @@ namespace ArmorFragments
                 time += hit.distance / speed;  // the head reaches the hit now
                 PartScript part = hit.collider.GetComponentInParent<PartScript>();
 
+                // A hole in an armor plate: it goes through as if the plate were not there.
+                if (part != null && PlateDamageMaps.InHole(part, hit.point, hit.normal))
+                {
+                    origin = hit.point + dir * 0.002f;
+                    traveled += 0.002f;
+                    skip = part;
+                    continue;
+                }
+
                 // A grazing hit throws it back. What it keeps is sin^2 of the angle; the rest stays
                 // in whatever it hit.
                 float angle = ImpactAngle(dir, hit.normal);
@@ -629,9 +661,11 @@ namespace ArmorFragments
                 // per mm of thickness (the tag's, longer the more slanted the hit) and per cm2, times the
                 // fragment factor. Any other part slows it by its density.
                 ArmorTag partArmor = TagCodec.Parse(part.Part.Name).Armor;
+                if (partArmor != null) partArmor = PlateDamageMaps.Weakened(part, partArmor, hit.point);   // dents make it thinner
                 float armorMm = partArmor != null
                     ? partArmor.Thickness / Mathf.Max(Mathf.Cos(angle * Mathf.Deg2Rad), 0.1f)
                     : 0f;
+                bool marks = partArmor != null && applyDamage && DamageSink == null;   // a real shot leaves marks
 
                 float density = PartPhysics.Density(part);
                 float energyIn = slug.Energy;
@@ -648,6 +682,9 @@ namespace ArmorFragments
                 {
                     // It stops inside the part and leaves everything there; it slows to a halt on the way.
                     Deposit(part, energyIn * bundle, hit.point, dir, applyDamage, time, ref result);
+                    if (marks)
+                        PlateDamageMaps.OnFragment(part, false, hit.point, hit.normal, dir,
+                                                   RayPath.DiameterOf(slug.AreaM2 * 10000f), 0.6f, time);
                     float into = partArmor != null
                         ? PartPhysics.ArmorStopDistance(energyIn, floor, slug.AreaM2, armorMm, chord)
                         : PartPhysics.StopDistance(energyIn, floor, slug.Mass, slug.AreaM2, density, chord);
@@ -658,6 +695,9 @@ namespace ArmorFragments
 
                 Deposit(part, (energyIn - energyOut) * bundle, hit.point, dir, applyDamage, time, ref result);
                 slug.Energy = energyOut;
+                if (marks)
+                    PlateDamageMaps.OnFragment(part, true, hit.point, hit.normal, dir,
+                                               RayPath.DiameterOf(slug.AreaM2 * 10000f), 0.6f, time);
 
                 // Inside the part the speed goes from what it was to what it becomes.
                 float speedOut = BallisticRay.VisualSpeed(slug.Energy, slug.Mass);

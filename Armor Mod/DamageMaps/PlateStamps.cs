@@ -1,0 +1,356 @@
+using System;
+using System.Collections.Generic;
+using UnityEngine;
+
+namespace ArmorFragments
+{
+    internal enum DamageKind
+    {
+        Ricochet,    // a groove along the way the shell bounced
+        Blocked,     // a dent with a raised rim
+        Penetrated,  // a hole in, a bigger torn one out the back
+        Pit,         // a fragment stopped in the plate
+        SmallHole,   // a fragment went through
+    }
+
+    // What one stamp needs, in plate coordinates (meters).
+    internal struct PlateImpact
+    {
+        public DamageKind Kind;
+        public bool Front;         // which face was hit (the other one is where a shell comes out)
+        public float U, V;         // where
+        public float DirU, DirV;   // the shell's direction along the plate (for a ricochet: the way it bounced off)
+        public float Angle;        // degrees from the normal (0 = head-on)
+        public float Caliber;      // meters (a fragment: its diameter)
+        public float Strength;     // 0..1: how hard the hit was compared with what the plate could take
+        public float Thickness;    // meters
+        public int Seed;
+    }
+
+    // A piece of the atlas to be overwritten (a small rectangle of one atlas).
+    internal sealed class Delivery
+    {
+        public VehicleMaps Owner;
+        public PlateVisual Plate;
+        public bool Alpha;         // the hole atlas (else the normal-map atlas)
+        public int X, Y, W, H;
+        public byte[] Bytes;       // W*H*4 (normals, RGBA) or W*H (holes, alpha)
+        public float DeliverAt;    // Time.time from which it may be shown (the shell's ray has to arrive first)
+    }
+
+    // The damage of one plate, kept on the CPU: for each face, a height field (meters, outward from the face) and a
+    // hole mask. Stamps add to them; the normals the shader reads are worked out from the heights, so impacts that
+    // overlap combine. Only the worker thread touches these arrays.
+    internal sealed class PlateCpu
+    {
+        public const int Border = 2;   // pixels around the plate's area that stay flat (so filtering never bleeds)
+
+        public sealed class Face
+        {
+            public float[] Height;
+            public byte[] Mask;
+            public int X0 = int.MaxValue, Y0 = int.MaxValue, X1 = -1, Y1 = -1;   // what changed since the last flush
+            public bool HoleDirty;
+        }
+
+        public int Width, Height;       // the tile's size in pixels, the same for both faces
+        public float PxU, PxV;          // pixels per meter inside the border
+        public readonly int[] TileX = new int[2];   // where each face's tile starts in the atlas
+        public readonly int[] TileY = new int[2];
+        public readonly Face[] Faces = new Face[2];
+
+        public Face Get(int index)
+        {
+            Face face = Faces[index];
+            if (face == null)
+            {
+                face = new Face { Height = new float[Width * Height], Mask = new byte[Width * Height] };
+                for (int i = 0; i < face.Mask.Length; i++) face.Mask[i] = 255;
+                Faces[index] = face;
+            }
+            return face;
+        }
+    }
+
+    // The shapes of damage, in meters on the plate, drawn into a PlateCpu. Pure arithmetic: it runs on a worker thread.
+    internal static class PlateStamps
+    {
+        public static void Apply(PlateCpu cpu, PlateImpact impact)
+        {
+            Vector2 dir = new Vector2(impact.DirU, impact.DirV);
+            if (dir.sqrMagnitude < 0.0001f) dir = new Vector2(1f, 0f);
+            dir.Normalize();
+
+            float angle = Mathf.Clamp(impact.Angle, 0f, 85f) * Mathf.Deg2Rad;
+            float elong = Mathf.Clamp(1f / Mathf.Max(Mathf.Cos(angle), 0.2f), 1f, 2.5f);
+            float strength = Mathf.Clamp01(impact.Strength);
+            float caliber = Mathf.Max(impact.Caliber, 0.002f);
+            int entry = impact.Front ? 0 : 1;
+            int exit = 1 - entry;
+            float minPixel = 1.6f / Mathf.Min(cpu.PxU, cpu.PxV);   // nothing smaller than a pixel or two shows
+
+            switch (impact.Kind)
+            {
+                case DamageKind.Blocked:
+                {
+                    float radius = Mathf.Max(caliber * 0.5f * (0.85f + 0.5f * strength), minPixel);
+                    Bowl(cpu, cpu.Get(entry), impact.U, impact.V, radius, caliber * (0.08f + 0.32f * strength), elong, dir, 0.22f);
+                    break;
+                }
+                case DamageKind.Penetrated:
+                {
+                    float hole = Mathf.Max(caliber * 0.5f, minPixel);
+                    Bowl(cpu, cpu.Get(entry), impact.U, impact.V, hole * 1.7f, caliber * 0.10f, elong, dir, 0.25f);
+                    Hole(cpu, cpu.Get(entry), impact.U, impact.V, hole, elong, dir, 0.10f, impact.Seed);
+
+                    // The shell comes out the back, further along its way by thickness x tan(angle), and tears the metal.
+                    float lateral = Mathf.Min(impact.Thickness * Mathf.Tan(angle), 0.6f);
+                    float exitU = impact.U + dir.x * lateral;
+                    float exitV = impact.V + dir.y * lateral;
+                    Hole(cpu, cpu.Get(exit), exitU, exitV, hole * 1.15f, 1f + 0.6f * (elong - 1f), dir, 0.30f, impact.Seed + 1);
+                    Bulge(cpu, cpu.Get(exit), exitU, exitV, hole * 2.4f, caliber * (0.10f + 0.15f * strength), impact.Seed + 2);
+                    break;
+                }
+                case DamageKind.Ricochet:
+                {
+                    float length = Mathf.Clamp(caliber * (1.5f + 8f * (impact.Angle / 90f) * (impact.Angle / 90f)), 0.02f, 1f);
+                    Streak(cpu, cpu.Get(entry), impact.U, impact.V, impact.U + dir.x * length, impact.V + dir.y * length,
+                           Mathf.Max(caliber * 0.5f, minPixel), caliber * (0.05f + 0.12f * strength));
+                    break;
+                }
+                case DamageKind.Pit:
+                {
+                    float radius = Mathf.Max(caliber * 0.65f, minPixel);
+                    Bowl(cpu, cpu.Get(entry), impact.U, impact.V, radius, caliber * (0.15f + 0.35f * strength), 1f, dir, 0.3f);
+                    break;
+                }
+                case DamageKind.SmallHole:
+                {
+                    float radius = Mathf.Max(caliber * 0.5f, minPixel);
+                    Bowl(cpu, cpu.Get(entry), impact.U, impact.V, radius * 1.6f, caliber * 0.12f, 1f, dir, 0.25f);
+                    Hole(cpu, cpu.Get(entry), impact.U, impact.V, radius, 1f, dir, 0.15f, impact.Seed);
+                    Hole(cpu, cpu.Get(exit), impact.U, impact.V, radius * 1.1f, 1f, dir, 0.25f, impact.Seed + 1);
+                    break;
+                }
+            }
+        }
+
+        // ---- Shapes -------------------------------------------------------------------------------
+
+        // A bowl with a raised rim. 'elong' stretches it along 'dir' (a slanted hit digs a longer dent).
+        private static void Bowl(PlateCpu c, PlateCpu.Face f, float cu, float cv, float radius, float depth,
+                                 float elong, Vector2 dir, float rim)
+        {
+            float extent = radius * Mathf.Max(elong, 1f) * 1.8f;
+            int x0, y0, x1, y1;
+            if (!Region(c, cu, cv, extent, out x0, out y0, out x1, out y1)) return;
+
+            for (int y = y0; y < y1; y++)
+            {
+                for (int x = x0; x < x1; x++)
+                {
+                    float dx = (x + 0.5f - PlateCpu.Border) / c.PxU - cu;
+                    float dy = (y + 0.5f - PlateCpu.Border) / c.PxV - cv;
+                    float along = dx * dir.x + dy * dir.y;
+                    float across = -dx * dir.y + dy * dir.x;
+                    float rho = Mathf.Sqrt((along / elong) * (along / elong) + across * across) / radius;
+
+                    float h = 0f;
+                    if (rho < 1f)
+                    {
+                        float bowl = 1f - rho * rho;
+                        h = -depth * bowl * bowl;
+                    }
+                    float ring = (rho - 1.18f) / 0.16f;
+                    h += rim * depth * Mathf.Exp(-ring * ring);
+                    f.Height[y * c.Width + x] += h;
+                }
+            }
+            Dirty(f, x0, y0, x1, y1, false);
+        }
+
+        // Metal pushed out the back where the shell tore through: a bump with an uneven edge.
+        private static void Bulge(PlateCpu c, PlateCpu.Face f, float cu, float cv, float radius, float height, int seed)
+        {
+            float extent = radius * 1.5f;
+            int x0, y0, x1, y1;
+            if (!Region(c, cu, cv, extent, out x0, out y0, out x1, out y1)) return;
+
+            for (int y = y0; y < y1; y++)
+            {
+                for (int x = x0; x < x1; x++)
+                {
+                    float dx = (x + 0.5f - PlateCpu.Border) / c.PxU - cu;
+                    float dy = (y + 0.5f - PlateCpu.Border) / c.PxV - cv;
+                    float angle = Mathf.Atan2(dy, dx);
+                    float rho = Mathf.Sqrt(dx * dx + dy * dy) / (radius * (1f + 0.25f * Noise(angle, seed)));
+                    if (rho >= 1f) continue;
+                    float bump = 1f - rho * rho;
+                    f.Height[y * c.Width + x] += height * bump * bump;
+                }
+            }
+            Dirty(f, x0, y0, x1, y1, false);
+        }
+
+        // A hole through the plate: the mask goes to 0 (see-through). 'irregular' makes the edge uneven (0 = round).
+        private static void Hole(PlateCpu c, PlateCpu.Face f, float cu, float cv, float radius, float elong, Vector2 dir,
+                                 float irregular, int seed)
+        {
+            float extent = radius * Mathf.Max(elong, 1f) * (1f + irregular) * 1.3f;
+            int x0, y0, x1, y1;
+            if (!Region(c, cu, cv, extent, out x0, out y0, out x1, out y1)) return;
+
+            for (int y = y0; y < y1; y++)
+            {
+                for (int x = x0; x < x1; x++)
+                {
+                    float dx = (x + 0.5f - PlateCpu.Border) / c.PxU - cu;
+                    float dy = (y + 0.5f - PlateCpu.Border) / c.PxV - cv;
+                    float along = dx * dir.x + dy * dir.y;
+                    float across = -dx * dir.y + dy * dir.x;
+                    float edge = radius * (1f + irregular * Noise(Mathf.Atan2(across, along), seed));
+                    if ((along / elong) * (along / elong) + across * across < edge * edge)
+                        f.Mask[y * c.Width + x] = 0;
+                }
+            }
+            Dirty(f, x0, y0, x1, y1, true);
+        }
+
+        // A groove from (u0, v0) to (u1, v1): deepest where the shell touched, fading out as it left, with a ridge on each side.
+        private static void Streak(PlateCpu c, PlateCpu.Face f, float u0, float v0, float u1, float v1, float width, float depth)
+        {
+            float minU = Mathf.Min(u0, u1), maxU = Mathf.Max(u0, u1), minV = Mathf.Min(v0, v1), maxV = Mathf.Max(v0, v1);
+            float margin = width * 2.5f;
+            int x0 = Mathf.Max(PlateCpu.Border, Mathf.FloorToInt(PlateCpu.Border + (minU - margin) * c.PxU));
+            int x1 = Mathf.Min(c.Width - PlateCpu.Border, Mathf.CeilToInt(PlateCpu.Border + (maxU + margin) * c.PxU));
+            int y0 = Mathf.Max(PlateCpu.Border, Mathf.FloorToInt(PlateCpu.Border + (minV - margin) * c.PxV));
+            int y1 = Mathf.Min(c.Height - PlateCpu.Border, Mathf.CeilToInt(PlateCpu.Border + (maxV + margin) * c.PxV));
+            if (x1 <= x0 || y1 <= y0) return;
+
+            float dxs = u1 - u0, dys = v1 - v0;
+            float length = Mathf.Max(Mathf.Sqrt(dxs * dxs + dys * dys), 0.0001f);
+            float sx = dxs / length, sy = dys / length;
+
+            for (int y = y0; y < y1; y++)
+            {
+                for (int x = x0; x < x1; x++)
+                {
+                    float px = (x + 0.5f - PlateCpu.Border) / c.PxU - u0;
+                    float py = (y + 0.5f - PlateCpu.Border) / c.PxV - v0;
+                    float t = Mathf.Clamp01((px * sx + py * sy) / length);
+                    float qx = px - sx * t * length, qy = py - sy * t * length;
+                    float dist = Mathf.Sqrt(qx * qx + qy * qy);
+
+                    float along = depth * (1f - 0.8f * t);
+                    float groove = dist / (0.5f * width);
+                    float ridge = (dist - width) / (0.4f * width);
+                    f.Height[y * c.Width + x] += -along * Mathf.Exp(-groove * groove) + 0.25f * along * Mathf.Exp(-ridge * ridge);
+                }
+            }
+            Dirty(f, x0, y0, x1, y1, false);
+        }
+
+        // ---- Helpers ------------------------------------------------------------------------------
+
+        // The pixels (inside the border) that a stamp of this extent around (cu, cv) can touch.
+        private static bool Region(PlateCpu c, float cu, float cv, float extent, out int x0, out int y0, out int x1, out int y1)
+        {
+            x0 = Mathf.Max(PlateCpu.Border, Mathf.FloorToInt(PlateCpu.Border + (cu - extent) * c.PxU));
+            x1 = Mathf.Min(c.Width - PlateCpu.Border, Mathf.CeilToInt(PlateCpu.Border + (cu + extent) * c.PxU));
+            y0 = Mathf.Max(PlateCpu.Border, Mathf.FloorToInt(PlateCpu.Border + (cv - extent) * c.PxV));
+            y1 = Mathf.Min(c.Height - PlateCpu.Border, Mathf.CeilToInt(PlateCpu.Border + (cv + extent) * c.PxV));
+            return x1 > x0 && y1 > y0;
+        }
+
+        private static void Dirty(PlateCpu.Face f, int x0, int y0, int x1, int y1, bool hole)
+        {
+            if (x0 < f.X0) f.X0 = x0;
+            if (y0 < f.Y0) f.Y0 = y0;
+            if (x1 > f.X1) f.X1 = x1;
+            if (y1 > f.Y1) f.Y1 = y1;
+            if (hole) f.HoleDirty = true;
+        }
+
+        // A smooth value in -1..1 that depends on the angle and the seed: what makes edges uneven (and the same each time).
+        private static float Noise(float angle, int seed)
+        {
+            float p1 = Hash(seed * 7 + 1) * 6.2831853f;
+            float p2 = Hash(seed * 13 + 3) * 6.2831853f;
+            float p3 = Hash(seed * 29 + 5) * 6.2831853f;
+            return 0.5f * Mathf.Sin(3f * angle + p1) + 0.3f * Mathf.Sin(5f * angle + p2) + 0.2f * Mathf.Sin(8f * angle + p3);
+        }
+
+        private static float Hash(int value)
+        {
+            unchecked
+            {
+                uint x = (uint)value * 2654435761u;
+                x ^= x >> 15; x *= 2246822519u; x ^= x >> 13;
+                return (x & 0xFFFFFF) / 16777216f;
+            }
+        }
+
+        // ---- Handing over what changed ------------------------------------------------------------
+
+        // The rectangles that changed since the last time, as bytes for the atlases: normals (and, if a hole changed, the mask).
+        public static void Flush(PlateCpu c, PlateVisual plate, VehicleMaps owner, float deliverAt, List<Delivery> output)
+        {
+            for (int index = 0; index < 2; index++)
+            {
+                PlateCpu.Face f = c.Faces[index];
+                if (f == null || f.X1 < 0) continue;
+
+                // One more pixel around: the normal of a pixel depends on its neighbors.
+                int x0 = Mathf.Max(f.X0 - 1, 0), y0 = Mathf.Max(f.Y0 - 1, 0);
+                int x1 = Mathf.Min(f.X1 + 1, c.Width), y1 = Mathf.Min(f.Y1 + 1, c.Height);
+                int w = x1 - x0, h = y1 - y0;
+
+                byte[] normals = new byte[w * h * 4];
+                for (int y = y0; y < y1; y++)
+                {
+                    for (int x = x0; x < x1; x++)
+                    {
+                        float left = f.Height[y * c.Width + Mathf.Max(x - 1, 0)];
+                        float right = f.Height[y * c.Width + Mathf.Min(x + 1, c.Width - 1)];
+                        float down = f.Height[Mathf.Max(y - 1, 0) * c.Width + x];
+                        float up = f.Height[Mathf.Min(y + 1, c.Height - 1) * c.Width + x];
+                        // The slope in meters per meter: a pixel is 1/PxU meters wide.
+                        float nx = -(right - left) * 0.5f * c.PxU;
+                        float ny = -(up - down) * 0.5f * c.PxV;
+                        float inverse = 1f / Mathf.Sqrt(nx * nx + ny * ny + 1f);
+                        int at = ((y - y0) * w + (x - x0)) * 4;
+                        normals[at] = Encode(nx * inverse);
+                        normals[at + 1] = Encode(ny * inverse);
+                        normals[at + 2] = Encode(inverse);
+                        normals[at + 3] = 255;
+                    }
+                }
+                output.Add(new Delivery
+                {
+                    Owner = owner, Plate = plate, Alpha = false,
+                    X = c.TileX[index] + x0, Y = c.TileY[index] + y0, W = w, H = h, Bytes = normals, DeliverAt = deliverAt,
+                });
+
+                if (f.HoleDirty)
+                {
+                    byte[] mask = new byte[w * h];
+                    for (int y = y0; y < y1; y++)
+                        Buffer.BlockCopy(f.Mask, y * c.Width + x0, mask, (y - y0) * w, w);
+                    output.Add(new Delivery
+                    {
+                        Owner = owner, Plate = plate, Alpha = true,
+                        X = c.TileX[index] + x0, Y = c.TileY[index] + y0, W = w, H = h, Bytes = mask, DeliverAt = deliverAt,
+                    });
+                }
+
+                f.X0 = int.MaxValue; f.Y0 = int.MaxValue; f.X1 = -1; f.Y1 = -1;
+                f.HoleDirty = false;
+            }
+        }
+
+        private static byte Encode(float component)
+        {
+            return (byte)Mathf.Clamp(Mathf.RoundToInt((component * 0.5f + 0.5f) * 255f), 0, 255);
+        }
+    }
+}
