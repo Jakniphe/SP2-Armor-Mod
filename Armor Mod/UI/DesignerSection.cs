@@ -252,8 +252,10 @@ namespace ArmorFragments.UI
                     }
 
                     FaceRows(builder, tags);
-                    Live(builder, new[] { "Armor weight", "By face" },
-                        () => string.Join("|", ArmorWeightTexts()), ArmorWeightTexts);
+                    string[] weightLabels = new string[ArmorFaces.Count + 1];
+                    weightLabels[0] = "Armor weight";
+                    for (int i = 0; i < ArmorFaces.Count; i++) weightLabels[i + 1] = "  " + ArmorFaces.Names[i];
+                    Live(builder, weightLabels, () => string.Join("|", ArmorWeightTexts()), ArmorWeightTexts);
                     Slider(builder, tags, "Hardness", "How hard the armor is compared with the shell: harder armor deflects shells at lower angles. 100% = reference.",
                         10f, 300f, 5f, tags.Armor.Hardness, " %", v => tags.Armor.Hardness = v);
                     Slider(builder, tags, "Brittleness", "How easily the plate shatters into fragments. (Not used yet: energy model.)",
@@ -713,19 +715,24 @@ namespace ArmorFragments.UI
                 0f, 500f, 1f, faces[picked], " mm", v => tags.Armor.Faces[picked] = v, true);
         }
 
-        // Armor weight, Weight by face: the steel of the armored faces (area on the block x thickness).
+        // Armor weight, then one row per face: the steel of the armored faces (area on the block x thickness).
         private static string[] ArmorWeightTexts()
         {
+            string[] texts = new string[ArmorFaces.Count + 1];
             float kg;
             float[] faceKg;
             float[] faceArea;
             if (part == null || !ArmorMass.TryDescribe(part.Part, out kg, out faceKg, out faceArea))
-                return new[] { "measuring...", "-" };
+            {
+                texts[0] = "measuring...";
+                for (int i = 1; i < texts.Length; i++) texts[i] = "-";
+                return texts;
+            }
 
-            List<string> faces = new List<string>();
+            texts[0] = Kg(kg);
             for (int i = 0; i < ArmorFaces.Count; i++)
-                if (faceKg[i] > 0f) faces.Add(ArmorFaces.Names[i] + " " + Kg(faceKg[i]));
-            return new[] { Kg(kg), faces.Count > 0 ? string.Join(", ", faces.ToArray()) : "all open" };
+                texts[i + 1] = faceKg[i] > 0f ? Kg(faceKg[i]) : "open";
+            return texts;
         }
 
         private static string Kg(float kg)

@@ -30,9 +30,12 @@ How it plays
 Weight
 - Armor weighs what its steel would: each armored face's area on the block times its thickness, at 7850 kg/m3. A 1 x 1 m face at 100 mm is 785 kg.
 - The weight is added to the block's own, in the designer (part mass, craft mass, center of mass) and in flight. Nothing extra is saved in the craft file.
-- The armor panel shows "Armor weight" and the weight of each armored face. In flight the log lists each armor block's weight by face.
+- The armor panel shows "Armor weight" and, below it, one row per face with its weight ("open" for an open face). In flight the log lists each armor block's weight by face.
 - Whole-block armor (`t=`) weighs as every face at that thickness.
 - The weight sits where the plates are: each face's weight at the middle of that face, half its thickness in. The block's center of mass moves toward its armor, so a thick front plate makes the vehicle nose-heavy and the designer's center-of-mass marker moves with it. The craft file keeps the block's own center of mass.
+
+0.9.0.1
+- The armor panel's weight by face has a row for each face, so it can be read in full.
 
 # Ammo racks
 
