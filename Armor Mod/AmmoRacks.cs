@@ -12,12 +12,14 @@ using UnityEngine;
 
 namespace ArmorFragments
 {
-    // Ammo racks ([AMM] fuselages) hold the rounds of the cannons in their group ([CAN g=]).
+    // Ammo racks ([AMM] fuselages) hold the rounds of the cannons that draw from them. A cannon lists its racks
+    // by part id in [CAN r=], picked in the designer; cannons that fire the same round can share a rack.
     //
-    //  - A cannon whose group has at least one rack fires only while its racks have rounds (the game's own
-    //    "Ammo Count" is overwritten every frame, and Fire() is blocked when the group is empty). Racks empty
-    //    in order (o=, then part id), each from its top layer down. A cannon with no rack is left alone.
-    //  - A rack's capacity is the whole rounds that fit its shape (RackGrid, AmmoRound).
+    //  - A cannon with racks fires only while they have rounds (the game's own "Ammo Count" is overwritten every
+    //    frame, and Fire() is blocked when they are empty). It empties its racks in order (o=, then part id),
+    //    each from its top layer down. A cannon with no rack keeps the game's Ammo Count.
+    //  - A rack's capacity is the whole rounds that fit its shape (RackGrid), for the round of the cannons that
+    //    draw from it (AmmoRound; the biggest, if they differ). A rack no cannon draws from holds nothing.
     //  - Damage reaching a rack (PartScript.OnDamaged: the game's shell impact, fragments, explosions,
     //    crashes) may set it on fire if its line crosses a cell that still holds a round. Chance =
     //    1 - (1 - CookOffDirectHit)^(shells through the rounds) x e^(-kJ into the rounds / CookOffEnergyKJ); the
@@ -25,8 +27,8 @@ namespace ArmorFragments
     //    rounds always sets it on fire.
     //  - A burning rack can't feed the gun and explodes CookOffBurnSeconds (10) later, with the
     //    propellant of the rounds still in it (only propellant; explosive filler isn't counted).
-    //  - Funky Trees: <group>_rounds (rounds the group can still fire), <group>_fire (1 while one of its
-    //    racks burns) and <group>_boom (1 once one has exploded).
+    //  - Funky Trees, per group of racks (their g=, default "Ammo"): <group>_rounds (rounds its racks can still
+    //    feed), <group>_fire (1 while one of them burns) and <group>_boom (1 once one has exploded).
     //
     // All of it runs only in the game of the aircraft's owner, in flight (a remote copy takes no damage here).
     internal static class AmmoRacks
@@ -39,7 +41,12 @@ namespace ArmorFragments
             public string Label;
             public int Order;          // o=, or int.MaxValue
             public int PartId;
-            public Group Group;
+            public Group Group;        // its Funky Trees variables
+            public Craft Craft;
+            public AmmoRound Round;    // the round of the cannons that draw from it (the biggest, if they differ)
+            public bool HasRound;
+            public bool Mixed;         // those cannons fire rounds of different sizes
+            public int Cannons;        // how many cannons draw from it
             public RackGrid Grid;
             public bool Burning;
             public bool Exploded;
@@ -66,15 +73,32 @@ namespace ArmorFragments
             }
         }
 
+        // A cannon that draws from racks.
+        private sealed class Feed
+        {
+            public CannonScript Cannon;
+            public string Label;
+            public Craft Craft;
+            public readonly List<Rack> Racks = new List<Rack>();   // in the order it empties them
+
+            public int Available
+            {
+                get
+                {
+                    int total = 0;
+                    foreach (Rack rack in Racks)
+                        if (rack.CanFeed) total += rack.Grid.Remaining;
+                    return total;
+                }
+            }
+        }
+
+        // Racks with the same g=: they share their Funky Trees variables.
         private sealed class Group
         {
             public string Name;
             public string Prefix;      // variable prefix
             public readonly List<Rack> Racks = new List<Rack>();
-            public readonly List<CannonScript> Cannons = new List<CannonScript>();
-            public AmmoRound Round;
-            public bool HasRound;
-            public bool Mixed;         // its cannons fire rounds of different sizes
             public AircraftVariable RoundsVariable;
             public AircraftVariable FireVariable;
             public AircraftVariable BoomVariable;   // 1 from the moment one of its racks explodes
@@ -105,14 +129,16 @@ namespace ArmorFragments
         private sealed class Craft
         {
             public AircraftScript Aircraft;
+            public readonly List<Rack> Racks = new List<Rack>();
             public readonly List<Group> Groups = new List<Group>();
+            public readonly List<Feed> Feeds = new List<Feed>();
             public bool Measured;
             public float GiveUpMeasuringAt;
         }
 
         private static readonly Dictionary<AircraftScript, Craft> Crafts = new Dictionary<AircraftScript, Craft>();
         private static readonly Dictionary<PartScript, Rack> RackOf = new Dictionary<PartScript, Rack>();
-        private static readonly Dictionary<CannonScript, Group> GroupOf = new Dictionary<CannonScript, Group>();
+        private static readonly Dictionary<CannonScript, Feed> FeedOf = new Dictionary<CannonScript, Feed>();
 
         private static readonly AccessTools.FieldRef<CannonScript, int> CurrentAmmo =
             AccessTools.FieldRefAccess<CannonScript, int>("_currentAmmo");
@@ -192,6 +218,8 @@ namespace ArmorFragments
         {
             Craft craft = new Craft { Aircraft = aircraft, GiveUpMeasuringAt = Time.time + 5f };
             Dictionary<string, Group> byName = new Dictionary<string, Group>();
+            Dictionary<int, Rack> byId = new Dictionary<int, Rack>();
+            List<KeyValuePair<PartData, PartTags>> cannons = new List<KeyValuePair<PartData, PartTags>>();
 
             foreach (PartData data in aircraft.Aircraft.Assembly.Parts)
             {
@@ -209,49 +237,66 @@ namespace ArmorFragments
                     else
                     {
                         Group group = GetGroup(byName, craft, tags.AmmoRack.Group);
-                        group.Racks.Add(new Rack
+                        Rack rack = new Rack
                         {
                             Part = part,
                             Label = string.IsNullOrEmpty(tags.Label) ? data.PartType.Name : tags.Label,
                             Order = tags.AmmoRack.Order ?? int.MaxValue,
                             PartId = data.Id,
                             Group = group,
+                            Craft = craft,
                             Aircraft = aircraft,
-                        });
+                        };
+                        group.Racks.Add(rack);
+                        craft.Racks.Add(rack);
+                        byId[data.Id] = rack;
                     }
                 }
 
-                if (tags.Cannon != null)
-                {
-                    CannonScript cannon = part.GetModifier<CannonScript>();
-                    AmmoRound round;
-                    if (cannon != null && AmmoRound.TryFromPart(part, out round))
-                    {
-                        Group group = GetGroup(byName, craft, tags.Cannon.Group);
-                        group.Cannons.Add(cannon);
-                        if (!group.HasRound)
-                        {
-                            group.Round = round;
-                            group.HasRound = true;
-                        }
-                        else
-                        {
-                            if (!round.SameSize(group.Round)) group.Mixed = true;
-                            if (round.IsBiggerThan(group.Round)) group.Round = round;
-                        }
-                    }
-                }
+                if (tags.Cannon != null && tags.Cannon.Racks.Count > 0)
+                    cannons.Add(new KeyValuePair<PartData, PartTags>(data, tags));
             }
 
-            // A group without racks leaves its cannons to the game.
-            craft.Groups.RemoveAll(g => g.Racks.Count == 0);
-
-            foreach (Group group in craft.Groups)
+            foreach (KeyValuePair<PartData, PartTags> pair in cannons)
             {
-                group.Racks.Sort((a, b) => a.Order != b.Order ? a.Order.CompareTo(b.Order) : a.PartId.CompareTo(b.PartId));
-                foreach (Rack rack in group.Racks) RackOf[rack.Part] = rack;
-                foreach (CannonScript cannon in group.Cannons) GroupOf[cannon] = group;
+                PartScript part = pair.Key.PartScript;
+                CannonScript cannon = part.GetModifier<CannonScript>();
+                AmmoRound round;
+                if (cannon == null || !AmmoRound.TryFromPart(part, out round)) continue;
+
+                Feed feed = new Feed
+                {
+                    Cannon = cannon,
+                    Label = string.IsNullOrEmpty(pair.Value.Label) ? pair.Key.PartType.Name : pair.Value.Label,
+                    Craft = craft,
+                };
+                foreach (int id in pair.Value.Cannon.Racks)
+                {
+                    Rack rack;
+                    if (byId.TryGetValue(id, out rack) && !feed.Racks.Contains(rack)) feed.Racks.Add(rack);
+                }
+                if (feed.Racks.Count == 0) continue;   // none of its racks is left: it keeps the game's Ammo Count
+                feed.Racks.Sort((a, b) => a.Order != b.Order ? a.Order.CompareTo(b.Order) : a.PartId.CompareTo(b.PartId));
+
+                foreach (Rack rack in feed.Racks)
+                {
+                    rack.Cannons++;
+                    if (!rack.HasRound)
+                    {
+                        rack.Round = round;
+                        rack.HasRound = true;
+                    }
+                    else
+                    {
+                        if (!round.SameSize(rack.Round)) rack.Mixed = true;
+                        if (round.IsBiggerThan(rack.Round)) rack.Round = round;
+                    }
+                }
+                craft.Feeds.Add(feed);
             }
+
+            foreach (Rack rack in craft.Racks) RackOf[rack.Part] = rack;
+            foreach (Feed feed in craft.Feeds) FeedOf[feed.Cannon] = feed;
             return craft;
         }
 
@@ -302,7 +347,9 @@ namespace ArmorFragments
                 {
                     Craft craft = pair.Value;
                     if (!craft.Measured && !TryMeasure(craft)) continue;
-                    foreach (Group group in craft.Groups) Update(group);
+                    foreach (Rack rack in craft.Racks) Update(rack);
+                    SyncCannons(craft);
+                    foreach (Group group in craft.Groups) UpdateVariables(group);
                 }
                 catch (Exception e)
                 {
@@ -314,103 +361,102 @@ namespace ArmorFragments
                 foreach (AircraftScript aircraft in gone) Forget(aircraft);
         }
 
-        private static void Update(Group group)
+        private static void Update(Rack rack)
         {
-            foreach (Rack rack in group.Racks)
+            if (rack.Grid == null) return;
+            UpdateMass(rack);
+            if (rack.Exploded) return;
+
+            if (rack.Part != null)
             {
-                if (rack.Grid == null) continue;
-                UpdateMass(rack);
-                if (rack.Exploded) continue;
-
-                if (rack.Part != null)
+                rack.LastPosition = rack.Grid.WorldCenter(rack.Part.transform);
+                if (rack.StartedConnected && !rack.BrokenOff && !rack.Part.ConnectedToMainCockpit)
                 {
-                    rack.LastPosition = rack.Grid.WorldCenter(rack.Part.transform);
-                    if (rack.StartedConnected && !rack.BrokenOff && !rack.Part.ConnectedToMainCockpit)
-                    {
-                        rack.BrokenOff = true;
-                        ArmorFragmentsPlugin.Log.LogInfo("Ammo rack '" + rack.Label + "' broke off the vehicle: its " +
-                            rack.Grid.Remaining + " rounds no longer feed the gun (they can still cook off)");
-                    }
-                }
-
-                if (rack.Burning && Time.time >= rack.ExplodeAt)
-                {
-                    Explode(rack);
-                }
-                else if (rack.Part == null && rack.Grid.Remaining > 0)
-                {
-                    if (rack.Burning)
-                    {
-                        // Already cooking off and the part is gone: nothing left to burn.
-                        ArmorFragmentsPlugin.Log.LogInfo("Ammo rack '" + rack.Label + "' was destroyed while burning");
-                        Explode(rack);
-                    }
-                    else
-                    {
-                        // The game removed the part without our damage check seeing it reach full damage.
-                        Destroyed(rack, rack.Attacker, 1f - rack.LastLevel, true);
-                    }
-                }
-                else if (rack.Part != null)
-                {
-                    rack.LastLevel = DamageLevel(rack.Part);
+                    rack.BrokenOff = true;
+                    ArmorFragmentsPlugin.Log.LogInfo("Ammo rack '" + rack.Label + "' broke off the vehicle: its " +
+                        rack.Grid.Remaining + " rounds no longer feed the gun (they can still cook off)");
                 }
             }
 
-            SyncCannons(group);
+            if (rack.Burning && Time.time >= rack.ExplodeAt)
+            {
+                ExplodeWithPartners(rack);
+            }
+            else if (rack.Part == null && rack.Grid.Remaining > 0)
+            {
+                if (rack.Burning)
+                {
+                    // Already cooking off and the part is gone: nothing left to burn.
+                    ArmorFragmentsPlugin.Log.LogInfo("Ammo rack '" + rack.Label + "' was destroyed while burning");
+                    ExplodeWithPartners(rack);
+                }
+                else
+                {
+                    // The game removed the part without our damage check seeing it reach full damage.
+                    Destroyed(rack, rack.Attacker, 1f - rack.LastLevel, true);
+                }
+            }
+            else if (rack.Part != null)
+            {
+                rack.LastLevel = DamageLevel(rack.Part);
+            }
+        }
+
+        private static void UpdateVariables(Group group)
+        {
             if (group.RoundsVariable != null) group.RoundsVariable.SetValue(group.Available, 0);
             if (group.FireVariable != null) group.FireVariable.SetValue(group.AnyBurning ? 1f : 0f, 0);
             if (group.BoomVariable != null) group.BoomVariable.SetValue(group.Boomed ? 1f : 0f, 0);
         }
 
         // The game's weapon system only fires while the cannons' own counters are above 0.
-        private static void SyncCannons(Group group)
+        private static void SyncCannons(Craft craft)
         {
-            int available = group.Available;
-            foreach (CannonScript cannon in group.Cannons)
-                if (cannon != null) CurrentAmmo(cannon) = available;
+            foreach (Feed feed in craft.Feeds)
+                if (feed.Cannon != null) CurrentAmmo(feed.Cannon) = feed.Available;
         }
 
         private static bool TryMeasure(Craft craft)
         {
             bool waitForColliders = false;
-            foreach (Group group in craft.Groups)
-                foreach (Rack rack in group.Racks)
-                {
-                    rack.Grid = RackGrid.Measure(rack.Part, group.HasRound ? group.Round : default(AmmoRound));
-                    if (rack.Grid.Problem == RackGrid.NoColliders) waitForColliders = true;
-                }
+            foreach (Rack rack in craft.Racks)
+            {
+                rack.Grid = RackGrid.Measure(rack.Part, rack.HasRound ? rack.Round : default(AmmoRound));
+                if (rack.Grid.Problem == RackGrid.NoColliders) waitForColliders = true;
+            }
 
             // Colliders may come a few frames after the aircraft.
             if (waitForColliders && Time.time < craft.GiveUpMeasuringAt) return false;
 
             craft.Measured = true;
-            foreach (Group group in craft.Groups)
+            foreach (Rack rack in craft.Racks)
             {
-                string round = group.HasRound ? group.Round.Describe() : "no cannon with a [CAN] tag in this group";
-                foreach (Rack rack in group.Racks)
+                if (rack.Part != null)
                 {
-                    if (rack.Part != null)
-                    {
-                        rack.StartedConnected = rack.Part.ConnectedToMainCockpit;
-                        rack.BaseMassScale = rack.Part.Part.MassScale;
-                        rack.BaseLoadedMass = rack.Part.Part.LoadedMass;
-                        UpdateMass(rack);
-                    }
-                    ArmorFragmentsPlugin.Log.LogInfo("Ammo rack '" + rack.Label + "' (group " + group.Name +
-                        (rack.Order != int.MaxValue ? ", order " + rack.Order : "") + "): " +
-                        (rack.Grid.Problem == null ? rack.Grid.Capacity + " rounds (" + rack.Grid.Describe() +
-                                                     ", shape from " + rack.Grid.Method + "), weighing " +
-                                                     Fmt(rack.Grid.Capacity * group.Round.RoundMass, "F0") + " kg"
-                                                   : "holds nothing: " + rack.Grid.Problem));
+                    rack.StartedConnected = rack.Part.ConnectedToMainCockpit;
+                    rack.BaseMassScale = rack.Part.Part.MassScale;
+                    rack.BaseLoadedMass = rack.Part.Part.LoadedMass;
+                    UpdateMass(rack);
                 }
-                ArmorFragmentsPlugin.Log.LogInfo("Ammo group " + group.Name + ": " + group.Available + " rounds in " +
-                    group.Racks.Count + " rack(s) for " + group.Cannons.Count + " cannon(s); " + round);
-                if (group.Mixed)
-                    ArmorFragmentsPlugin.Log.LogWarning("Ammo group " + group.Name + ": its cannons fire rounds of " +
-                        "different sizes; the racks are sized for the biggest one.");
-                SyncCannons(group);
+                ArmorFragmentsPlugin.Log.LogInfo("Ammo rack '" + rack.Label + "' (group " + rack.Group.Name +
+                    (rack.Order != int.MaxValue ? ", order " + rack.Order : "") + "): " +
+                    (rack.Grid.Problem == null ? rack.Grid.Capacity + " rounds of " + rack.Round.Describe() + " (" +
+                                                 rack.Grid.Describe() + ", shape from " + rack.Grid.Method + "), weighing " +
+                                                 Fmt(rack.Grid.Capacity * rack.Round.RoundMass, "F0") + " kg, for " +
+                                                 rack.Cannons + " cannon(s)"
+                                               : "holds nothing: " + rack.Grid.Problem));
+                if (rack.Mixed)
+                    ArmorFragmentsPlugin.Log.LogWarning("Ammo rack '" + rack.Label + "': the cannons drawing from it fire " +
+                        "rounds of different sizes; it is sized for the biggest one.");
             }
+            foreach (Feed feed in craft.Feeds)
+            {
+                List<string> labels = new List<string>();
+                foreach (Rack rack in feed.Racks) labels.Add("'" + rack.Label + "'");
+                ArmorFragmentsPlugin.Log.LogInfo("Cannon '" + feed.Label + "': " + feed.Available + " rounds in " +
+                    feed.Racks.Count + " rack(s), emptied in this order: " + string.Join(", ", labels.ToArray()));
+            }
+            SyncCannons(craft);
             return true;
         }
 
@@ -424,7 +470,7 @@ namespace ArmorFragments
             if (rounds == rack.MassRounds) return;
             rack.MassRounds = rounds;
 
-            float extra = rounds * rack.Group.Round.RoundMass * 0.01f;   // game units
+            float extra = rounds * rack.Round.RoundMass * 0.01f;   // game units
             rack.Part.Part.MassScale = rack.BaseMassScale * (rack.BaseLoadedMass + extra) / rack.BaseLoadedMass;
             rack.Part.Part.RecalculateLoadedMass(false);
         }
@@ -434,11 +480,8 @@ namespace ArmorFragments
             KnockedOut.Remove(aircraft);
             Craft craft;
             if (!Crafts.TryGetValue(aircraft, out craft)) return;
-            foreach (Group group in craft.Groups)
-            {
-                foreach (Rack rack in group.Racks) RackOf.Remove(rack.Part);
-                foreach (CannonScript cannon in group.Cannons) GroupOf.Remove(cannon);
-            }
+            foreach (Rack rack in craft.Racks) RackOf.Remove(rack.Part);
+            foreach (Feed feed in craft.Feeds) FeedOf.Remove(feed.Cannon);
             Crafts.Remove(aircraft);
         }
 
@@ -446,32 +489,27 @@ namespace ArmorFragments
 
         public static bool CanFire(CannonScript cannon)
         {
-            Group group;
-            if (cannon == null || !GroupOf.TryGetValue(cannon, out group)) return true;
-            if (!IsMeasured(group)) return true;
-            return group.Available > 0;
+            Feed feed;
+            if (cannon == null || !FeedOf.TryGetValue(cannon, out feed)) return true;
+            if (!feed.Craft.Measured) return true;
+            return feed.Available > 0;
         }
 
         public static void OnFired(CannonScript cannon)
         {
-            Group group;
-            if (cannon == null || !GroupOf.TryGetValue(cannon, out group) || !IsMeasured(group)) return;
+            Feed feed;
+            if (cannon == null || !FeedOf.TryGetValue(cannon, out feed) || !feed.Craft.Measured) return;
 
-            foreach (Rack rack in group.Racks)
+            foreach (Rack rack in feed.Racks)
             {
                 if (!rack.CanFeed || rack.Grid.Remaining <= 0) continue;
                 rack.Grid.TakeRound();
                 if (rack.Grid.Remaining == 0)
-                    ArmorFragmentsPlugin.Log.LogInfo("Ammo rack '" + rack.Label + "' is empty (group " + group.Name +
-                                                     ": " + group.Available + " rounds left)");
+                    ArmorFragmentsPlugin.Log.LogInfo("Ammo rack '" + rack.Label + "' is empty (cannon '" + feed.Label +
+                                                     "': " + feed.Available + " rounds left)");
                 break;
             }
-            SyncCannons(group);
-        }
-
-        private static bool IsMeasured(Group group)
-        {
-            return group.Racks.Count > 0 && group.Racks[0].Grid != null;
+            SyncCannons(feed.Craft);
         }
 
         // ---- Damage (PartScript.OnDamaged) ------------------------------------------------
@@ -622,7 +660,7 @@ namespace ArmorFragments
             ArmorFragmentsPlugin.Log.LogInfo("Ammo rack '" + rack.Label + "' was destroyed" + (partGone ? " (part gone)" : "") +
                 " with " + rack.Grid.Remaining + " rounds in it (damage level rose by " + Fmt(rise, "F3") + "): it cooks off");
 
-            if (partGone) Explode(rack);
+            if (partGone) ExplodeWithPartners(rack);
             else Ignite(rack, rack.Attacker, "destroyed");
         }
 
@@ -716,53 +754,101 @@ namespace ArmorFragments
 
             ArmorFragmentsPlugin.Log.LogInfo("Ammo rack '" + rack.Label + "' is burning (" + reason + "): " +
                 rack.Grid.Remaining + " rounds, explodes in " + Fmt(delay, "F1") + " s");
-            SyncCannons(rack.Group);
+            SyncCannons(rack.Craft);
         }
 
-        private static void Explode(Rack rack)
+        // Racks of one vehicle due to explode within this many seconds of each other go up as one blast.
+        private const float TogetherWindow = 0.5f;
+
+        // A rack explodes, with every other burning rack of its vehicle that is due within TogetherWindow.
+        private static void ExplodeWithPartners(Rack first)
         {
-            int rounds = rack.Grid.Remaining;
-            rack.Exploded = true;
-            rack.Burning = false;
-            rack.Grid.EmptyAll();
+            List<Rack> racks = new List<Rack> { first };
+            foreach (Rack other in first.Craft.Racks)
+                if (other != first && other.Burning && !other.Exploded && other.ExplodeAt <= Time.time + TogetherWindow)
+                    racks.Add(other);
+            Explode(racks);
+        }
 
-            try
+        // One blast for these racks: their explosive adds up (capped at MaxBlastLb), measured from their center.
+        private static void Explode(List<Rack> racks)
+        {
+            Rack first = racks[0];
+            List<Rack> live = new List<Rack>();                                  // racks that still had rounds
+            Dictionary<Rack, Vector3> centers = new Dictionary<Rack, Vector3>();
+            Dictionary<Rack, float> rackPounds = new Dictionary<Rack, float>();
+            float pounds = 0f;
+            Vector3 weighted = Vector3.zero;
+            int? attacker = null;
+
+            foreach (Rack rack in racks)
             {
-                if (rack.Fire != null && !rack.Fire.Destroyed) rack.Fire.DestroyEffect();
-                if (rack.Fire != null) RackFireSync.Send(rack.Part, RackFireSync.RackFireOut);
-            }
-            catch (Exception e)
-            {
-                ArmorFragmentsPlugin.Log.LogWarning("Ammo rack fire effect could not be removed: " + e.Message);
+                int rounds = rack.Grid.Remaining;
+                Vector3 center = rack.Part != null ? rack.Grid.WorldCenter(rack.Part.transform) : rack.LastPosition;
+                rack.Exploded = true;
+                rack.Burning = false;
+                rack.Grid.EmptyAll();
+
+                try
+                {
+                    if (rack.Fire != null && !rack.Fire.Destroyed) rack.Fire.DestroyEffect();
+                    if (rack.Fire != null) RackFireSync.Send(rack.Part, RackFireSync.RackFireOut);
+                }
+                catch (Exception e)
+                {
+                    ArmorFragmentsPlugin.Log.LogWarning("Ammo rack fire effect could not be removed: " + e.Message);
+                }
+
+                if (rounds <= 0)
+                {
+                    ArmorFragmentsPlugin.Log.LogInfo("Ammo rack '" + rack.Label + "' burned out with no rounds left");
+                    continue;
+                }
+
+                // Sized in pounds of explosive: each round adds its propellant's explosive equivalent
+                // (AmmoRound.ExplosiveLb: ~0.58 lb for a 50 mm round at 835 m/s, so a Pz III's ~90 rounds make ~55 lb).
+                float lb = rounds * rack.Round.ExplosiveLb * ArmorFragmentsPlugin.BlastStrength.Value;
+                ArmorFragmentsPlugin.Log.LogInfo("Ammo rack '" + rack.Label + "' exploded: " + rounds + " rounds of " +
+                    Fmt(rack.Round.CaliberMm, "F0") + " mm = " + Fmt(lb, "F1") + " lb of explosive");
+
+                live.Add(rack);
+                centers[rack] = center;
+                rackPounds[rack] = lb;
+                pounds += lb;
+                weighted += center * lb;
+                if (!attacker.HasValue) attacker = rack.Attacker;
+                rack.Group.Boomed = true;   // <group>_boom: detachers wired to it fire now (turret toss)
             }
 
-            if (rounds <= 0)
+            if (live.Count == 0)
             {
-                ArmorFragmentsPlugin.Log.LogInfo("Ammo rack '" + rack.Label + "' burned out with no rounds left");
+                SyncCannons(first.Craft);
                 return;
             }
 
-            // Sized in pounds of explosive: each round adds its propellant's explosive equivalent
-            // (AmmoRound.ExplosiveLb: ~0.58 lb for a 50 mm round at 835 m/s, so a Pz III's ~90 rounds make ~55 lb),
-            // capped at MaxBlastLb.
-            float pounds = Mathf.Min(rounds * rack.Group.Round.ExplosiveLb * ArmorFragmentsPlugin.BlastStrength.Value,
-                                     ArmorFragmentsPlugin.MaxBlastLb.Value);
-            float size = BangSize(pounds);
-            Vector3 center = rack.Part != null ? rack.Grid.WorldCenter(rack.Part.transform) : rack.LastPosition;
+            float total = Mathf.Min(pounds, ArmorFragmentsPlugin.MaxBlastLb.Value);
+            Vector3 blastCenter = pounds > 0f ? weighted / pounds : centers[live[0]];
+            List<string> labels = new List<string>();
+            foreach (Rack rack in live) labels.Add("'" + rack.Label + "'");
+            string names = string.Join(" + ", labels.ToArray());
+            ArmorFragmentsPlugin.Log.LogInfo("Cook-off of " + names + ": " + Fmt(total, "F1") + " lb of explosive" +
+                (live.Count > 1 ? " (" + live.Count + " racks together)" : "") +
+                (total < pounds ? " (capped from " + Fmt(pounds, "F1") + " lb at MaxBlastLb)" : "") +
+                ", blast size " + Fmt(BangSize(total), "F2") + " (120 lb makes " + Fmt(BangSize(BangReferenceLb), "F2") + ")");
 
-            ArmorFragmentsPlugin.Log.LogInfo("Ammo rack '" + rack.Label + "' exploded: " + rounds + " rounds of " +
-                Fmt(rack.Group.Round.CaliberMm, "F0") + " mm = " + Fmt(pounds, "F1") + " lb of explosive (blast size " +
-                Fmt(size, "F2") + "; a 250 lb bomb is 0.80)");
-
-            rack.Group.Boomed = true;   // <group>_boom: detachers wired to it fire now (turret toss)
-            KnockOut(rack.Aircraft);    // before the cook: no game explosion may blow the shell apart
-            Vector3 ventAt = Blast(rack, center, pounds);   // before the wreck: it may destroy the vent part
-            WreckInsides(rack, center, ventAt, pounds);
-            SyncCannons(rack.Group);
+            KnockOut(first.Aircraft);    // before the cook: no game explosion may blow the shell apart
+            Blast(live, centers, rackPounds, blastCenter, total, attacker);   // before the wreck: it may destroy a vent
+            WreckInsides(live, blastCenter, total, attacker);
+            SyncCannons(first.Craft);
 
             // A rack going up is the vehicle's kill switch: the game's own death (kill credit, kill cam, respawn),
             // when it actually explodes, not while it burns. A rack that broke off the vehicle first doesn't kill it.
-            if (!rack.BrokenOff) VehicleRules.Kill(rack.Aircraft, "ammo rack '" + rack.Label + "' exploded");
+            foreach (Rack rack in live)
+            {
+                if (rack.BrokenOff) continue;
+                VehicleRules.Kill(first.Aircraft, "ammo rack " + names + " exploded");
+                break;
+            }
         }
 
         // ---- Knocked out -----------------------------------------------------------------
@@ -790,11 +876,12 @@ namespace ArmorFragments
         // ---- The blast: one bang, then a jet of fire -------------------------------------------
         //
         // A cook-off is:
-        //  1. One bang: a single explosion (AmmoRacks.BlastType, BombExplosion by default) at the vehicle's
-        //     cook-off vent ([VNT] part, the nearest one: a turret ring or hatch), or just above the rack with
-        //     no vent, sized by the pounds of explosive like the game's own bombs. Only for show.
-        //  2. A jet of fire out of the vent for 3 to 10 s (more pounds, longer): the game's own fire effect,
-        //     scaled up and stretched upward, with denser flames.
+        //  1. One bang: a single explosion (AmmoRacks.BlastType, BombExplosion by default) at the rack (racks going
+        //     up together: at their center, weighted by their explosive), sized by the pounds of explosive like the
+        //     game's own bombs. Only for show.
+        //  2. A jet of fire out of each rack's nearest cook-off vent ([VNT] part: a turret ring or hatch), or out of
+        //     the rack with no vent, for 3 to 10 s (more pounds, longer): the game's own fire effect, scaled up and
+        //     stretched upward, with denser flames. Racks going up together through the same vent make one jet.
         //  3. It then settles smoothly into the half-size burn-out fire, which never goes out (KeepBurning).
         // The game's blast does nothing (AmmoRackBlastPatch): WreckInsides does all the cook-off's damage.
 
@@ -826,59 +913,93 @@ namespace ArmorFragments
         // The game's bombs: explosion size per pound ("Boom 25", 250 lb = 0.8).
         private const float BombSizePerLb = 0.8f / 250f;
 
-        // The bang: sized like the game's bombs by the pounds ("Boom 25", 250 lb = 0.8), times BlastVisualPercent.
+        // The bang: a BangReferenceLb charge is sized like the game's bombs ("Boom 25", 250 lb = 0.8); other charges
+        // grow with the cube root of their pounds, as a blast's reach does (Hopkinson-Cranz), so a cook-off of
+        // low-velocity rounds (little propellant) still shows a cloud. Times BlastVisualPercent.
         // Only for show: AmmoRackBlastPatch gives the game's blast nothing to act on.
+        private const float BangReferenceLb = 120f;
+
         private static float BangSize(float pounds)
         {
-            return pounds * BombSizePerLb * Mathf.Max(ArmorFragmentsPlugin.BlastVisualPercent.Value, 0f) / 100f;
+            if (pounds <= 0f) return 0f;
+            float size = BangReferenceLb * BombSizePerLb * Mathf.Pow(pounds / BangReferenceLb, 1f / 3f);
+            return size * Mathf.Max(ArmorFragmentsPlugin.BlastVisualPercent.Value, 0f) / 100f;
         }
 
         // Scales the fire jet's flare-up (size and extra flames).
         private const float JetSize = 1f / 3f;
 
-        // Returns where the blast comes out of the vehicle (the vent, or just above the rack).
-        private static Vector3 Blast(Rack rack, Vector3 center, float pounds)
+        private static void Blast(List<Rack> racks, Dictionary<Rack, Vector3> centers, Dictionary<Rack, float> rackPounds,
+                                  Vector3 center, float pounds, int? attacker)
         {
-            PartScript vent = NearestVent(rack.Aircraft, center);
-            PartScript firePart = vent != null ? vent : rack.Part;
-            Vector3 at = vent != null ? vent.transform.position : center + Vector3.up * 0.5f;
+            AircraftScript aircraft = racks[0].Aircraft;
 
-            // 1. The bang.
+            // Each rack's fire comes out of its nearest vent (no vent: out of the rack itself); racks sharing a vent
+            // make one jet, sized by their explosive together.
+            List<PartScript> fireParts = new List<PartScript>();
+            Dictionary<PartScript, float> jetPounds = new Dictionary<PartScript, float>();
+            Dictionary<PartScript, List<string>> jetLabels = new Dictionary<PartScript, List<string>>();
+            foreach (Rack rack in racks)
+            {
+                PartScript vent = NearestVent(aircraft, centers[rack]);
+                PartScript firePart = vent != null ? vent : rack.Part;
+                if (firePart == null) continue;
+                if (!jetPounds.ContainsKey(firePart))
+                {
+                    fireParts.Add(firePart);
+                    jetPounds[firePart] = 0f;
+                    jetLabels[firePart] = new List<string>();
+                }
+                jetPounds[firePart] += rackPounds[rack];
+                jetLabels[firePart].Add(rack.Label);
+            }
+
+            // 1. The bang, at the rack. Its message to other players needs a part of the vehicle to place it on.
             float size = BangSize(pounds);
             if (size > 0.0001f && FlightSceneScript.Instance != null)
             {
-                Recent.Add(new RecentBlast { Position = at, Time = Time.time, Owner = rack.Aircraft });
+                Recent.Add(new RecentBlast { Position = center, Time = Time.time, Owner = aircraft });
+                PartScript reference = null;
+                foreach (Rack rack in racks)
+                    if (rack.Part != null) { reference = rack.Part; break; }
+                if (reference == null && fireParts.Count > 0) reference = fireParts[0];
                 // Sent before the explosion, so other players' mods keep it off their copy of this vehicle too.
-                RackFireSync.SendBlast(firePart, at);
-                FlightSceneScript.Instance.CreateExplosion(ArmorFragmentsPlugin.BlastType.Value, at, size, null,
-                                                           rack.Attacker, null, ExplosiveWeaponImpactType.Structure);
+                RackFireSync.SendBlast(reference, center);
+                FlightSceneScript.Instance.CreateExplosion(ArmorFragmentsPlugin.BlastType.Value, center, size, null,
+                                                           attacker, null, ExplosiveWeaponImpactType.Structure);
             }
 
-            // 2-3. The jet: it flares up at once (wider with more pounds, x 2.5 upward, more flames, all scaled by
-            // JetSize) and settles into the burn-out.
-            float duration = Mathf.Clamp(2f + pounds / 15f, 3f, 10f);
-            float width = Mathf.Max(FireScale * 1.5f, Mathf.Clamp(1f + pounds / 25f, 1.5f, 5f) * JetSize);
-            StartJet(firePart, rack.Label, duration, new Vector3(width, width * 2.5f, width), 1f + pounds / 20f * JetSize);
-            if (firePart != null) BurningVents.Add(firePart);
+            // 2-3. The jets: each flares up at once (wider with more pounds, x 2.5 upward, more flames, all scaled
+            // by JetSize) and settles into the burn-out.
+            List<string> jets = new List<string>();
+            foreach (PartScript firePart in fireParts)
+            {
+                float lb = Mathf.Min(jetPounds[firePart], pounds);
+                float duration = Mathf.Clamp(2f + lb / 15f, 3f, 10f);
+                float width = Mathf.Max(FireScale * 1.5f, Mathf.Clamp(1f + lb / 25f, 1.5f, 5f) * JetSize);
+                string label = string.Join(" + ", jetLabels[firePart].ToArray());
+                StartJet(firePart, label, duration, new Vector3(width, width * 2.5f, width), 1f + lb / 20f * JetSize);
+                BurningVents.Add(firePart);
+                jets.Add("'" + firePart.Part.Name + "' (" + Fmt(width, "F1") + " x " + Fmt(width * 2.5f, "F1") +
+                         " for " + Fmt(duration, "F1") + " s)");
+            }
 
             // 4. Every other vent of the vehicle catches the small burn-out fire too, a little later each (0.5 to
             //    2 s: the fire spreading through the hull). A vent already burning gets no second fire.
             int others = 0;
-            foreach (PartScript other in Vents(rack.Aircraft))
+            foreach (PartScript other in Vents(aircraft))
             {
-                if (other == vent || BurningVents.Contains(other)) continue;
+                if (jetPounds.ContainsKey(other) || BurningVents.Contains(other)) continue;
                 BurningVents.Add(other);
                 PendingFires.Add(new PendingFire { At = Time.time + UnityEngine.Random.Range(0.5f, 2f), Part = other });
                 others++;
             }
 
-            ArmorFragmentsPlugin.Log.LogInfo("Ammo rack '" + rack.Label + "' cooks off " +
-                (vent != null ? "through '" + vent.Part.Name + "'" : "(no [VNT] part: above the rack)") + ": one " +
-                ArmorFragmentsPlugin.BlastType.Value + " of size " + Fmt(size, "F2") + ", then a fire jet " +
-                Fmt(width, "F1") + " x " + Fmt(width * 2.5f, "F1") + " for " + Fmt(duration, "F1") +
-                " s, settling into a burn-out that never goes out" +
+            ArmorFragmentsPlugin.Log.LogInfo("Cook-off: one " + ArmorFragmentsPlugin.BlastType.Value + " of size " +
+                Fmt(size, "F2") + " at the rack" + (racks.Count > 1 ? "s" : "") + ", then fire jet(s) out of " +
+                (jets.Count > 0 ? string.Join(", ", jets.ToArray()) : "nothing (the rack is gone, no vent)") +
+                ", settling into a burn-out that never goes out" +
                 (others > 0 ? "; " + others + " other vent(s) catch fire too" : ""));
-            return at;
         }
 
         // Vents ([VNT] parts) burning since a cook-off, and the other vents' fires still to light.
@@ -1047,14 +1168,18 @@ namespace ArmorFragments
         //    wrecked), up to twice it closer in; in between it grows with ln(P), as damage does with pressure.
         //  - R is the distance to the part's nearest surface (its colliders), not its center.
         // Example at 25%: 96 lb (42 rounds of 100 mm) is 10.9 kg of TNT: wrecks within 2.7 m, damages out to 4.8 m.
-        // It is the cook-off's only damage (the bang is just for show: AmmoRackBlastPatch), inside and outside:
-        //  - Its own vehicle, from the rack: only its damage modules and racks on an armored vehicle (VehicleRules).
-        //  - Every other vehicle around, from where the blast leaves the hull (the vent, or just above the rack):
-        //    by the same rules (armor never; armored vehicles in modules and racks; others in every part). A
-        //    remote player's vehicle is damaged over the network, as fragments are.
-        // Racks hit this way roll their own chance (chain).
-        private static void WreckInsides(Rack rack, Vector3 center, Vector3 ventAt, float pounds)
+        // It is the cook-off's only damage (the bang is just for show: AmmoRackBlastPatch), measured from the rack
+        // (racks going up together: their center) for every vehicle, its own and the others around, by the same
+        // rules (armor never; armored vehicles in modules and racks; others in every part). Armor in the way
+        // shields, the burning vehicle's own hull included. A remote player's vehicle is damaged over the
+        // network, as fragments are. Racks hit this way roll their own chance (chain).
+        private static void WreckInsides(List<Rack> racks, Vector3 center, float pounds, int? attacker)
         {
+            AircraftScript aircraft = racks[0].Aircraft;
+            HashSet<PartScript> exploding = new HashSet<PartScript>();
+            foreach (Rack rack in racks)
+                if (rack.Part != null) exploding.Add(rack.Part);
+
             float tntKg = pounds * 0.4536f * Mathf.Clamp(ArmorFragmentsPlugin.CookOffTNTEfficiency.Value, 0f, 100f) / 100f;
             if (tntKg <= 0f) return;
             float cubeRoot = Mathf.Pow(tntKg, 1f / 3f);
@@ -1063,10 +1188,9 @@ namespace ArmorFragments
             float reach = ScaledDistanceAt(onsetKPa) * cubeRoot;       // m: no damage beyond
             float wreckWithin = ScaledDistanceAt(wreckKPa) * cubeRoot;  // m: for the log
 
-            // Every part near the rack (its own vehicle) or near the vent (everyone else), at its nearest surface.
+            // Every part around the rack, of any vehicle, at its nearest surface.
             Dictionary<PartScript, Vector3> nearest = new Dictionary<PartScript, Vector3>();
-            Collect(nearest, center, reach, rack, true);
-            Collect(nearest, ventAt, reach, rack, false);
+            Collect(nearest, center, reach, exploding);
 
             int inside = 0, outside = 0, shielded = 0;
             float halvingMm = Mathf.Max(ArmorFragmentsPlugin.CookOffArmorHalvingMm.Value, 0.1f);
@@ -1075,18 +1199,16 @@ namespace ArmorFragments
             {
                 PartScript part = pair.Key;
                 if (part == null || part.Part == null) continue;
-                bool own = part.Aircraft == rack.Aircraft;
+                bool own = part.Aircraft == aircraft;
                 if (!VehicleRules.TakesModDamage(part, TagCodec.Parse(part.Part.Name))) continue;
 
-                Vector3 origin = own ? center : ventAt;
-                float distance = Vector3.Distance(pair.Value, origin);
+                float distance = Vector3.Distance(pair.Value, center);
                 if (distance >= reach) continue;
 
                 // Armor in the way shields in proportion to how much of it there is: every
-                // CookOffArmorHalvingMm of effective thickness halves the pressure. Outside, the burning vehicle's
-                // own armor doesn't count (the blast is already out, at the vent).
+                // CookOffArmorHalvingMm of effective thickness halves the pressure.
                 float pressure = Overpressure(Mathf.Max(distance, 0.05f) / cubeRoot);
-                float armorMm = ArmorBetween(origin, pair.Value, part, own ? null : rack.Aircraft);
+                float armorMm = ArmorBetween(center, pair.Value, part);
                 if (armorMm > 0f) pressure *= Mathf.Pow(0.5f, armorMm / halvingMm);
                 if (pressure <= onsetKPa)
                 {
@@ -1097,9 +1219,9 @@ namespace ArmorFragments
                 float damage = part.MaxHealth * Mathf.Clamp(share, 0f, 2f);
                 if (damage <= 0f) continue;
 
-                Vector3 away = pair.Value - origin;
+                Vector3 away = pair.Value - center;
                 Vector3 direction = away.sqrMagnitude > 1e-6f ? away.normalized : Vector3.up;
-                if (ApplyBlastDamage(part, damage, pair.Value, direction, rack.Attacker))
+                if (ApplyBlastDamage(part, damage, pair.Value, direction, attacker))
                 {
                     if (own) inside++;
                     else
@@ -1109,16 +1231,20 @@ namespace ArmorFragments
                     }
                 }
             }
-            ArmorFragmentsPlugin.Log.LogInfo("Ammo rack '" + rack.Label + "' cook-off: " + Fmt(pounds, "F0") + " lb at " +
-                Fmt(ArmorFragmentsPlugin.CookOffTNTEfficiency.Value, "F0") + "% = " + Fmt(tntKg, "F1") + " kg of TNT; wrecks within " +
-                Fmt(wreckWithin, "F1") + " m, damages out to " + Fmt(reach, "F1") + " m; damaged " + inside +
-                " module(s) / rack(s) inside, " + outside + " part(s) of " + others.Count + " other vehicle(s) outside" +
+            ArmorFragmentsPlugin.Log.LogInfo("Cook-off blast: " + Fmt(pounds, "F0") + " lb at " +
+                Fmt(ArmorFragmentsPlugin.CookOffTNTEfficiency.Value, "F0") + "% = " + Fmt(tntKg, "F1") + " kg of TNT, from the rack" +
+                (racks.Count > 1 ? "s" : "") + "; wrecks within " + Fmt(wreckWithin, "F1") + " m, damages out to " +
+                Fmt(reach, "F1") + " m; damaged " + inside + " module(s) / rack(s) of this vehicle, " + outside +
+                " part(s) of " + others.Count + " other vehicle(s)" +
                 (shielded > 0 ? "; " + shielded + " part(s) in range saved by armor in the way" : ""));
         }
 
-        // Effective armor (mm) on the straight line from the blast to a part: each [ARM] part crossed counts its
-        // thickness / cos(angle), as for shells (the angle limited to ~78 deg). Parts of 'skip' don't count.
-        private static float ArmorBetween(Vector3 from, Vector3 to, PartScript target, AircraftScript skip)
+        // Effective armor (mm) on the straight line from the blast to a part: each whole-block [ARM] part crossed
+        // counts its thickness / cos(angle), as for shells (the angle limited to ~78 deg), and so does each armored
+        // face of a per-face block the line gets in or out through.
+        private static readonly List<RayEvent> BetweenEvents = new List<RayEvent>();
+
+        private static float ArmorBetween(Vector3 from, Vector3 to, PartScript target)
         {
             Vector3 line = to - from;
             float distance = line.magnitude;
@@ -1126,30 +1252,24 @@ namespace ArmorFragments
             Vector3 direction = line / distance;
 
             float total = 0f;
-            HashSet<PartScript> counted = new HashSet<PartScript>();
-            foreach (RaycastHit hit in Physics.RaycastAll(from, direction, distance, ~0, QueryTriggerInteraction.Ignore))
+            foreach (RayEvent e in RayEvents.Gather(from, direction, distance, target, null, BetweenEvents))
             {
-                if (hit.collider == null || hit.collider.GetComponentInParent<CannonProjectileScript>() != null) continue;
-                PartScript part = hit.collider.GetComponentInParent<PartScript>();
-                if (part == null || part == target || part.Part == null || !counted.Add(part)) continue;
-                if (skip != null && part.Aircraft == skip) continue;
-                ArmorTag armor = TagCodec.Parse(part.Part.Name).Armor;
-                if (armor == null) continue;
-                float cos = Mathf.Abs(Vector3.Dot(hit.normal, direction));
-                total += armor.Thickness / Mathf.Max(cos, 0.2f);
+                if (e.Part == null || e.Armor == null || e.Open) continue;
+                float cos = Mathf.Abs(Vector3.Dot(e.Normal, direction));
+                total += (e.Face ? e.Mm : e.Armor.Thickness) / Mathf.Max(cos, 0.2f);
             }
             return total;
         }
 
-        // Parts with a collider within 'radius' of 'from': own = the rack's own vehicle only, else everyone else.
-        private static void Collect(Dictionary<PartScript, Vector3> nearest, Vector3 from, float radius, Rack rack, bool own)
+        // Parts of any vehicle with a collider within 'radius' of 'from', except the exploding racks.
+        private static void Collect(Dictionary<PartScript, Vector3> nearest, Vector3 from, float radius, HashSet<PartScript> exploding)
         {
             foreach (Collider collider in Physics.OverlapSphere(from, radius, ~0, QueryTriggerInteraction.Ignore))
             {
                 if (collider == null) continue;
                 if (collider.GetComponentInParent<CannonProjectileScript>() != null) continue;   // a shell in flight
                 PartScript part = collider.GetComponentInParent<PartScript>();
-                if (part == null || part == rack.Part || (part.Aircraft == rack.Aircraft) != own) continue;
+                if (part == null || exploding.Contains(part)) continue;
 
                 MeshCollider mesh = collider as MeshCollider;
                 Vector3 point = mesh != null && !mesh.convex ? collider.bounds.ClosestPoint(from) : collider.ClosestPoint(from);
@@ -1207,24 +1327,88 @@ namespace ArmorFragments
 
         // ---- Designer read-outs -------------------------------------------------------------
 
-        // The round the cannons of this group fire, from the aircraft being designed.
-        public static bool DesignRound(PartScript anyPart, string groupName, out AmmoRound round, out int cannons, out bool mixed)
+        private static readonly PartData[] NoParts = new PartData[0];
+
+        // The parts of the aircraft 'anyPart' belongs to.
+        private static IEnumerable<PartData> DesignParts(PartScript anyPart)
+        {
+            if (anyPart == null || anyPart.Aircraft == null || anyPart.Aircraft.Aircraft == null ||
+                anyPart.Aircraft.Aircraft.Assembly == null) return NoParts;
+            return anyPart.Aircraft.Aircraft.Assembly.Parts;
+        }
+
+        // An ammo rack that can hold rounds (armor can't).
+        public static bool IsDesignRack(PartData data)
+        {
+            if (data == null || data.PartScript == null) return false;
+            PartTags tags = TagCodec.Parse(data.Name);
+            return tags.AmmoRack != null && tags.Armor == null;
+        }
+
+        private static string LabelOf(PartData data)
+        {
+            string label = TagCodec.Parse(data.Name).Label;
+            return string.IsNullOrEmpty(label) ? data.PartType.Name : label;
+        }
+
+        private static int OrderOf(PartData rack)
+        {
+            AmmoRackTag tag = TagCodec.Parse(rack.Name).AmmoRack;
+            return tag != null && tag.Order.HasValue ? tag.Order.Value : int.MaxValue;
+        }
+
+        // The racks a cannon draws from, in the order it empties them (o=, then part id). Ids in its list that
+        // are not racks (any more) are left out.
+        public static List<PartData> DesignCannonRacks(PartScript cannonPart)
+        {
+            List<PartData> racks = new List<PartData>();
+            if (cannonPart == null || cannonPart.Part == null) return racks;
+            CannonTag cannon = TagCodec.Parse(cannonPart.Part.Name).Cannon;
+            if (cannon == null || cannon.Racks.Count == 0) return racks;
+
+            foreach (PartData data in DesignParts(cannonPart))
+                if (data != null && cannon.Racks.Contains(data.Id) && IsDesignRack(data)) racks.Add(data);
+            racks.Sort((a, b) =>
+            {
+                int orderA = OrderOf(a), orderB = OrderOf(b);
+                return orderA != orderB ? orderA.CompareTo(orderB) : a.Id.CompareTo(b.Id);
+            });
+            return racks;
+        }
+
+        // The cannons that draw from a rack.
+        public static List<PartData> DesignRackCannons(PartScript rackPart)
+        {
+            List<PartData> cannons = new List<PartData>();
+            if (rackPart == null || rackPart.Part == null) return cannons;
+            int id = rackPart.Part.Id;
+            foreach (PartData data in DesignParts(rackPart))
+            {
+                if (data == null || data.PartScript == null) continue;
+                CannonTag cannon = TagCodec.Parse(data.Name).Cannon;
+                if (cannon != null && cannon.Racks.Contains(id)) cannons.Add(data);
+            }
+            return cannons;
+        }
+
+        public static string DesignLabel(PartData data)
+        {
+            return data != null ? LabelOf(data) : "";
+        }
+
+        // The round a rack holds: that of the cannons drawing from it, the biggest if they differ. 'except' is
+        // left out (a cannon about to pick the rack).
+        public static bool DesignRound(PartScript rackPart, out AmmoRound round, out int cannons, out bool mixed,
+                                       PartData except = null)
         {
             round = default(AmmoRound);
             cannons = 0;
             mixed = false;
-            if (anyPart == null || anyPart.Aircraft == null || anyPart.Aircraft.Aircraft == null ||
-                anyPart.Aircraft.Aircraft.Assembly == null) return false;
-
-            foreach (PartData data in anyPart.Aircraft.Aircraft.Assembly.Parts)
+            foreach (PartData data in DesignRackCannons(rackPart))
             {
-                PartScript part = data != null ? data.PartScript : null;
-                if (part == null) continue;
-                PartTags tags = TagCodec.Parse(data.Name);
-                if (tags.Cannon == null || GroupName(tags.Cannon.Group) != groupName) continue;
-
+                if (data == except) continue;
                 AmmoRound cannonRound;
-                if (!AmmoRound.TryFromPart(part, out cannonRound)) continue;
+                if (!AmmoRound.TryFromPart(data.PartScript, out cannonRound)) continue;
                 if (cannons == 0) round = cannonRound;
                 else
                 {
@@ -1236,36 +1420,39 @@ namespace ArmorFragments
             return cannons > 0;
         }
 
+        // Can this cannon add 'candidate' to its racks? A rack holds one size of round, so a rack other cannons
+        // of another size already draw from is left out.
+        public static bool DesignCanPick(PartScript cannonPart, PartData candidate)
+        {
+            if (cannonPart == null || cannonPart.Part == null || candidate == null || candidate == cannonPart.Part ||
+                !IsDesignRack(candidate)) return false;
+            CannonTag cannon = TagCodec.Parse(cannonPart.Part.Name).Cannon;
+            if (cannon != null && cannon.Racks.Contains(candidate.Id)) return false;
+
+            AmmoRound own, theirs;
+            int cannons;
+            bool mixed;
+            if (!AmmoRound.TryFromPart(cannonPart, out own)) return true;
+            if (!DesignRound(candidate.PartScript, out theirs, out cannons, out mixed, cannonPart.Part)) return true;
+            return own.SameSize(theirs);
+        }
+
         // Does this cannon draw from ammo racks? (Designer: then its own Ammo Count slider means nothing.)
         public static bool DesignFedByRacks(CannonData cannon)
         {
             PartData data = cannon != null ? cannon.Part : null;
             if (data == null || data.PartScript == null) return false;
-            PartTags tags = TagCodec.Parse(data.Name);
-            if (tags.Cannon == null) return false;
-
-            AircraftScript aircraft = data.PartScript.Aircraft;
-            if (aircraft == null || aircraft.Aircraft == null || aircraft.Aircraft.Assembly == null) return false;
-
-            string group = GroupName(tags.Cannon.Group);
-            foreach (PartData other in aircraft.Aircraft.Assembly.Parts)
-            {
-                if (other == null) continue;
-                PartTags otherTags = TagCodec.Parse(other.Name);
-                if (otherTags.AmmoRack != null && otherTags.Armor == null && GroupName(otherTags.AmmoRack.Group) == group)
-                    return true;
-            }
-            return false;
+            return DesignCannonRacks(data.PartScript).Count > 0;
         }
 
         // Cheap strings that change whenever a rack's read-outs or drawing would (designer).
-        public static string DesignRackSignature(PartScript rack, string group)
+        public static string DesignRackSignature(PartScript rack)
         {
             AmmoRound round;
             int cannons;
             bool mixed;
-            string roundText = DesignRound(rack, group, out round, out cannons, out mixed)
-                ? round.Describe() + mixed : "none";
+            string roundText = DesignRound(rack, out round, out cannons, out mixed)
+                ? round.Describe() + mixed + cannons : "none";
             return roundText + "|" + ShapeSignature(rack) + "|" +
                    ArmorFragmentsPlugin.CaseDiameterRatio.Value + "/" + ArmorFragmentsPlugin.CaseLitresPerMJ.Value + "/" +
                    ArmorFragmentsPlugin.RoundSpacingPercent.Value;
@@ -1308,22 +1495,21 @@ namespace ArmorFragments
             return signature.ToString();
         }
 
-        // Total rounds the racks of this group hold (designer).
-        public static int DesignCapacity(PartScript anyPart, string groupName, AmmoRound round, out int racks)
+        // Total rounds the racks of this cannon hold (designer). 'shared': one of them also feeds another cannon.
+        public static int DesignCapacity(PartScript cannonPart, out int racks, out bool shared)
         {
             racks = 0;
+            shared = false;
             int total = 0;
-            if (anyPart == null || anyPart.Aircraft == null || anyPart.Aircraft.Aircraft == null ||
-                anyPart.Aircraft.Aircraft.Assembly == null) return 0;
-
-            foreach (PartData data in anyPart.Aircraft.Aircraft.Assembly.Parts)
+            foreach (PartData rack in DesignCannonRacks(cannonPart))
             {
-                PartScript part = data != null ? data.PartScript : null;
-                if (part == null) continue;
-                PartTags tags = TagCodec.Parse(data.Name);
-                if (tags.AmmoRack == null || tags.Armor != null || GroupName(tags.AmmoRack.Group) != groupName) continue;
                 racks++;
-                total += RackGrid.Measure(part, round).Capacity;
+                AmmoRound round;
+                int cannons;
+                bool mixed;
+                if (!DesignRound(rack.PartScript, out round, out cannons, out mixed)) continue;
+                if (cannons > 1) shared = true;
+                total += RackGrid.Measure(rack.PartScript, round).Capacity;
             }
             return total;
         }

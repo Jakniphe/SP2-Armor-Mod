@@ -8,14 +8,31 @@ namespace ArmorFragments
 {
     // The properties we store inside a part's NAME, so no part has to be changed.
     // In the name they look like:   Front plate [ARM t=20 h=100] [MOD d=1]
+    //                               Hull front [ARM h=100 b=50 fr=80 lt=20 rt=20]
     // Everything outside the [...] blocks stays the player's own label.
 
-    // Fuselage used as armor.
+    // Fuselage used as armor. Two kinds:
+    //  - per face (Faces set): the block is a hollow shell whose six faces (see ArmorFaces) are plates of their
+    //    own thickness (fr bk lt rt tp bm, millimeters; 0 = open). A plate is met from outside or from inside
+    //    the block; an open face and the inside of the block are empty space.
+    //  - whole block (Faces null): the whole part is one plate of thickness t, met wherever the block is entered.
     internal sealed class ArmorTag
     {
-        public float Thickness = 20f;   // t: millimeters
+        public float Thickness = 20f;   // t: millimeters (whole block; in a face's plate, that face's thickness)
         public float Hardness = 100f;   // h: percent, 100 = reference steel (ricochet)
         public float Brittleness = 50f; // b: percent, how easily the plate shatters into fragments
+        public float[] Faces;           // millimeters per face, indexed by BlockFace (null = whole block)
+
+        public bool PerFace
+        {
+            get { return Faces != null; }
+        }
+
+        // One face's plate: this armor's material with that face's thickness.
+        public ArmorTag Plate(float thicknessMm)
+        {
+            return new ArmorTag { Thickness = thicknessMm, Hardness = Hardness, Brittleness = Brittleness };
+        }
     }
 
     // Cannon: describes the shells it fires. (The shell's energy comes from its real mass and
@@ -24,7 +41,9 @@ namespace ArmorFragments
     internal sealed class CannonTag
     {
         public float ShellHardness = 100f; // k: percent, 100 = reference (ricochet)
-        public string Group;               // g: ammo rack group it draws from (null = the default group)
+
+        // r: part ids of the ammo racks it draws from, comma-separated (empty = the game's Ammo Count).
+        public List<int> Racks = new List<int>();
 
         // Explosive ammunition only (the game's Projectile Type: Explosive):
         public float? Fuse;                // z: meters after the impact at which the shell bursts (none = no fuse: HE)
@@ -32,11 +51,11 @@ namespace ArmorFragments
         public float? Brittleness;         // q: how easily the casing breaks into small fragments, percent (none = the setting's default)
     }
 
-    // Fuselage used as an ammo rack: it holds the rounds of the cannons in its group (see AmmoRacks.cs).
+    // Fuselage used as an ammo rack: it holds the rounds of the cannons that list it in [CAN r=] (see AmmoRacks.cs).
     internal sealed class AmmoRackTag
     {
-        public string Group;               // g: group name, shared with the cannons' [CAN g=] (null = the default group)
-        public int? Order;                 // o: racks empty from the lowest number up (null = after the numbered ones)
+        public string Group;               // g: names its Funky Trees variables, <group>_rounds... (null = the default group)
+        public int? Order;                 // o: a cannon empties its racks from the lowest number up (null = after the numbered ones)
     }
 
     // Part that reacts to fragment damage (engine, tank, propeller, some fuselages).
@@ -103,6 +122,7 @@ namespace ArmorFragments
                         Thickness = Get(values, "t", 20f),
                         Hardness = Get(values, "h", 100f),
                         Brittleness = Get(values, "b", 50f),
+                        Faces = ReadFaces(values),
                     };
                 }
                 else if (kind == "CAN")
@@ -113,7 +133,7 @@ namespace ArmorFragments
                         Fuse = Optional(values, "z"),
                         FillerPercent = Optional(values, "e"),
                         Brittleness = Optional(values, "q"),
-                        Group = ReadText(block.Groups[2].Value, "g"),
+                        Racks = ReadIds(ReadText(block.Groups[2].Value, "r")),
                     };
                 }
                 else if (kind == "MOD")
@@ -146,14 +166,15 @@ namespace ArmorFragments
             StringBuilder name = new StringBuilder(tags.Label ?? "");
 
             if (tags.Armor != null)
-                Append(name, "[ARM t=" + Number(tags.Armor.Thickness) + " h=" + Number(tags.Armor.Hardness) +
-                       " b=" + Number(tags.Armor.Brittleness) + "]");
+                Append(name, "[ARM" + (tags.Armor.PerFace ? "" : " t=" + Number(tags.Armor.Thickness)) +
+                       " h=" + Number(tags.Armor.Hardness) + " b=" + Number(tags.Armor.Brittleness) +
+                       FacePairs(tags.Armor.Faces) + "]");
             if (tags.Cannon != null)
                 Append(name, "[CAN k=" + Number(tags.Cannon.ShellHardness) +
                        (tags.Cannon.Fuse.HasValue ? " z=" + Number(tags.Cannon.Fuse.Value) : "") +
                        (tags.Cannon.FillerPercent.HasValue ? " e=" + Number(tags.Cannon.FillerPercent.Value) : "") +
                        (tags.Cannon.Brittleness.HasValue ? " q=" + Number(tags.Cannon.Brittleness.Value) : "") +
-                       (string.IsNullOrEmpty(tags.Cannon.Group) ? "" : " g=" + tags.Cannon.Group) + "]");
+                       IdsPair(tags.Cannon.Racks) + "]");
             if (tags.Module != null)
                 Append(name, string.IsNullOrEmpty(tags.Module.Variable)
                     ? "[MOD]" : "[MOD v=" + tags.Module.Variable + "]");
@@ -165,6 +186,71 @@ namespace ArmorFragments
                 Append(name, "[VNT]");
 
             return name.Length == 0 ? fallback : name.ToString();
+        }
+
+        // The name with only the [CAN] block's r= list replaced (removed when 'racks' is empty); the rest of
+        // the name is kept exactly as it is.
+        public static string WithCannonRacks(string name, IList<int> racks)
+        {
+            string text = name ?? "";
+            Match block = CannonBlock.Match(text);
+            if (!block.Success) return text;
+
+            string pairs = RacksPair.Replace(block.Groups[1].Value, "") + IdsPair(racks);
+            return text.Substring(0, block.Index) + "[CAN" + pairs + "]" + text.Substring(block.Index + block.Length);
+        }
+
+        private static readonly Regex CannonBlock = new Regex(@"\[CAN((?:\s+[a-z]+=[^\s\]]+)*)\s*\]");
+        private static readonly Regex RacksPair = new Regex(@"\s+r=[^\s\]]+");
+
+        private static string IdsPair(IList<int> ids)
+        {
+            if (ids == null || ids.Count == 0) return "";
+            StringBuilder text = new StringBuilder(" r=");
+            for (int i = 0; i < ids.Count; i++)
+            {
+                if (i > 0) text.Append(',');
+                text.Append(ids[i].ToString(CultureInfo.InvariantCulture));
+            }
+            return text.ToString();
+        }
+
+        // "12,15" -> [12, 15] (no repeats, in order).
+        private static List<int> ReadIds(string text)
+        {
+            List<int> ids = new List<int>();
+            if (string.IsNullOrEmpty(text)) return ids;
+            foreach (string item in text.Split(','))
+            {
+                int id;
+                if (int.TryParse(item, NumberStyles.Integer, CultureInfo.InvariantCulture, out id) && !ids.Contains(id))
+                    ids.Add(id);
+            }
+            return ids;
+        }
+
+        // fr= bk= lt= rt= tp= bm=: any of them makes the armor per face (a face not listed is open).
+        private static float[] ReadFaces(Dictionary<string, float> values)
+        {
+            float[] faces = null;
+            for (int i = 0; i < ArmorFaces.Count; i++)
+            {
+                float value;
+                if (!values.TryGetValue(ArmorFaces.Keys[i], out value)) continue;
+                if (faces == null) faces = new float[ArmorFaces.Count];
+                faces[i] = Mathf.Max(value, 0f);
+            }
+            return faces;
+        }
+
+        // The armored faces only. With every face open it writes fr=0, so the armor stays per face.
+        private static string FacePairs(float[] faces)
+        {
+            if (faces == null) return "";
+            StringBuilder text = new StringBuilder();
+            for (int i = 0; i < faces.Length && i < ArmorFaces.Count; i++)
+                if (faces[i] > 0f) text.Append(' ').Append(ArmorFaces.Keys[i]).Append('=').Append(Number(faces[i]));
+            return text.Length > 0 ? text.ToString() : " " + ArmorFaces.Keys[0] + "=0";
         }
 
         private static Dictionary<string, float> ReadPairs(string text)

@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
 using System.Reflection;
@@ -56,6 +57,22 @@ namespace ArmorFragments.UI
         private static bool rebuildPending;
         private static bool builtExplosive;               // was the cannon's Projectile Type 'Explosive' when the rows were made?
         private static bool builtCannonRows;              // ... and did the rows include the cannon's ammunition ones?
+
+        // Armor faces: the face being edited (BlockFace) with "Per face" on, or AllFaces with it off (every face at
+        // once); shown on the block by FaceHighlight.
+        public const int AllFaces = ArmorFaces.Count;
+        public static int SelectedFace = AllFaces;
+        private static PartScript faceModePart;           // the block SelectedFace was chosen for
+
+        // The selected part while its armor is edited per face (null otherwise).
+        public static PartScript PerFacePart
+        {
+            get
+            {
+                if (part == null || part.Part == null || container == null || !container.Visible) return null;
+                return ArmorFaces.IsPerFace(part) ? part : null;
+            }
+        }
         private static float nextPoll;                    // (unscaled time) of the next look at the cannon's Projectile Type
 
         // Rows whose text follows the part's shape (ammo rack capacity): re-measured when it changes.
@@ -215,16 +232,28 @@ namespace ArmorFragments.UI
                     tags.Armor != null,
                     on => Switch(tags, () =>
                     {
-                        tags.Armor = on ? new ArmorTag() : null;
+                        // New armor: every face open until the player gives it a thickness, starting with all faces.
+                        tags.Armor = on ? new ArmorTag { Faces = new float[ArmorFaces.Count] } : null;
                         if (!on) return;
+                        SelectedFace = AllFaces;
                         tags.Module = null;
                         tags.AmmoRack = null;
                         tags.Vent = null;
                     }));
                 if (tags.Armor != null)
                 {
-                    Slider(builder, tags, "Thickness", "Armor thickness.",
-                        1f, 500f, 1f, tags.Armor.Thickness, " mm", v => tags.Armor.Thickness = v);
+                    // Armor is always per face. Whole-block armor from before becomes every face at its thickness.
+                    if (!tags.Armor.PerFace)
+                    {
+                        float thickness = tags.Armor.Thickness;
+                        tags.Armor.Faces = new float[ArmorFaces.Count];
+                        for (int i = 0; i < ArmorFaces.Count; i++) tags.Armor.Faces[i] = thickness;
+                        Commit(tags, false);
+                    }
+
+                    FaceRows(builder, tags);
+                    Live(builder, new[] { "Armor weight", "By face" },
+                        () => string.Join("|", ArmorWeightTexts()), ArmorWeightTexts);
                     Slider(builder, tags, "Hardness", "How hard the armor is compared with the shell: harder armor deflects shells at lower angles. 100% = reference.",
                         10f, 300f, 5f, tags.Armor.Hardness, " %", v => tags.Armor.Hardness = v);
                     Slider(builder, tags, "Brittleness", "How easily the plate shatters into fragments. (Not used yet: energy model.)",
@@ -280,14 +309,26 @@ namespace ArmorFragments.UI
                             v => tags.Cannon.Brittleness = v);
                     }
 
-                    // Ammo racks feeding this cannon (the group is edited as g= in the name). When racks feed
-                    // it, the game's Ammo Count slider is hidden (AmmoCountVisibilityPatch) and these rows say
-                    // how many rounds it really has.
+                    // The ammo racks this cannon draws from ([CAN r=]), picked with the game's part picker, in the
+                    // order it empties them. With racks, the game's Ammo Count slider is hidden
+                    // (AmmoCountVisibilityPatch) and the rows below say how many rounds it really has.
                     PartScript cannonPart = part;
-                    string group = AmmoRacks.GroupName(tags.Cannon.Group);
-                    builder.Text("Ammo group", group);
-                    Live(builder, new[] { "Ammo from", "Rounds", "Round (W x L)", "Shell" },
-                         () => GroupSignature(cannonPart, group), () => CannonTexts(cannonPart, group));
+                    List<PartData> racks = AmmoRacks.DesignCannonRacks(cannonPart);
+                    if (racks.Count == 0)
+                        builder.Text("Ammo racks", "None: uses Ammo Count");
+                    for (int i = 0; i < racks.Count; i++)
+                        builder.Text("Rack " + (i + 1), AmmoRacks.DesignLabel(racks[i]) + " (id " + racks[i].Id + ")");
+
+                    List<KeyValuePair<string, Action>> rackButtons = new List<KeyValuePair<string, Action>>
+                    {
+                        new KeyValuePair<string, Action>("Add rack", () => PickRack(cannonPart, true)),
+                    };
+                    if (racks.Count > 0)
+                        rackButtons.Add(new KeyValuePair<string, Action>("Remove rack", () => PickRack(cannonPart, false)));
+                    builder.Buttons(rackButtons);
+
+                    Live(builder, new[] { "Rounds", "Round (W x L)", "Shell" },
+                         () => CannonSignature(cannonPart), () => CannonTexts(cannonPart));
                 }
             }
 
@@ -312,8 +353,8 @@ namespace ArmorFragments.UI
             if (canArmor)   // fuselages: the same parts that can be armor
             {
                 builder.Toggle("Ammo rack",
-                    "Makes this fuselage an ammo rack: it holds the rounds of the cannons in its group ([CAN g=]), " +
-                    "and can catch fire and explode when its rounds are hit.",
+                    "Makes this fuselage an ammo rack: it holds the rounds of the cannons that draw from it (pick it " +
+                    "with Add rack on a cannon), and can catch fire and explode when its rounds are hit.",
                     tags.AmmoRack != null,
                     on => Switch(tags, () =>
                     {
@@ -323,16 +364,15 @@ namespace ArmorFragments.UI
                 if (tags.AmmoRack != null)
                 {
                     PartScript rackPart = part;
-                    string group = AmmoRacks.GroupName(tags.AmmoRack.Group);
-                    string prefix = AmmoRacks.VariablePrefix(group);
-                    builder.Text("Ammo group", group);
-                    Slider(builder, tags, "Empty order", "Racks of a group empty from the lowest number up. 0 = after the numbered ones.",
+                    string prefix = AmmoRacks.VariablePrefix(AmmoRacks.GroupName(tags.AmmoRack.Group));
+                    Slider(builder, tags, "Empty order", "A cannon empties its racks from the lowest number up. 0 = after the numbered ones.",
                         0f, 20f, 1f, tags.AmmoRack.Order ?? 0, "",
                         v => tags.AmmoRack.Order = v < 0.5f ? (int?)null : Mathf.RoundToInt(v));
                     if (tags.Armor != null)
                         builder.Text("Warning", "Armor: holds no rounds");
-                    Live(builder, new[] { "Status", "Rounds held", "Layout", "Lost to shape", "Space (L x W x H)", "Round (W x L)", "Shell", "Rounds weight" },
-                         () => AmmoRacks.DesignRackSignature(rackPart, group), () => RackTexts(rackPart, group, tags.Armor != null));
+                    Live(builder, new[] { "Status", "Feeds", "Rounds held", "Layout", "Lost to shape", "Space (L x W x H)", "Round (W x L)", "Shell", "Rounds weight" },
+                         () => AmmoRacks.DesignRackSignature(rackPart) + "|" + FeedsText(rackPart),
+                         () => RackTexts(rackPart, tags.Armor != null));
                     builder.Text("Rounds variable", prefix + "_rounds");
                     builder.Text("Fire variable", prefix + "_fire");
                     builder.Toggle("See-through racks",
@@ -418,23 +458,25 @@ namespace ArmorFragments.UI
             return result;
         }
 
-        // Status, Rounds held, Layout, Lost to shape, Space (L x W x H), Round (W x L), Shell
-        private static string[] RackTexts(PartScript rackPart, string group, bool isArmor)
+        // Status, Feeds, Rounds held, Layout, Lost to shape, Space (L x W x H), Round (W x L), Shell, Rounds weight
+        private static string[] RackTexts(PartScript rackPart, bool isArmor)
         {
-            if (isArmor) return new[] { "Armor: holds nothing", "0", "-", "-", "-", "-", "-", "-" };
+            if (isArmor) return new[] { "Armor: holds nothing", "-", "0", "-", "-", "-", "-", "-", "-" };
 
+            string feeds = FeedsText(rackPart);
             AmmoRound round;
             int cannons;
             bool mixed;
-            if (!AmmoRacks.DesignRound(rackPart, group, out round, out cannons, out mixed))
-                return new[] { "No cannon in group", "0", "-", "-", "-", "-", "-", "-" };
+            if (!AmmoRacks.DesignRound(rackPart, out round, out cannons, out mixed))
+                return new[] { "No cannon draws from it", feeds, "0", "-", "-", "-", "-", "-", "-" };
 
             RackGrid grid = RackGrid.Measure(rackPart, round);
             bool measured = grid.Problem == null;
             bool hasGrid = grid.Slots > 0 && grid.Columns > 0 && grid.Layers > 0;
             return new[]
             {
-                measured && mixed ? "OK (mixed cannons)" : grid.Status,
+                measured && mixed ? "OK (mixed: biggest round)" : grid.Status,
+                feeds,
                 grid.Capacity.ToString(CultureInfo.InvariantCulture),
                 hasGrid ? "up to " + grid.Slots + " long x " + grid.Columns + " wide x " + grid.Layers + " high" : "-",
                 grid.LostToShape.ToString(CultureInfo.InvariantCulture),
@@ -499,26 +541,95 @@ namespace ArmorFragments.UI
                    "|" + ArmorFragmentsPlugin.ArmorResistance.Value + "|" + KindOfCannon(cannonPart);
         }
 
-        private static string[] CannonTexts(PartScript cannonPart, string group)
+        // Rounds, Round (W x L), Shell
+        private static string[] CannonTexts(PartScript cannonPart)
         {
             AmmoRound own;
             bool hasOwn = AmmoRound.TryFromPart(cannonPart, out own);
 
-            AmmoRound round;
-            int cannons;
-            bool mixed;
-            int racks = 0;
-            int total = 0;
-            if (AmmoRacks.DesignRound(cannonPart, group, out round, out cannons, out mixed))
-                total = AmmoRacks.DesignCapacity(cannonPart, group, round, out racks);
+            int racks;
+            bool shared;
+            int total = AmmoRacks.DesignCapacity(cannonPart, out racks, out shared);
 
             return new[]
             {
-                racks == 0 ? "Ammo Count slider" : racks + (racks == 1 ? " rack" : " racks"),
-                racks == 0 ? "-" : total + (cannons > 1 ? " (shared by " + cannons + ")" : ""),
+                racks == 0 ? "Ammo Count slider" : total + (shared ? " (shared)" : ""),
                 hasOwn ? own.ShortSize() : "-",
                 hasOwn ? own.ShortShell() : "-",
             };
+        }
+
+        // The cannons a rack feeds.
+        private static string FeedsText(PartScript rackPart)
+        {
+            List<PartData> cannons = AmmoRacks.DesignRackCannons(rackPart);
+            if (cannons.Count == 0) return "None (Add rack on a cannon)";
+            if (cannons.Count == 1) return AmmoRacks.DesignLabel(cannons[0]) + " (id " + cannons[0].Id + ")";
+            return cannons.Count + " cannons";
+        }
+
+        // Opens the game's part picker (the one wheels use to pick their engine): every part that can't be
+        // picked is hidden until a rack is clicked or the picker is closed.
+        private static void PickRack(PartScript cannonPart, bool add)
+        {
+            Assets.Scripts.Design.Designer designer = Assets.Scripts.Design.Designer.Instance;
+            if (designer == null || cannonPart == null || cannonPart.Part == null) return;
+
+            List<PartData> current = AmmoRacks.DesignCannonRacks(cannonPart);
+            Func<PartData, bool> filter;
+            if (add)
+                filter = candidate => AmmoRacks.DesignCanPick(cannonPart, candidate);
+            else
+                filter = candidate => current.Contains(candidate);
+
+            bool any = false;
+            foreach (PartData candidate in designer.Aircraft.Aircraft.Assembly.Parts)
+            {
+                if (candidate == null || !filter(candidate)) continue;
+                any = true;
+                break;
+            }
+            if (!any)
+            {
+                designer.ShowMessage(add
+                    ? "No ammo rack to add. Make a fuselage an ammo rack first; a rack that already feeds a cannon of another round size can't be shared."
+                    : "No ammo rack to remove.", 7f);
+                return;
+            }
+
+            designer.ShowMessage(add ? "Click an ammo rack to feed this cannon from it."
+                                     : "Click the ammo rack this cannon should stop drawing from.", 7f);
+            designer.Tools.SelectChoosePartTool(filter, false, -1, "No ammo racks", picked =>
+            {
+                try
+                {
+                    if (picked == null || cannonPart == null || cannonPart.Part == null) return;
+                    PartTags fresh = TagCodec.ParseCopy(cannonPart.Part.Name);
+                    if (fresh.Cannon == null) return;
+                    if (add)
+                    {
+                        if (!fresh.Cannon.Racks.Contains(picked.Id)) fresh.Cannon.Racks.Add(picked.Id);
+                    }
+                    else
+                    {
+                        fresh.Cannon.Racks.Remove(picked.Id);
+                    }
+
+                    if (part == cannonPart)
+                    {
+                        Commit(fresh, true);
+                        rebuildPending = true;   // the rack rows and the Ammo Count slider
+                    }
+                    else
+                    {
+                        RackLinks.SetName(cannonPart.Part, TagCodec.Compose(fresh, cannonPart.Part.PartType.Name));
+                    }
+                }
+                catch (Exception e)
+                {
+                    ArmorFragmentsPlugin.Log.LogError("Couldn't change the cannon's ammo racks: " + e);
+                }
+            }, false);
         }
 
         private static string Cm(float meters)
@@ -526,32 +637,113 @@ namespace ArmorFragments.UI
             return (meters * 100f).ToString("F1", CultureInfo.InvariantCulture);
         }
 
-        // Changes whenever the cannon's round or any rack of its group changes.
-        private static string GroupSignature(PartScript anyPart, string group)
+        // Changes whenever the cannon's round or one of its racks changes.
+        private static string CannonSignature(PartScript cannonPart)
         {
             System.Text.StringBuilder signature = new System.Text.StringBuilder();
             AmmoRound own;
-            if (AmmoRound.TryFromPart(anyPart, out own)) signature.Append(own.Describe());
+            if (AmmoRound.TryFromPart(cannonPart, out own)) signature.Append(own.Describe());
 
-            AmmoRound round;
-            int cannons;
-            bool mixed;
-            if (AmmoRacks.DesignRound(anyPart, group, out round, out cannons, out mixed))
-                signature.Append(round.Describe()).Append(cannons).Append(mixed);
-            if (anyPart.Aircraft != null && anyPart.Aircraft.Aircraft != null && anyPart.Aircraft.Aircraft.Assembly != null)
-            {
-                foreach (PartData data in anyPart.Aircraft.Aircraft.Assembly.Parts)
-                {
-                    if (data == null || data.PartScript == null) continue;
-                    PartTags tags = TagCodec.Parse(data.Name);
-                    if (tags.AmmoRack == null || AmmoRacks.GroupName(tags.AmmoRack.Group) != group) continue;
-                    signature.Append('|').Append(data.Id).Append(tags.Armor != null)
-                             .Append(AmmoRacks.ShapeSignature(data.PartScript));
-                }
-            }
-            signature.Append(ArmorFragmentsPlugin.CaseDiameterRatio.Value).Append(ArmorFragmentsPlugin.CaseLitresPerMJ.Value)
-                     .Append(ArmorFragmentsPlugin.RoundSpacingPercent.Value);
+            foreach (PartData rack in AmmoRacks.DesignCannonRacks(cannonPart))
+                signature.Append('|').Append(rack.Id).Append(AmmoRacks.DesignRackSignature(rack.PartScript));
             return signature.ToString();
+        }
+
+        // Armor thickness, as the game edits corners: by default one "Thickness" for every face at once. With
+        // "Per face" on, two rows of face buttons (the one being edited in brackets, each with its thickness) and
+        // the thickness of the picked face. Edited faces are tinted orange on the block, other armored ones blue.
+        private static void FaceRows(PanelBuilder builder, PartTags tags)
+        {
+            float[] faces = tags.Armor.Faces;
+
+            float thickest = 0f;
+            bool same = true;
+            for (int i = 0; i < ArmorFaces.Count; i++)
+            {
+                thickest = Mathf.Max(thickest, faces[i]);
+                if (faces[i] != faces[0]) same = false;
+            }
+
+            // A newly selected block opens per face only if its faces differ.
+            if (part != faceModePart)
+            {
+                faceModePart = part;
+                SelectedFace = same ? AllFaces : 0;
+            }
+            if (!same && SelectedFace == AllFaces) SelectedFace = 0;
+            int picked = SelectedFace >= 0 && SelectedFace <= AllFaces ? SelectedFace : AllFaces;
+
+            builder.Toggle("Per face",
+                "Off: one thickness for every face of the block. On: each of its six faces gets its own thickness " +
+                "(0 mm = open: shells and fragments pass it as empty space). Turning it off sets every face to the thickest one.",
+                picked != AllFaces,
+                on => Switch(tags, () =>
+                {
+                    SelectedFace = on ? 0 : AllFaces;
+                    if (on) return;
+                    for (int i = 0; i < ArmorFaces.Count; i++) tags.Armor.Faces[i] = thickest;
+                }));
+
+            if (picked == AllFaces)
+            {
+                Slider(builder, tags, "Thickness",
+                    "Thickness of every face of the block (orange on the block). 0 mm = open. Turn on \"Per face\" to set faces on their own.",
+                    0f, 500f, 1f, faces[0], " mm", v =>
+                    {
+                        for (int i = 0; i < ArmorFaces.Count; i++) tags.Armor.Faces[i] = v;
+                    });
+                return;
+            }
+
+            for (int row = 0; row < 2; row++)
+            {
+                List<KeyValuePair<string, Action>> buttons = new List<KeyValuePair<string, Action>>();
+                for (int i = row * 3; i < row * 3 + 3; i++)
+                {
+                    int face = i;
+                    string text = ArmorFaces.Names[face] + " " + Mm(faces[face]);
+                    if (face == picked) text = "[" + text + "]";
+                    buttons.Add(new KeyValuePair<string, Action>(text, () => Pick(face)));
+                }
+                builder.Buttons(buttons);
+            }
+
+            Slider(builder, tags, ArmorFaces.Names[picked] + " face",
+                "Thickness of the picked face (orange on the block). 0 mm = open: shells and fragments pass it as empty space.",
+                0f, 500f, 1f, faces[picked], " mm", v => tags.Armor.Faces[picked] = v, true);
+        }
+
+        // Armor weight, Weight by face: the steel of the armored faces (area on the block x thickness).
+        private static string[] ArmorWeightTexts()
+        {
+            float kg;
+            float[] faceKg;
+            float[] faceArea;
+            if (part == null || !ArmorMass.TryDescribe(part.Part, out kg, out faceKg, out faceArea))
+                return new[] { "measuring...", "-" };
+
+            List<string> faces = new List<string>();
+            for (int i = 0; i < ArmorFaces.Count; i++)
+                if (faceKg[i] > 0f) faces.Add(ArmorFaces.Names[i] + " " + Kg(faceKg[i]));
+            return new[] { Kg(kg), faces.Count > 0 ? string.Join(", ", faces.ToArray()) : "all open" };
+        }
+
+        private static string Kg(float kg)
+        {
+            return kg >= 1000f
+                ? (kg / 1000f).ToString("0.00", CultureInfo.InvariantCulture) + " t"
+                : kg.ToString("0", CultureInfo.InvariantCulture) + " kg";
+        }
+
+        private static void Pick(int face)
+        {
+            SelectedFace = face;
+            rebuildPending = true;
+        }
+
+        private static string Mm(float mm)
+        {
+            return mm.ToString("0", CultureInfo.InvariantCulture);
         }
 
         // ---- Controls ------------------------------------------------------------
@@ -565,19 +757,23 @@ namespace ArmorFragments.UI
 
         private static void Slider(PanelBuilder builder, PartTags tags, string label, string tooltip,
                                    float min, float max, float step, float value, string unit,
-                                   Action<float> assign)
+                                   Action<float> assign, bool rebuildOnRelease = false)
         {
             int positions = Mathf.RoundToInt((max - min) / step) + 1;
             string format = step >= 1f ? "0" : "0.0";
 
-            builder.Slider(label, tooltip, min, max, positions, value,
-                x => x.ToString(format, CultureInfo.InvariantCulture) + unit,
+            builder.Slider(label, tooltip, min, max, positions, value, unit.Trim(),
+                x => x.ToString(format, CultureInfo.InvariantCulture),
                 x =>
                 {
                     assign(Mathf.Clamp(Mathf.Round(x / step) * step, min, max));
                     Commit(tags, false);       // while dragging: update the name, no undo step yet
                 },
-                x => Commit(tags, true));      // on release: one undo step
+                x =>
+                {
+                    Commit(tags, true);        // on release: one undo step
+                    if (rebuildOnRelease) rebuildPending = true;   // rows that show the value elsewhere
+                });
         }
 
         // Writes the tags into the part's name, the same way the game's name field does.
@@ -586,6 +782,7 @@ namespace ArmorFragments.UI
             if (part == null) return;
 
             string name = TagCodec.Compose(tags, part.Part.PartType.Name);
+            bool armorBefore = part.Part.Name != null && part.Part.Name.Contains("[ARM");
             part.Part.Name = name;
             foreach (PartModifierData modifier in part.Part.Modifiers)
                 modifier.OnPartNameChanged(name);
@@ -604,6 +801,10 @@ namespace ArmorFragments.UI
 
             // Make the module's variable show up (or go away) in the designer's variable lists right away.
             if (createUndoStep) ModuleOutputs.RefreshDesignerVariables(part);
+
+            // Armor weighs: the craft's mass and center of mass change with it (as with the game's Dead Weight).
+            if (createUndoStep && (armorBefore || tags.Armor != null))
+                Assets.Scripts.Design.Designer.Instance.SetAircraftStructureChanged();
 
             if (createUndoStep)
             {

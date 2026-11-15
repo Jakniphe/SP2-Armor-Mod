@@ -255,7 +255,7 @@ namespace ArmorFragments
 
             FillTop(sink);
 
-            Message = passed + "Hit '" + Label(part) + "' at " + hit.distance.ToString("F0") + " m, angle " +
+            Message = passed + "Hit '" + Label(part) + "'" + ShellFlight.FaceText(ray) + " at " + hit.distance.ToString("F0") + " m, angle " +
                       angle.ToString("F0") + " deg: " + sink.Count + " parts would be damaged";
 
             if (ArmorFragmentsPlugin.XRayAfterSimulation.Value)

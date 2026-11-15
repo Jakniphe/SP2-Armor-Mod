@@ -455,7 +455,7 @@ namespace ArmorFragments.UI
             }
 
             builder.Slider(label, tooltip, min, max, Mathf.RoundToInt(max - min) + 1,
-                entry.Value,
+                entry.Value, "",
                 x => Mathf.RoundToInt(x).ToString(CultureInfo.InvariantCulture),
                 x => SetValue(entry, Mathf.Clamp(Mathf.RoundToInt(x), (int)min, (int)max), false),
                 x => NetSync.SaveConfig());
@@ -477,8 +477,8 @@ namespace ArmorFragments.UI
             string format = NumberFormat(step);
 
             builder.Slider(label, tooltip, min, max, positions <= 1000 ? positions : 0,
-                entry.Value,
-                x => x.ToString(format, CultureInfo.InvariantCulture) + unit,
+                entry.Value, (unit ?? "").Trim(),
+                x => x.ToString(format, CultureInfo.InvariantCulture),
                 x => SetValue(entry, Mathf.Clamp(Mathf.Round(x / step) * step, min, max), false),
                 x => NetSync.SaveConfig());
         }

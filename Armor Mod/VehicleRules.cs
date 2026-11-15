@@ -39,12 +39,14 @@ namespace ArmorFragments
         }
 
         // The game's own death for this vehicle (only in its owner's game): kill credit, kill cam, respawn, and the
-        // other players are told. It doesn't break or explode anything.
+        // other players are told. It doesn't break or explode anything. A vehicle already dead is left alone (the
+        // game kills a vehicle once).
         public static void Kill(AircraftScript aircraft, string reason)
         {
             if (aircraft == null || aircraft.RemoteAircraft) return;
             try
             {
+                if (aircraft.CriticallyDamaged) return;
                 if (MarkAsCriticallyDamaged == null)
                 {
                     ArmorFragmentsPlugin.Log.LogWarning("Can't kill the vehicle (" + reason + "): AircraftScript.MarkAsCriticallyDamaged not found");

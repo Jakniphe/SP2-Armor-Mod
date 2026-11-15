@@ -288,7 +288,24 @@ namespace ArmorFragments
             {
                 PartPhysics.BeginShot();
                 FragmentSpawner.Attacker = hit.Attacker;
-                FragmentSpawner.Spawn(hit.Target, hit.Armor, cannon, shell, hit.Point, direction,
+
+                // A per-face block: an open face lets the shell into the block; an armored one is its plate.
+                ArmorTag armor = hit.Armor;
+                if (armor.PerFace)
+                {
+                    Vector3 outward = Vector3.Dot(hit.Normal, direction) > 0f ? -hit.Normal : hit.Normal;
+                    int face = ArmorFaces.Classify(hit.Target, hit.Point, outward);
+                    float mm = face >= 0 ? armor.Faces[face] : 0f;
+                    if (mm <= 0f)
+                    {
+                        ShellFlight.Continue(hit.Point, direction, shell, cannon, null, null, 0f, 0f, RayKind.None,
+                                             ArmorFragmentsPlugin.ApplyDamage.Value, false, 1, false, 0, hit.Target);
+                        return;
+                    }
+                    armor = armor.Plate(mm);
+                }
+
+                FragmentSpawner.Spawn(hit.Target, armor, cannon, shell, hit.Point, direction,
                                       hit.Normal, angle, ArmorFragmentsPlugin.ApplyDamage.Value);
             }
             catch (System.Exception e)
