@@ -1,0 +1,35 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    The lab's engine, as a library: the web API and page of the impact simulation lab. It compiles the mod's own simulation and
+    energy-model sources (so it shows what the game would do, not a copy of it); Unity and BepInEx are replaced by tiny stand-ins
+    (Stubs/). The page and the mod's settings source are embedded, so the programs that host it need no other files.
+    Hosts: SimLab.Web (console, opens a browser) and SimLab.Desktop (a Windows window). See ../README.md.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AssemblyName>SimLab.Core</AssemblyName>
+    <RootNamespace>SimLab</RootNamespace>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <NoWarn>CS0649;CS0169;CS0414;CS8019;CS0219;CS0067</NoWarn>
+  </PropertyGroup>
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+  <ItemGroup>
+    <Compile Include="LabServer.cs" />
+    <Compile Include="Stubs/*.cs" />
+    <!-- The mod's own code -->
+    <Compile Include="../../../Armor Mod/Sim/*.cs" />
+    <Compile Include="../../../Armor Mod/EnergyModel.cs" />
+    <Compile Include="../../../Armor Mod/Ammunition.cs" />
+    <Compile Include="../../../Armor Mod/PartTags.cs" />
+    <Compile Include="../../../Armor Mod/DamageMaps/PlateStamps.cs" />
+  </ItemGroup>
+  <ItemGroup>
+    <EmbeddedResource Include="wwwroot/index.html" LogicalName="index.html" />
+    <!-- Its Config.Bind lines give the lab the mod's default settings -->
+    <EmbeddedResource Include="../../../Armor Mod/ArmorFragmentsPlugin.cs" LogicalName="ArmorFragmentsPlugin.cs" />
+  </ItemGroup>
+</Project>

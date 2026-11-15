@@ -8,8 +8,12 @@ using ArmorFragments;
 using ArmorFragments.Sim;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Hosting.Server;
+using Microsoft.AspNetCore.Hosting.Server.Features;
 using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 
 namespace SimLab
 {
@@ -39,23 +43,36 @@ namespace SimLab
         public int Count { get; set; } = 6;
     }
 
-    internal static class Program
+    // The lab's engine: the web API and the pages, ready to be hosted by a console program (SimLab.Web) or a desktop window
+    // (SimLab.Desktop). Everything runs in this process; nothing leaves the computer.
+    public static class LabServer
     {
         private static SimPool pool;
         private static int poolWorkers = -1;
 
-        private static int Main(string[] args)
+        // The page, as embedded in this assembly.
+        private static string html;
+
+        private static string Html()
+        {
+            if (html != null) return html;
+            using (Stream stream = typeof(LabServer).Assembly.GetManifestResourceStream("index.html"))
+            using (StreamReader reader = new StreamReader(stream))
+                html = reader.ReadToEnd();
+            return html;
+        }
+
+        // Builds the web application (not started). 'url' may use port 0 to take a free one.
+        public static WebApplication Create(string url, bool quiet)
         {
             ArmorFragmentsPlugin.RicochetRandomness.Value = 0f;   // the same answer every time
 
-            if (args.Length > 0 && args[0] == "--cli") return Cli(args);
-
-            WebApplicationBuilder builder = WebApplication.CreateBuilder(args);
-            builder.WebHost.UseUrls(Environment.GetEnvironmentVariable("SIMLAB_URL") ?? "http://localhost:5057");
+            WebApplicationBuilder builder = WebApplication.CreateBuilder();
+            builder.WebHost.UseUrls(url);
+            if (quiet) builder.Logging.ClearProviders();
             WebApplication app = builder.Build();
-            app.UseDefaultFiles();
-            app.UseStaticFiles();
 
+            app.MapGet("/", () => Results.Content(Html(), "text/html; charset=utf-8"));
             app.MapGet("/api/info", () => Results.Json(new
             {
                 cores = Environment.ProcessorCount,
@@ -70,11 +87,14 @@ namespace SimLab
             app.MapPost("/api/run", (Scenario s) => Results.Json(RunScenario(s, true)));
             app.MapPost("/api/sweep", (SweepRequest r) => Results.Json(Sweep(r)));
             app.MapPost("/api/scaling", (Scenario s) => Results.Json(Scaling(s)));
+            return app;
+        }
 
-            Console.WriteLine("Simulation lab: http://localhost:5057  (Ctrl+C to stop)");
-            try { Process.Start(new ProcessStartInfo("http://localhost:5057") { UseShellExecute = true }); } catch { }
-            app.Run();
-            return 0;
+        // The address the application is listening on (after it has started).
+        public static string AddressOf(WebApplication app)
+        {
+            IServerAddressesFeature feature = app.Services.GetRequiredService<IServer>().Features.Get<IServerAddressesFeature>();
+            return feature.Addresses.First();
         }
 
         // ---- One scenario -------------------------------------------------------------------------
@@ -275,7 +295,7 @@ namespace SimLab
 
         // ---- Command line (for trying things without the page) -------------------------------------
 
-        private static int Cli(string[] args)
+        public static int Cli(string[] args)
         {
             string folder = args.Length > 1 ? args[1] : "out";
             Directory.CreateDirectory(folder);

@@ -1,0 +1,5 @@
+<Solution>
+  <Project Path="Core/SimLab.Core.csproj" />
+  <Project Path="Web/SimLab.Web.csproj" />
+  <Project Path="Desktop/SimLab.Desktop.csproj" />
+</Solution>

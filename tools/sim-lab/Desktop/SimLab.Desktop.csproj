@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    The desktop program (Windows): a window that runs the lab inside itself (the web engine on a free local port, shown by
+    WebView2, which Windows 10/11 already has with Edge). Publish it as one self-contained .exe with ../publish.cmd.
+  -->
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AssemblyName>ArmorImpactLab</AssemblyName>
+    <RootNamespace>SimLab.Desktop</RootNamespace>
+    <ApplicationHighDpiMode>SystemAware</ApplicationHighDpiMode>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <NoWarn>MSB3277</NoWarn>
+    <Version>0.1.0</Version>
+    <Product>Armor impact lab</Product>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.4314.35" />
+    <ProjectReference Include="../Core/SimLab.Core.csproj" />
+  </ItemGroup>
+</Project>

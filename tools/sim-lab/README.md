@@ -1,13 +1,26 @@
 # Armor impact lab
 
-A small web app to try the mod's impact simulation outside the game, with different armor, ammunition, angle and speed.
+A program to try the mod's impact simulation outside the game, with different armor, ammunition, angle and speed.
 It compiles the mod's own simulation (`Armor Mod/Sim/`), energy model (`EnergyModel.cs`), ammunition and tag code and
 analytic stamps (`DamageMaps/PlateStamps.cs`), so what it shows is what the game would do, not a copy of it. Unity and
-BepInEx are replaced by tiny stand-ins (`Stubs/`). The mod's default settings (armor resistance, ricochet angles...) are
-read from `Armor Mod/ArmorFragmentsPlugin.cs` when the lab starts, so they cannot drift from the mod.
+BepInEx are replaced by tiny stand-ins (`Core/Stubs/`). The mod's default settings (armor resistance, ricochet angles...) are
+read from the `Config.Bind` lines of `Armor Mod/ArmorFragmentsPlugin.cs`, embedded when the program is built, so they cannot
+drift from the mod (build again after changing a default).
 
-## Run (Windows or Linux; needs the .NET 8 SDK, which Visual Studio installs)
-    dotnet run --project tools/sim-lab
+Built on **.NET 10 (LTS)**. Three projects:
+- `Core/` the engine and the page (a library: a small local web server and the page, both inside it).
+- `Desktop/` a Windows window that runs the engine inside itself and shows the page with WebView2 (part of Microsoft Edge,
+  already in Windows 10/11). This is the program to double-click.
+- `Web/` the same engine from a console, opening the page in your browser (any system).
+
+## The desktop program (Windows)
+Double-click `publish.cmd` (needs the .NET 10 SDK, https://dotnet.microsoft.com/download/dotnet/10.0, which Visual Studio 2026 or a recent
+2022 update installs). It builds **`publish\ArmorImpactLab.exe`**: one self-contained file (about 64 MB, nothing else to install). Copy it anywhere.
+The engine runs inside the window on a free port of your computer only; nothing leaves it. In Visual Studio you can also open `SimLab.slnx`
+and run `SimLab.Desktop`.
+
+## In a browser
+    dotnet run --project tools/sim-lab/Web
 It prints the address (http://localhost:5057) and opens the page.
 
 ## The page
@@ -24,7 +37,7 @@ It prints the address (http://localhost:5057) and opens the page.
   free, so a busy thread simply takes fewer. Small grids (low quality) are not worth threading.
 
 ## From a terminal
-    dotnet run --project tools/sim-lab -- --cli out --thickness 20 --speed 800 --angle 30
+    dotnet run --project tools/sim-lab/Web -- --cli out --thickness 20 --speed 800 --angle 30
 writes the pictures into `out/` and prints the model and simulation numbers (any field of the scenario can be given).
 
 ## What it is not

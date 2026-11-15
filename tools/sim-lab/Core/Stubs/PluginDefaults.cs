@@ -7,7 +7,7 @@ using BepInEx.Configuration;
 namespace ArmorFragments
 {
     // The settings the energy-model code reads, with the defaults the mod itself has: they are read from the mod's own
-    // source (Config.Bind lines in ArmorFragmentsPlugin.cs) when the lab starts, so they cannot drift from the mod.
+    // source (the Config.Bind lines of ArmorFragmentsPlugin.cs, embedded when the lab is built), so they cannot drift from the mod.
     internal static class ArmorFragmentsPlugin
     {
         public static string Source = "(not found: built-in defaults)";
@@ -24,20 +24,20 @@ namespace ArmorFragments
         public static readonly ConfigEntry<float> FillerAPHE = F("FillerAPHE", 3f);
         public static readonly ConfigEntry<float> DefaultShellBrittleness = F("DefaultShellBrittleness", 50f);
 
+        // The mod's source is embedded in this assembly when it is built, so the lab (and the desktop program) always has the
+        // defaults the mod had at that moment.
         private static Dictionary<string, string> Read()
         {
             Dictionary<string, string> map = new Dictionary<string, string>();
-            foreach (string start in new[] { AppContext.BaseDirectory, Directory.GetCurrentDirectory() })
+            using (Stream stream = typeof(ArmorFragmentsPlugin).Assembly.GetManifestResourceStream("ArmorFragmentsPlugin.cs"))
             {
-                for (DirectoryInfo dir = new DirectoryInfo(start); dir != null; dir = dir.Parent)
+                if (stream == null) return map;
+                Source = "ArmorFragmentsPlugin.cs as of this build";
+                using (StreamReader reader = new StreamReader(stream))
                 {
-                    string path = Path.Combine(dir.FullName, "Armor Mod", "ArmorFragmentsPlugin.cs");
-                    if (!File.Exists(path)) continue;
-                    Source = path;
-                    string text = File.ReadAllText(path);
+                    string text = reader.ReadToEnd();
                     foreach (Match m in Regex.Matches(text, @"(\w+)\s*=\s*Config\.Bind\(\s*""[^""]+""\s*,\s*""[^""]+""\s*,\s*([^,\r\n]+?)\s*,"))
                         map[m.Groups[1].Value] = m.Groups[2].Value;
-                    return map;
                 }
             }
             return map;
