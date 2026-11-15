@@ -34,7 +34,7 @@ namespace ArmorFragments
         public PlateVisual Plate;
         public bool Alpha;         // the hole atlas (else the normal-map atlas)
         public int X, Y, W, H;
-        public byte[] Bytes;       // W*H*4 (normals, RGBA) or W*H (holes, alpha)
+        public byte[] Bytes;       // W*H*4, RGBA: normals, or (holes) white with the mask in the alpha
         public float DeliverAt;    // Time.time from which it may be shown (the shell's ray has to arrive first)
     }
 
@@ -333,9 +333,16 @@ namespace ArmorFragments
 
                 if (f.HoleDirty)
                 {
-                    byte[] mask = new byte[w * h];
+                    byte[] mask = new byte[w * h * 4];
                     for (int y = y0; y < y1; y++)
-                        Buffer.BlockCopy(f.Mask, y * c.Width + x0, mask, (y - y0) * w, w);
+                    {
+                        for (int x = x0; x < x1; x++)
+                        {
+                            int at = ((y - y0) * w + (x - x0)) * 4;
+                            mask[at] = 255; mask[at + 1] = 255; mask[at + 2] = 255;
+                            mask[at + 3] = f.Mask[y * c.Width + x];
+                        }
+                    }
                     output.Add(new Delivery
                     {
                         Owner = owner, Plate = plate, Alpha = true,

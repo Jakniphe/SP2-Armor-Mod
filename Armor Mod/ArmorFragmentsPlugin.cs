@@ -345,7 +345,7 @@ namespace ArmorFragments
             DamageMapsHoleBothSides = Config.Bind("DamageMaps", "HoleBothSides", true,
                 "A plate with a hole is drawn on both sides (shows the inside of the plate through the hole). Off = back faces are not drawn.");
             DamageMapsMaxVehicles = Config.Bind("DamageMaps", "MaxVehicles", 6,
-                new ConfigDescription("Most vehicles with damage maps at once (each has an atlas of up to 20 MB). The one hit longest ago gives it back.",
+                new ConfigDescription("Most vehicles with damage maps at once (each has atlases of up to 32 MB). The one hit longest ago gives it back.",
                     new AcceptableValueRange<int>(1, 20)));
             FragmentArmorFactor = Config.Bind("Energy", "FragmentArmorFactor", 1f,
                 new ConfigDescription(

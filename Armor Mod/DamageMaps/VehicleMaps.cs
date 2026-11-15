@@ -9,8 +9,8 @@ using UnityEngine.Rendering;
 
 namespace ArmorFragments
 {
-    // The damage maps of one vehicle: ONE atlas of normal maps and ONE atlas of hole masks, with a tile (two: front and
-    // back) for each of its armor plates. A plate that is damaged gets its UV0 pointing at its tiles, and a material:
+    // The damage maps of one vehicle: ONE atlas of normal maps and ONE atlas of hole masks (made when the first hole
+    // appears), with a tile (two: front and back) for each of its armor plates. A plate that is damaged gets its UV0 pointing at its tiles, and a material:
     //  - the game's own part material (a clone the theme keeps up to date, so the paint is the game's) with the normal
     //    atlas as its normal map: the damage is added to the paint by the shader;
     //  - once it has a hole, a URP Lit material (alpha clipping, the paint's color, the same normal atlas and the hole
@@ -104,12 +104,6 @@ namespace ArmorFragments
             maps.Normal.SetPixelData(flat, 0);
             maps.Normal.Apply(false, false);
 
-            maps.Alpha = new Texture2D(size, size, TextureFormat.Alpha8, false) { wrapMode = TextureWrapMode.Clamp, name = "ArmorFragments damage holes" };
-            byte[] solid = new byte[size * size];
-            FillPattern(solid, 255);   // no holes
-            maps.Alpha.SetPixelData(solid, 0);
-            maps.Alpha.Apply(false, false);
-
             ArmorFragmentsPlugin.Log.LogInfo("[DMAP] atlas " + size + "x" + size + " for " + infos.Count + " armor plate(s) of '" +
                                              aircraft.name + "', " + density.ToString("F0") + " px/m");
             return maps;
@@ -167,13 +161,27 @@ namespace ArmorFragments
             return plate;
         }
 
+        // The hole atlas: white everywhere (the color comes from the material) with the mask in its alpha, 255 = solid.
+        // It is RGBA, not Alpha8: an Alpha8 texture reads as black (0,0,0,a) on Direct3D, which painted the plate black.
+        // Made when the first hole shows up, so vehicles that never get one do not pay for it.
+        public void EnsureAlpha()
+        {
+            if (Alpha != null) return;
+            Alpha = new Texture2D(AtlasSize, AtlasSize, TextureFormat.RGBA32, false, false) { wrapMode = TextureWrapMode.Clamp, name = "ArmorFragments damage holes" };
+            byte[] solid = new byte[AtlasSize * AtlasSize * 4];
+            FillPattern(solid, 255, 255, 255, 255);   // no holes
+            Alpha.SetPixelData(solid, 0);
+            Alpha.Apply(false, false);
+        }
+
         // A rectangle computed by the worker goes into the atlas. Returns the milliseconds it took.
         public double Deliver(Delivery d)
         {
             if (Disposed) return 0;
             System.Diagnostics.Stopwatch watch = System.Diagnostics.Stopwatch.StartNew();
 
-            int bytesPerPixel = d.Alpha ? 1 : 4;
+            if (d.Alpha) EnsureAlpha();
+            const int bytesPerPixel = 4;
             int bucket = 16;
             while (bucket < Mathf.Max(d.W, d.H)) bucket *= 2;
             Texture2D staging = Staging(d.Alpha, bucket);
@@ -196,9 +204,8 @@ namespace ArmorFragments
             int key = bucket * 2 + (alpha ? 1 : 0);
             Texture2D texture;
             if (StagingTextures.TryGetValue(key, out texture) && texture != null) return texture;
-            texture = alpha
-                ? new Texture2D(bucket, bucket, TextureFormat.Alpha8, false)
-                : new Texture2D(bucket, bucket, TextureFormat.RGBA32, false, true);
+            // Same format as the atlas it feeds (CopyTexture needs it): normals are linear, the hole mask is not.
+            texture = new Texture2D(bucket, bucket, TextureFormat.RGBA32, false, !alpha);
             texture.name = "ArmorFragments damage staging";
             StagingTextures[key] = texture;
             return texture;
@@ -365,6 +372,7 @@ namespace ArmorFragments
                 ArmorFragmentsPlugin.Log.LogWarning("[DMAP] the URP Lit shader is not available: no see-through holes");
                 return;
             }
+            Owner.EnsureAlpha();
 
             Color color = new Color(0.5f, 0.5f, 0.5f, 1f);
             float metallic = 0f, smoothness = 0.4f;
