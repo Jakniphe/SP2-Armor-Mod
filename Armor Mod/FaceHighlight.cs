@@ -84,6 +84,14 @@ namespace ArmorFragments
                 Clear();
                 return;
             }
+            // Only over the block as it is seen in the designer: not during a flight (the designer can stay loaded
+            // behind it), and not while the block itself is hidden.
+            if (Assets.Scripts.Flight.FlightSceneScript.Instance != null) return;
+            if (overlayLayerSource != null)
+            {
+                Renderer shown = overlayLayerSource.GetComponent<Renderer>();
+                if (!overlayLayerSource.gameObject.activeInHierarchy || (shown != null && !shown.enabled)) return;
+            }
             Matrix4x4 matrix = overlayFrame.localToWorldMatrix;
             // The layer the block is drawn on right now (the game moves a part being dragged, such as a fresh
             // duplicate, to another layer and back), so the tint is always drawn where the block is.

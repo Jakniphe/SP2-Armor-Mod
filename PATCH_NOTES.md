@@ -46,6 +46,8 @@ Weight
 - The blue tint is stronger, follows a block while it is dragged (a fresh duplicate), and "Per face" stays as you left it from block to block.
 - Carved holes are open, and a cutter that cuts into armor can armor its holes' walls ("Hole wall armor", `[HOL t=]`).
 - Symmetry: mirrored copies get their armor mirrored (Left and Right swapped), and with symmetry on, armor edits reach the symmetry partners.
+- The face tint is drawn only over the block in the designer, never during a flight.
+- When the game itself kills a vehicle (fewer than 70% of its parts or wing area still connected to the cockpit), the log says so, with the numbers and the parts no longer connected.
 
 # Ammo racks
 
