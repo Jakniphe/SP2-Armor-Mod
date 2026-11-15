@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+  <!--
+    The simulation lab: a small web app (run it, open the page it prints) to try the impact simulation outside the game with
+    different armor, ammunition, angle and speed. It compiles the mod's own simulation and energy-model sources (so it
+    shows what the game would do, not a copy of it); Unity and BepInEx are replaced by tiny stand-ins (Stubs/).
+    See README.md.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AssemblyName>SimLab</AssemblyName>
+    <RootNamespace>SimLab</RootNamespace>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <NoWarn>CS0649;CS0169;CS0414;CS8019;CS0219;CS0067</NoWarn>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="Program.cs" />
+    <Compile Include="Stubs/*.cs" />
+    <!-- The mod's own code -->
+    <Compile Include="../../Armor Mod/Sim/*.cs" />
+    <Compile Include="../../Armor Mod/EnergyModel.cs" />
+    <Compile Include="../../Armor Mod/Ammunition.cs" />
+    <Compile Include="../../Armor Mod/PartTags.cs" />
+    <Compile Include="../../Armor Mod/DamageMaps/PlateStamps.cs" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="wwwroot/**" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+</Project>

@@ -1,0 +1,226 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Armor impact lab</title>
+<style>
+  :root { --bg:#f4f5f7; --panel:#fff; --ink:#1d2430; --muted:#667085; --line:#d9dde4; --accent:#2f6fed; --good:#1b8a4b; --bad:#c23b3b; --warn:#b7791f; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#14171c; --panel:#1d2128; --ink:#e7eaf0; --muted:#98a2b3; --line:#323945; --accent:#6c9cff; --good:#4cc38a; --bad:#ff7a7a; --warn:#e2b25a; } }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink); font:14px/1.45 system-ui, "Segoe UI", sans-serif; }
+  header { padding:14px 20px; border-bottom:1px solid var(--line); background:var(--panel); display:flex; gap:16px; align-items:baseline; flex-wrap:wrap; }
+  header h1 { font-size:17px; margin:0; }
+  header span { color:var(--muted); font-size:12px; }
+  main { display:grid; grid-template-columns:340px 1fr; gap:16px; padding:16px; max-width:1500px; margin:0 auto; }
+  @media (max-width: 900px) { main { grid-template-columns:1fr; } }
+  section { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:14px 16px; margin-bottom:14px; }
+  section h2 { font-size:13px; text-transform:uppercase; letter-spacing:.04em; color:var(--muted); margin:0 0 10px; }
+  .row { display:grid; grid-template-columns:1fr 78px; gap:8px; align-items:center; margin-bottom:8px; }
+  .row label { display:block; font-size:12.5px; }
+  .row label small { color:var(--muted); }
+  .row input[type=range] { width:100%; margin-top:2px; }
+  .row input[type=number], select { width:100%; padding:5px 6px; border:1px solid var(--line); border-radius:6px; background:var(--bg); color:var(--ink); font:inherit; }
+  .full { grid-template-columns:1fr; }
+  button { padding:8px 12px; border:1px solid var(--line); border-radius:8px; background:var(--bg); color:var(--ink); font:inherit; cursor:pointer; }
+  button.primary { background:var(--accent); border-color:var(--accent); color:#fff; font-weight:600; }
+  button:disabled { opacity:.6; cursor:wait; }
+  .buttons { display:flex; gap:8px; flex-wrap:wrap; margin-top:6px; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fit, minmax(230px, 1fr)); gap:12px; }
+  figure { margin:0; }
+  figure img { width:100%; image-rendering:pixelated; border:1px solid var(--line); border-radius:6px; display:block; }
+  figcaption { font-size:12px; color:var(--muted); margin-top:3px; }
+  .kv { display:grid; grid-template-columns:auto 1fr; gap:3px 14px; font-size:13px; }
+  .kv b { font-weight:600; }
+  .badge { display:inline-block; padding:2px 10px; border-radius:999px; font-weight:600; color:#fff; }
+  .Penetrated { background:var(--bad); } .Blocked { background:var(--good); } .Ricochet { background:var(--warn); }
+  table { width:100%; border-collapse:collapse; font-size:13px; }
+  th, td { text-align:left; padding:4px 8px; border-bottom:1px solid var(--line); vertical-align:middle; }
+  td img { height:64px; image-rendering:pixelated; border-radius:4px; }
+  .bar { height:10px; background:var(--accent); border-radius:5px; }
+  .note { color:var(--muted); font-size:12px; margin:6px 0 0; }
+  .match { color:var(--good); font-weight:600; } .mismatch { color:var(--bad); font-weight:600; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Armor impact lab</h1>
+  <span id="info">loading…</span>
+</header>
+<main>
+  <div>
+    <section>
+      <h2>Armor</h2>
+      <div class="row"><label>Thickness <small>mm</small><input type="range" id="thicknessR" min="1" max="300" step="1"></label><input type="number" id="thickness" min="1" max="300"></div>
+      <div class="row"><label>Hardness <small>% (100 = reference)</small><input type="range" id="hardnessR" min="10" max="300" step="5"></label><input type="number" id="hardness"></div>
+      <div class="row"><label>Brittleness <small>%</small><input type="range" id="brittlenessR" min="0" max="100" step="5"></label><input type="number" id="brittleness"></div>
+    </section>
+    <section>
+      <h2>Ammunition</h2>
+      <div class="row full"><label>Preset caliber <select id="preset"></select></label></div>
+      <div class="row"><label>Caliber <small>mm</small><input type="range" id="caliberR" min="5" max="203" step="1"></label><input type="number" id="caliber"></div>
+      <div class="row"><label>Mass <small>kg (0 = what the game gives that caliber)</small><input type="range" id="massR" min="0" max="60" step="0.1"></label><input type="number" id="mass" step="0.1"></div>
+      <div class="row"><label>Speed <small>m/s</small><input type="range" id="speedR" min="50" max="2000" step="10"></label><input type="number" id="speed"></div>
+      <div class="row"><label>Shell hardness <small>%</small><input type="range" id="shellHardnessR" min="10" max="300" step="5"></label><input type="number" id="shellHardness"></div>
+    </section>
+    <section>
+      <h2>Shot</h2>
+      <div class="row"><label>Angle <small>° from the plate's normal (0 = head-on)</small><input type="range" id="angleR" min="0" max="85" step="1"></label><input type="number" id="angle"></div>
+      <div class="row"><label>Direction <small>° along the plate</small><input type="range" id="azimuthR" min="0" max="359" step="5"></label><input type="number" id="azimuth"></div>
+    </section>
+    <section>
+      <h2>Simulation</h2>
+      <div class="row full"><label>Quality <select id="quality"><option value="0">Low (40×40)</option><option value="1">Medium (64×64)</option><option value="2">High (96×96)</option></select></label></div>
+      <div class="row"><label>Threads <small id="coresNote"></small><input type="range" id="threadsR" min="1" max="16" step="1"></label><input type="number" id="threads"></div>
+      <div class="row"><label>Seed<input type="range" id="seedR" min="1" max="99" step="1"></label><input type="number" id="seed"></div>
+      <div class="row"><label>Energy scale <small>1 = the shell's real energy (a knob)</small><input type="range" id="energyScaleR" min="0.1" max="3" step="0.05"></label><input type="number" id="energyScale" step="0.05"></div>
+      <div class="buttons">
+        <button class="primary" id="run">Run</button>
+        <button id="sweep">Sweep speed</button>
+        <button id="scaling">Thread scaling</button>
+      </div>
+      <p class="note">The verdict comes from the mod's own energy model (its default settings, read from the source). The pictures are of a patch of plate around the impact.</p>
+    </section>
+  </div>
+  <div>
+    <section id="resultBox">
+      <h2>Result</h2>
+      <div id="result">Press Run.</div>
+    </section>
+    <section id="sweepBox" style="display:none"><h2>Speed sweep</h2><div id="sweepResult"></div></section>
+    <section id="scalingBox" style="display:none"><h2>Thread scaling</h2><div id="scalingResult"></div></section>
+  </div>
+</main>
+<script>
+const ids = ['thickness','hardness','brittleness','caliber','mass','speed','shellHardness','angle','azimuth','threads','seed','energyScale'];
+const defaults = { thickness:20, hardness:100, brittleness:50, caliber:75, mass:0, speed:800, shellHardness:100, angle:0, azimuth:0, threads:0, seed:1, energyScale:1, quality:1 };
+const presets = [[20,'20 mm autocannon'],[30,'30 mm'],[37,'37 mm'],[45,'45 mm'],[57,'57 mm'],[75,'75 mm'],[88,'88 mm'],[100,'100 mm'],[105,'105 mm'],[122,'122 mm'],[152,'152 mm']];
+let cores = 4;
+const $ = id => document.getElementById(id);
+
+function bind(id) {
+  const n = $(id), r = $(id + 'R');
+  const sync = (from, to) => { to.value = from.value; };
+  n.addEventListener('input', () => { sync(n, r); store(); });
+  r.addEventListener('input', () => { sync(r, n); store(); if (id === 'caliber') $('preset').value = ''; });
+}
+function store() { try { localStorage.setItem('simlab', JSON.stringify(read())); } catch (e) {} }
+function read() {
+  const s = {};
+  ids.forEach(id => s[id] = parseFloat($(id).value) || 0);
+  s.quality = parseInt($('quality').value);
+  ['seed','threads'].forEach(k => s[k] = Math.round(s[k]));
+  return s;
+}
+function write(s) {
+  ids.forEach(id => { $(id).value = s[id]; $(id + 'R').value = s[id]; });
+  $('quality').value = s.quality;
+}
+async function post(url, body) {
+  const r = await fetch(url, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) });
+  if (!r.ok) throw new Error(await r.text());
+  return r.json();
+}
+const f1 = x => (Math.round(x * 10) / 10).toString();
+function img(b64, caption) { return `<figure><img src="data:image/png;base64,${b64}" alt="${caption}"><figcaption>${caption}</figcaption></figure>`; }
+
+function show(res) {
+  const m = res.model, s = res.sim;
+  const simOut = s.perforated || s.holeCells > 0 ? 'Penetrated' : 'Blocked';
+  const agree = (m.verdict === 'Ricochet') ? '(the model says it bounces; the simulation skims)' :
+    (m.verdict === simOut ? '<span class="match">simulation agrees</span>' : '<span class="mismatch">simulation disagrees</span>');
+  $('result').innerHTML = `
+    <div class="grid" style="margin-bottom:12px">
+      <div><div class="kv">
+        <span>Game model</span><b><span class="badge ${m.verdict}">${m.verdict}</span></b>
+        <span>Shell</span><b>${f1(m.massKg)} kg, ${f1(m.shellEnergyKJ)} kJ</b>
+        <span>Plate absorbs</span><b>${f1(m.absorbedKJ)} kJ (${f1(m.effectiveMm)} mm effective)</b>
+        <span>Energy ratio</span><b>${m.ratio.toFixed(2)}</b>
+        <span>Ricochet from</span><b>${f1(m.criticalAngle)}°</b>
+        ${m.verdict === 'Ricochet' ? `<span>Shell keeps</span><b>${f1(m.keptPercent)} %</b>` : ''}
+      </div><p class="note">${m.breakdown}</p></div>
+      <div><div class="kv">
+        <span>Simulation</span><b>${simOut} ${agree}</b>
+        <span>Deepest dent</span><b>${f1(s.depthMm)} mm</b>
+        <span>Hole</span><b>${s.holeCells > 0 ? f1(s.holeDiameterMm) + ' mm across' : 'none'}</b>
+        <span>Energy left</span><b>${f1(s.energyLeftPercent)} %</b>
+        <span>Time</span><b>${Math.round(s.ms)} ms on ${s.threads} thread(s)</b>
+        <span>Size</span><b>${s.particles} particles, ${s.steps} steps, cell ${f1(s.cellMm)} mm, patch ${f1(s.patchCm)} cm</b>
+      </div></div>
+    </div>
+    <h2>Simulation</h2>
+    <div class="grid">
+      ${img(res.images.simFront, 'front (the side the shell hit)')}
+      ${img(res.images.simBack, 'back')}
+      ${img(res.images.simSection, 'section through the impact')}
+    </div>
+    <h2 style="margin-top:14px">What the mod draws today (analytic stamps)</h2>
+    <div class="grid">
+      ${img(res.images.anaFront, 'front')}
+      ${img(res.images.anaBack, 'back')}
+      ${img(res.images.anaSection, 'section')}
+    </div>
+    <p class="note">Blue = see-through hole. Light from the upper left. Dents look dark, bumps look warm.</p>`;
+}
+
+async function run() {
+  const b = $('run'); b.disabled = true; b.textContent = 'Running…';
+  try { show(await post('/api/run', read())); }
+  catch (e) { $('result').textContent = 'Error: ' + e.message; }
+  b.disabled = false; b.textContent = 'Run';
+}
+async function sweep() {
+  const b = $('sweep'); b.disabled = true; b.textContent = 'Sweeping…';
+  $('sweepBox').style.display = '';
+  $('sweepResult').textContent = 'Running…';
+  try {
+    const s = read();
+    const rows = await post('/api/sweep', { scenario: s, from: Math.max(50, s.speed * 0.4), to: s.speed * 1.6, count: 6 });
+    $('sweepResult').innerHTML = '<table><tr><th>Speed</th><th>Model</th><th>Simulation</th><th>Dent</th><th>Hole</th><th>Left</th><th>ms</th><th>Front</th><th>Back</th></tr>' +
+      rows.map(r => { const m = r.result.model, x = r.result.sim, out = x.holeCells > 0 ? 'Penetrated' : 'Blocked';
+        const ok = m.verdict === 'Ricochet' || m.verdict === out;
+        return `<tr><td>${Math.round(r.speed)} m/s</td><td><span class="badge ${m.verdict}">${m.verdict}</span> ${m.ratio.toFixed(2)}</td>
+        <td class="${ok ? 'match' : 'mismatch'}">${out}</td><td>${f1(x.depthMm)} mm</td><td>${x.holeCells > 0 ? f1(x.holeDiameterMm) + ' mm' : '-'}</td>
+        <td>${f1(x.energyLeftPercent)} %</td><td>${Math.round(x.ms)}</td>
+        <td><img src="data:image/png;base64,${r.result.images.simFront}"></td><td><img src="data:image/png;base64,${r.result.images.simBack}"></td></tr>`; }).join('') + '</table>';
+  } catch (e) { $('sweepResult').textContent = 'Error: ' + e.message; }
+  b.disabled = false; b.textContent = 'Sweep speed';
+}
+async function scaling() {
+  const b = $('scaling'); b.disabled = true; b.textContent = 'Measuring…';
+  $('scalingBox').style.display = '';
+  $('scalingResult').textContent = 'Running…';
+  try {
+    const rows = await post('/api/scaling', read());
+    const slowest = Math.max(...rows.map(r => r.ms));
+    $('scalingResult').innerHTML = '<table><tr><th>Threads</th><th>Time</th><th>Speed-up</th><th></th></tr>' +
+      rows.map(r => `<tr><td>${r.threads}</td><td>${f1(r.ms)} ms</td><td>×${(rows[0].ms / r.ms).toFixed(2)}</td><td style="width:50%"><div class="bar" style="width:${100 * r.ms / slowest}%"></div></td></tr>`).join('') +
+      '</table><p class="note">Best of three runs, after a warm-up. The simulation hands its work out in small chunks to every thread that is free, so a busy thread simply takes fewer.</p>';
+  } catch (e) { $('scalingResult').textContent = 'Error: ' + e.message; }
+  b.disabled = false; b.textContent = 'Thread scaling';
+}
+
+(async function init() {
+  const sel = $('preset');
+  sel.innerHTML = '<option value="">custom</option>' + presets.map(p => `<option value="${p[0]}">${p[1]}</option>`).join('');
+  ids.forEach(bind);
+  let saved = {}; try { saved = JSON.parse(localStorage.getItem('simlab') || '{}'); } catch (e) {}
+  write(Object.assign({}, defaults, saved));
+  sel.addEventListener('change', () => { if (sel.value) { $('caliber').value = $('caliberR').value = sel.value; store(); } });
+  $('quality').addEventListener('change', store);
+  $('run').addEventListener('click', run);
+  $('sweep').addEventListener('click', sweep);
+  $('scaling').addEventListener('click', scaling);
+  document.addEventListener('keydown', e => { if (e.key === 'Enter' && e.target.tagName !== 'BUTTON') run(); });
+  try {
+    const info = await (await fetch('/api/info')).json();
+    cores = info.cores;
+    $('threadsR').max = cores;
+    $('coresNote').textContent = '(0 = all ' + cores + ' cores)';
+    $('threadsR').min = 0;
+    $('info').textContent = cores + ' cores · armor resistance ' + info.defaults.resistance + ' J/mm/cm² · settings read from ' + info.source;
+  } catch (e) { $('info').textContent = 'could not reach the server'; }
+})();
+</script>
+</body>
+</html>
