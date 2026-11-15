@@ -23,11 +23,12 @@ namespace ArmorFragments.UI
             Parent = parent;
         }
 
-        private Widget Template(string templateId, string label = null, string tooltip = null)
+        private Widget Template(string templateId, string label = null, string tooltip = null, string unit = null)
         {
             List<XAttribute> attributes = new List<XAttribute>();
             if (label != null) attributes.Add(new XAttribute("label", label));
             if (!string.IsNullOrEmpty(tooltip)) attributes.Add(new XAttribute("tooltip", tooltip));
+            if (unit != null) attributes.Add(new XAttribute("unit", unit));
             return Parent.Context.CreateWidgetFromTemplate(templateId, Parent, attributes);
         }
 
@@ -64,22 +65,34 @@ namespace ArmorFragments.UI
             return control;
         }
 
-        // steps: how many positions the slider has (0 = smooth).
-        // changed: while dragging. released: when the mouse is let go.
+        // The game's slider with a box beside it where the value can be typed in (as on its fuselage shape panel).
+        // steps: how many positions the slider has (0 = smooth). format: the number in the box; unit: shown after it.
+        // changed: while dragging or typing. released: when the mouse is let go, or the typing is done.
         public SliderControl Slider(string label, string tooltip, float min, float max, int steps,
-                                    float value, Func<float, string> format,
+                                    float value, string unit, Func<float, string> format,
                                     Action<float> changed, Action<float> released)
         {
-            SliderControl control = new SliderControl(Template("control-slider", label, tooltip));
+            SliderControl control = new SliderControl(Template("control-slider-text", label, tooltip, unit ?? ""));
             control.LabelText = label;
             control.SetRange(min, max, steps);
             control.ValueFormatter = format;
             control.SetValue(value);
 
             // Listen only after the first SetValue, or opening the panel would "change" the setting.
-            control.Slider.ValueChanged += (float x) => Run(() => changed(x));
+            control.OnValueChanged += (float oldValue, float x) => Run(() => changed(x));
             if (released != null)
+            {
                 control.OnRelease += (float oldValue, float x) => Run(() => released(x));
+                if (control.ValueInput != null && control.ValueInput.Input != null)
+                {
+                    float typedFrom = value;
+                    control.ValueInput.Input.onSelect.AddListener(text => typedFrom = control.Value);
+                    control.ValueInput.Input.onEndEdit.AddListener(text =>
+                    {
+                        if (control.Value != typedFrom) Run(() => released(control.Value));
+                    });
+                }
+            }
             return control;
         }
 

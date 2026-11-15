@@ -1,3 +1,39 @@
+# Per-face armor
+
+0.9.0
+
+A fuselage used as armor is a hollow shell whose six faces are plates of their own thickness. Shells and fragments fly through open faces and the inside of the block, and meet an armored face from outside or from inside.
+
+Setting up
+- Turn on "Armor" on a fuselage: every face is open (0 mm).
+- With "Per face" off, one "Thickness" sets every face at once. With "Per face" on, face buttons (Front, Back, Left, Right, Top, Bottom) appear and the slider sets the picked face on its own. Turning "Per face" off sets every face to the thickest one. A block whose faces differ opens with "Per face" on.
+- Thickness is 0 to 500 mm, by slider or typed into the box beside it. The face being set is tinted orange on the block and the other armored faces blue; with "Per face" off, every armored face is orange.
+- In the name: `[ARM h=100 b=50 fr=80 lt=20 rt=20]` (`fr bk lt rt tp bm`, millimeters; a face not listed is open).
+- Armor is always per face. A block with whole-block armor (`t=`) becomes every face at that thickness when it is selected in the designer; until then it keeps working as one solid plate.
+- Every slider in the mod's panels has a box beside it where the value can be typed.
+
+Faces
+- Front and Back are the block's ends (the game's front and rear sections); Left, Right, Top and Bottom are its sides, looking toward the front with the block's top up.
+- Faces follow the block's real shape: tapered, offset, curved and cut blocks keep the face the player sees. A cut end stays the end up to 45 degrees of slope.
+- On a rounded section the four sides are the quarters around the top, bottom, left and right. Rounded or bulged corners split along the diagonals between the sides.
+- A triangle section (trapezium at 100%): the slanted walls are Left and Right, the base is Top or Bottom, and the edge that shrank to a point has no area.
+- A cone (the fuselage Cone style): its surface is the four sides all the way to the tip, the base is Back, and Front exists only where the tip is cut off.
+- Fixed parts with no fuselage shape (the parts-list nose cones and blocks) take the face whose direction is closest to the surface.
+- A hollow fuselage's plate is its outer surface; its inner walls are part of no face.
+
+How it plays
+- An armored face is a plate like any other: ricochet, block or penetration, with the face's thickness and the armor's hardness and brittleness.
+- An open face is empty space: no ricochet, no stop, no HE burst, no fuse start.
+- A shell through the front plate flies on inside the block, through any parts in there, and meets the back plate from inside. Spall does the same.
+- Cook-off blasts count the armored faces between the rack and each part.
+
+Weight
+- Armor weighs what its steel would: each armored face's area on the block times its thickness, at 7850 kg/m3. A 1 x 1 m face at 100 mm is 785 kg.
+- The weight is added to the block's own, in the designer (part mass, craft mass, center of mass) and in flight. Nothing extra is saved in the craft file.
+- The armor panel shows "Armor weight" and the weight of each armored face. In flight the log lists each armor block's weight by face.
+- Whole-block armor (`t=`) weighs as every face at that thickness.
+- The weight sits where the plates are: each face's weight at the middle of that face, half its thickness in. The block's center of mass moves toward its armor, so a thick front plate makes the vehicle nose-heavy and the designer's center-of-mass marker moves with it. The craft file keeps the block's own center of mass.
+
 # Ammo racks
 
 Ammo racks are fuselages that hold a cannon's ammunition. When hit through their rounds they can catch fire and explode inside the vehicle, killing it without blowing the hull apart.

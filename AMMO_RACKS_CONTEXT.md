@@ -115,8 +115,8 @@ Changed: `FragmentSpawner.cs`, `ShellFlight.cs`, `Net/NetSync.cs`, `PartTags.cs`
     ln(`CookOffWreckKPa` / `CookOffDamageKPa`), 0, 2) (200 and 1000 kPa).
   - Every vehicle from the blast center (`Physics.OverlapSphere`, nearest collider point, projectile colliders and
     the exploding racks skipped). Who takes damage: `VehicleRules.TakesModDamage`.
-  - Shielding: `ArmorBetween` sums [ARM] thickness / max(cos, 0.2) on the line (each part once), the burning
-    vehicle's own armor included; P x 0.5^(mm / `CookOffArmorHalvingMm` (10)).
+  - Shielding: `ArmorBetween` walks the line with `RayEvents.Gather` and sums each armored face's mm (whole-block
+    armor: its `t`, each part once) / max(cos, 0.2); open faces add nothing. The burning vehicle's own armor is included; P x 0.5^(mm / `CookOffArmorHalvingMm` (10)).
   - Remote vehicles are damaged through `NetworkAircraft.DamagePart`. Racks hit roll their own chance.
 
 ## Vehicle death (`VehicleRules`)

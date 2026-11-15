@@ -1239,8 +1239,11 @@ namespace ArmorFragments
                 (shielded > 0 ? "; " + shielded + " part(s) in range saved by armor in the way" : ""));
         }
 
-        // Effective armor (mm) on the straight line from the blast to a part: each [ARM] part crossed counts its
-        // thickness / cos(angle), as for shells (the angle limited to ~78 deg).
+        // Effective armor (mm) on the straight line from the blast to a part: each whole-block [ARM] part crossed
+        // counts its thickness / cos(angle), as for shells (the angle limited to ~78 deg), and so does each armored
+        // face of a per-face block the line gets in or out through.
+        private static readonly List<RayEvent> BetweenEvents = new List<RayEvent>();
+
         private static float ArmorBetween(Vector3 from, Vector3 to, PartScript target)
         {
             Vector3 line = to - from;
@@ -1249,16 +1252,11 @@ namespace ArmorFragments
             Vector3 direction = line / distance;
 
             float total = 0f;
-            HashSet<PartScript> counted = new HashSet<PartScript>();
-            foreach (RaycastHit hit in Physics.RaycastAll(from, direction, distance, ~0, QueryTriggerInteraction.Ignore))
+            foreach (RayEvent e in RayEvents.Gather(from, direction, distance, target, null, BetweenEvents))
             {
-                if (hit.collider == null || hit.collider.GetComponentInParent<CannonProjectileScript>() != null) continue;
-                PartScript part = hit.collider.GetComponentInParent<PartScript>();
-                if (part == null || part == target || part.Part == null || !counted.Add(part)) continue;
-                ArmorTag armor = TagCodec.Parse(part.Part.Name).Armor;
-                if (armor == null) continue;
-                float cos = Mathf.Abs(Vector3.Dot(hit.normal, direction));
-                total += armor.Thickness / Mathf.Max(cos, 0.2f);
+                if (e.Part == null || e.Armor == null || e.Open) continue;
+                float cos = Mathf.Abs(Vector3.Dot(e.Normal, direction));
+                total += (e.Face ? e.Mm : e.Armor.Thickness) / Mathf.Max(cos, 0.2f);
             }
             return total;
         }

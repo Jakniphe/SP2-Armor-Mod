@@ -57,6 +57,22 @@ namespace ArmorFragments.UI
         private static bool rebuildPending;
         private static bool builtExplosive;               // was the cannon's Projectile Type 'Explosive' when the rows were made?
         private static bool builtCannonRows;              // ... and did the rows include the cannon's ammunition ones?
+
+        // Armor faces: the face being edited (BlockFace) with "Per face" on, or AllFaces with it off (every face at
+        // once); shown on the block by FaceHighlight.
+        public const int AllFaces = ArmorFaces.Count;
+        public static int SelectedFace = AllFaces;
+        private static PartScript faceModePart;           // the block SelectedFace was chosen for
+
+        // The selected part while its armor is edited per face (null otherwise).
+        public static PartScript PerFacePart
+        {
+            get
+            {
+                if (part == null || part.Part == null || container == null || !container.Visible) return null;
+                return ArmorFaces.IsPerFace(part) ? part : null;
+            }
+        }
         private static float nextPoll;                    // (unscaled time) of the next look at the cannon's Projectile Type
 
         // Rows whose text follows the part's shape (ammo rack capacity): re-measured when it changes.
@@ -216,16 +232,28 @@ namespace ArmorFragments.UI
                     tags.Armor != null,
                     on => Switch(tags, () =>
                     {
-                        tags.Armor = on ? new ArmorTag() : null;
+                        // New armor: every face open until the player gives it a thickness, starting with all faces.
+                        tags.Armor = on ? new ArmorTag { Faces = new float[ArmorFaces.Count] } : null;
                         if (!on) return;
+                        SelectedFace = AllFaces;
                         tags.Module = null;
                         tags.AmmoRack = null;
                         tags.Vent = null;
                     }));
                 if (tags.Armor != null)
                 {
-                    Slider(builder, tags, "Thickness", "Armor thickness.",
-                        1f, 500f, 1f, tags.Armor.Thickness, " mm", v => tags.Armor.Thickness = v);
+                    // Armor is always per face. Whole-block armor from before becomes every face at its thickness.
+                    if (!tags.Armor.PerFace)
+                    {
+                        float thickness = tags.Armor.Thickness;
+                        tags.Armor.Faces = new float[ArmorFaces.Count];
+                        for (int i = 0; i < ArmorFaces.Count; i++) tags.Armor.Faces[i] = thickness;
+                        Commit(tags, false);
+                    }
+
+                    FaceRows(builder, tags);
+                    Live(builder, new[] { "Armor weight", "By face" },
+                        () => string.Join("|", ArmorWeightTexts()), ArmorWeightTexts);
                     Slider(builder, tags, "Hardness", "How hard the armor is compared with the shell: harder armor deflects shells at lower angles. 100% = reference.",
                         10f, 300f, 5f, tags.Armor.Hardness, " %", v => tags.Armor.Hardness = v);
                     Slider(builder, tags, "Brittleness", "How easily the plate shatters into fragments. (Not used yet: energy model.)",
@@ -621,6 +649,103 @@ namespace ArmorFragments.UI
             return signature.ToString();
         }
 
+        // Armor thickness, as the game edits corners: by default one "Thickness" for every face at once. With
+        // "Per face" on, two rows of face buttons (the one being edited in brackets, each with its thickness) and
+        // the thickness of the picked face. Edited faces are tinted orange on the block, other armored ones blue.
+        private static void FaceRows(PanelBuilder builder, PartTags tags)
+        {
+            float[] faces = tags.Armor.Faces;
+
+            float thickest = 0f;
+            bool same = true;
+            for (int i = 0; i < ArmorFaces.Count; i++)
+            {
+                thickest = Mathf.Max(thickest, faces[i]);
+                if (faces[i] != faces[0]) same = false;
+            }
+
+            // A newly selected block opens per face only if its faces differ.
+            if (part != faceModePart)
+            {
+                faceModePart = part;
+                SelectedFace = same ? AllFaces : 0;
+            }
+            if (!same && SelectedFace == AllFaces) SelectedFace = 0;
+            int picked = SelectedFace >= 0 && SelectedFace <= AllFaces ? SelectedFace : AllFaces;
+
+            builder.Toggle("Per face",
+                "Off: one thickness for every face of the block. On: each of its six faces gets its own thickness " +
+                "(0 mm = open: shells and fragments pass it as empty space). Turning it off sets every face to the thickest one.",
+                picked != AllFaces,
+                on => Switch(tags, () =>
+                {
+                    SelectedFace = on ? 0 : AllFaces;
+                    if (on) return;
+                    for (int i = 0; i < ArmorFaces.Count; i++) tags.Armor.Faces[i] = thickest;
+                }));
+
+            if (picked == AllFaces)
+            {
+                Slider(builder, tags, "Thickness",
+                    "Thickness of every face of the block (orange on the block). 0 mm = open. Turn on \"Per face\" to set faces on their own.",
+                    0f, 500f, 1f, faces[0], " mm", v =>
+                    {
+                        for (int i = 0; i < ArmorFaces.Count; i++) tags.Armor.Faces[i] = v;
+                    });
+                return;
+            }
+
+            for (int row = 0; row < 2; row++)
+            {
+                List<KeyValuePair<string, Action>> buttons = new List<KeyValuePair<string, Action>>();
+                for (int i = row * 3; i < row * 3 + 3; i++)
+                {
+                    int face = i;
+                    string text = ArmorFaces.Names[face] + " " + Mm(faces[face]);
+                    if (face == picked) text = "[" + text + "]";
+                    buttons.Add(new KeyValuePair<string, Action>(text, () => Pick(face)));
+                }
+                builder.Buttons(buttons);
+            }
+
+            Slider(builder, tags, ArmorFaces.Names[picked] + " face",
+                "Thickness of the picked face (orange on the block). 0 mm = open: shells and fragments pass it as empty space.",
+                0f, 500f, 1f, faces[picked], " mm", v => tags.Armor.Faces[picked] = v, true);
+        }
+
+        // Armor weight, Weight by face: the steel of the armored faces (area on the block x thickness).
+        private static string[] ArmorWeightTexts()
+        {
+            float kg;
+            float[] faceKg;
+            float[] faceArea;
+            if (part == null || !ArmorMass.TryDescribe(part.Part, out kg, out faceKg, out faceArea))
+                return new[] { "measuring...", "-" };
+
+            List<string> faces = new List<string>();
+            for (int i = 0; i < ArmorFaces.Count; i++)
+                if (faceKg[i] > 0f) faces.Add(ArmorFaces.Names[i] + " " + Kg(faceKg[i]));
+            return new[] { Kg(kg), faces.Count > 0 ? string.Join(", ", faces.ToArray()) : "all open" };
+        }
+
+        private static string Kg(float kg)
+        {
+            return kg >= 1000f
+                ? (kg / 1000f).ToString("0.00", CultureInfo.InvariantCulture) + " t"
+                : kg.ToString("0", CultureInfo.InvariantCulture) + " kg";
+        }
+
+        private static void Pick(int face)
+        {
+            SelectedFace = face;
+            rebuildPending = true;
+        }
+
+        private static string Mm(float mm)
+        {
+            return mm.ToString("0", CultureInfo.InvariantCulture);
+        }
+
         // ---- Controls ------------------------------------------------------------
 
         private static void Switch(PartTags tags, Action change)
@@ -632,19 +757,23 @@ namespace ArmorFragments.UI
 
         private static void Slider(PanelBuilder builder, PartTags tags, string label, string tooltip,
                                    float min, float max, float step, float value, string unit,
-                                   Action<float> assign)
+                                   Action<float> assign, bool rebuildOnRelease = false)
         {
             int positions = Mathf.RoundToInt((max - min) / step) + 1;
             string format = step >= 1f ? "0" : "0.0";
 
-            builder.Slider(label, tooltip, min, max, positions, value,
-                x => x.ToString(format, CultureInfo.InvariantCulture) + unit,
+            builder.Slider(label, tooltip, min, max, positions, value, unit.Trim(),
+                x => x.ToString(format, CultureInfo.InvariantCulture),
                 x =>
                 {
                     assign(Mathf.Clamp(Mathf.Round(x / step) * step, min, max));
                     Commit(tags, false);       // while dragging: update the name, no undo step yet
                 },
-                x => Commit(tags, true));      // on release: one undo step
+                x =>
+                {
+                    Commit(tags, true);        // on release: one undo step
+                    if (rebuildOnRelease) rebuildPending = true;   // rows that show the value elsewhere
+                });
         }
 
         // Writes the tags into the part's name, the same way the game's name field does.
@@ -653,6 +782,7 @@ namespace ArmorFragments.UI
             if (part == null) return;
 
             string name = TagCodec.Compose(tags, part.Part.PartType.Name);
+            bool armorBefore = part.Part.Name != null && part.Part.Name.Contains("[ARM");
             part.Part.Name = name;
             foreach (PartModifierData modifier in part.Part.Modifiers)
                 modifier.OnPartNameChanged(name);
@@ -671,6 +801,10 @@ namespace ArmorFragments.UI
 
             // Make the module's variable show up (or go away) in the designer's variable lists right away.
             if (createUndoStep) ModuleOutputs.RefreshDesignerVariables(part);
+
+            // Armor weighs: the craft's mass and center of mass change with it (as with the game's Dead Weight).
+            if (createUndoStep && (armorBefore || tags.Armor != null))
+                Assets.Scripts.Design.Designer.Instance.SetAircraftStructureChanged();
 
             if (createUndoStep)
             {
