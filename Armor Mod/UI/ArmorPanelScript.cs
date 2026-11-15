@@ -72,6 +72,7 @@ namespace ArmorFragments.UI
                 BuildRicochet();
                 BuildRays();
                 BuildTools();
+                BuildDamageProbe();
                 BuildLog();
             }
             catch (Exception e)
@@ -360,6 +361,26 @@ namespace ArmorFragments.UI
                 "Diameter of the colored ball at each impact.", 0.01f, " m");
             FloatSetting(ArmorFragmentsPlugin.BubbleLifetime, "Impact bubble time",
                 "Seconds an impact bubble takes to shrink away.", 0.05f, " s");
+        }
+
+        // Phase 1 of the damage maps: a probe (see DamageProbe.cs). Nothing here changes shots or damage.
+        private void BuildDamageProbe()
+        {
+            builder.Header("Damage probe", collapsed: true);
+            ToggleSetting(ArmorFragmentsPlugin.KeepPlatesApart, "Keep armor plates out of the mesh merge",
+                "Turn on BEFORE the flight starts: the game merges the meshes of a group when the flight begins, and a merged plate cannot be changed.");
+            ToggleSetting(ArmorFragmentsPlugin.ProbeHoleCullOff, "Hole test: draw both sides",
+                "Shows the inside of the plate through the hole. Off = the back faces are not drawn.");
+            FloatSetting(ArmorFragmentsPlugin.ProbeTileMeters, "Window size",
+                "Width of the square window the dent or hole is drawn in.", 0.05f, " m");
+            Live("Probe", () => DamageProbe.Message);
+            builder.Buttons(new List<KeyValuePair<string, Action>>
+            {
+                new KeyValuePair<string, Action>("Dent", () => DamageProbe.Request(DamageProbe.Kind.Dent)),
+                new KeyValuePair<string, Action>("Hole", () => DamageProbe.Request(DamageProbe.Kind.HoleLit)),
+                new KeyValuePair<string, Action>("Animate", DamageProbe.Animate),
+                new KeyValuePair<string, Action>("Reset", DamageProbe.Reset),
+            });
         }
 
         private void BuildTools()

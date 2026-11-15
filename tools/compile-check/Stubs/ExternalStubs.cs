@@ -13,6 +13,19 @@ namespace UnityEngine.InputSystem
         public bool isPressed { get { return false; } }
     }
 
+    public class InputControl<TValue>
+    {
+        public TValue ReadValue() { return default(TValue); }
+    }
+
+    public class Vector2Control : InputControl<Vector2> { }
+
+    public class Mouse
+    {
+        public static Mouse current { get { return null; } }
+        public Vector2Control position { get { return null; } }
+    }
+
     public class Keyboard
     {
         public static Keyboard current { get { return null; } }

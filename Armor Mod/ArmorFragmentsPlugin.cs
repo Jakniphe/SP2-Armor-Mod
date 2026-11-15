@@ -74,6 +74,9 @@ namespace ArmorFragments
         internal static ConfigEntry<float> GurneySpeed;
         internal static ConfigEntry<float> DetonationSidewaysBias;
         internal static ConfigEntry<float> DefaultFuse;
+        internal static ConfigEntry<bool> KeepPlatesApart;     // local: armor plates keep their own renderer in flight
+        internal static ConfigEntry<bool> ProbeHoleCullOff;    // local: damage probe
+        internal static ConfigEntry<float> ProbeTileMeters;    // local: damage probe
         internal static ConfigEntry<float> FragmentArmorFactor;
         internal static ConfigEntry<float> DefaultShellBrittleness;
         internal static ConfigEntry<float> SimShellBrittleness;
@@ -132,6 +135,7 @@ namespace ArmorFragments
             RackVisualizer.Tick();
             AmmoRackXRay.Tick();
             ImpactCamera.Tick();
+            DamageProbe.Tick();
         }
 
         private void Awake()
@@ -320,6 +324,14 @@ namespace ArmorFragments
                     "How much more of the casing flies sideways than along the shell's axis when it bursts. " +
                     "0 = the same in every direction, 1 = mostly sideways (as the casing of a real shell does).",
                     new AcceptableValueRange<float>(0f, 1f)));
+            KeepPlatesApart = Config.Bind("DamageMaps", "KeepPlatesApart", false,
+                "Armor plates keep their own renderer in flight instead of being merged into their group's mesh (a few more draw calls). " +
+                "Needed for the damage probe (and, later, for damage maps): a merged plate cannot be changed. Takes effect when a flight starts.");
+            ProbeHoleCullOff = Config.Bind("DamageMaps", "ProbeHoleCullOff", false,
+                "Damage probe, hole test: draw both sides of the surface (shows the inside of the plate through the hole). Off = back faces are not drawn.");
+            ProbeTileMeters = Config.Bind("DamageMaps", "ProbeTileMeters", 0.5f,
+                new ConfigDescription("Damage probe: width in meters of the square window the dent or hole is drawn in.",
+                    new AcceptableValueRange<float>(0.1f, 3f)));
             FragmentArmorFactor = Config.Bind("Energy", "FragmentArmorFactor", 1f,
                 new ConfigDescription(
                     "A fragment that meets armor pays what a shell would (ArmorResistance x thickness x its own cross-section) " +
