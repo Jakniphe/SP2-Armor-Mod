@@ -48,6 +48,7 @@ Weight
 - Symmetry: mirrored copies get their armor mirrored (Left and Right swapped), and with symmetry on, armor edits reach the symmetry partners.
 - The face tint is drawn only over the block in the designer, never during a flight.
 - When the game itself kills a vehicle (fewer than 70% of its parts or wing area still connected to the cockpit), the log says so, with the numbers and the parts no longer connected.
+- Fix: an explosive (HE or APHE) shell the mod has resolved is removed without the game's own explosion. That explosion went off where the shell stopped, often inside the hit vehicle, and its blast could cut the vehicle's parts loose and get it killed.
 
 # Ammo racks
 
