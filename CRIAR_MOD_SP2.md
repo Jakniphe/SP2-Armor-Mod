@@ -6,7 +6,7 @@ Guia para o Claude. Foi escrito a partir do que este projeto (o mod de blindagem
 
 - **Quem pede:** normalmente um jogador que conhece bem o SP2 e é iniciante em programação e em Unity. Explique em passos pequenos, diga o que foi testado e o que é rascunho, responda no idioma da última mensagem.
 - **O Claude não roda o jogo nem compila para ele.** Todo código é "não testado" até o usuário compilar no Visual Studio e mandar `BepInEx/LogOutput.log` ou prints. Diga isso ao entregar. Não afirme que algo funciona.
-- **Antes de entregar:** rode a verificação de sintaxe (seção 9) e releia o código procurando erros de compilação. Um erro de build custa uma volta inteira ao usuário.
+- **Antes de entregar:** rode a verificação de compilação (seção 9) e releia o código procurando o que ela não pega. Um erro de build custa uma volta inteira ao usuário.
 - **Git:** desenvolva na branch combinada, só atualize o `master` quando pedirem, não abra PR sem pedido, não suba a versão antes de terminar o conjunto. Termine commits com os trailers que a sessão exigir.
 - **Privacidade:** não inclua dados pessoais (nome, e-mail) em nada que vá para fora.
 - **Respeito a terceiros:** código de outro modder só entra com autorização dele; dê o crédito no `claude.md` e no changelog.
@@ -119,7 +119,7 @@ Cada item diz o que existe, como se conecta e a armadilha conhecida.
 1. **Escolha/pergunta mínima.** Só pergunte o que é do usuário decidir (um número de balanço, um comportamento ambíguo). O resto, escolha um padrão e diga qual.
 2. **Leia o código do jogo** antes de assumir (a classe, os campos, quem chama). Procure com `grep` no decompilado.
 3. **Escreva a menor fase que prova o caminho** (log). Depois a lógica. Depois a interface. Depois a rede.
-4. **Verifique sintaxe**, releia, entregue com: o que mudou, o que esperar no log, como testar, o que ainda não foi testado.
+4. **Rode a verificação de compilação**, releia, entregue com: o que mudou, o que esperar no log, como testar, o que ainda não foi testado.
 5. **Receba o log do usuário**, corrija, repita. Só suba a versão quando o conjunto estiver pronto.
 
 ## 7. Erros que já aconteceram (não repita)
@@ -138,9 +138,11 @@ Cada item diz o que existe, como se conecta e a armadilha conhecida.
 - `README`/changelog no estilo curto de Discord, em inglês, uma linha por mudança (agrupadas: novidades, correções), com o link do release e a marcação do cargo de testadores.
 - Versão: patch para correções, minor para features. Atualize a constante `Version`, o `claude.md` e só então o `master`.
 
-## 9. Verificação de sintaxe sem compilar
+## 9. Verificação de compilação sem as DLLs do jogo
 
-O Claude não tem os `.dll` do jogo nem o SDK do .NET aqui, então não compila. O que dá para fazer: um ambiente Python com `tree-sitter` e `tree-sitter-c-sharp` que lê todos os `.cs` e acusa estruturas inválidas (chaves, parênteses, ponto e vírgula). Não pega erros de tipo ou nome inexistente: por isso a releitura atenta (declarações duplicadas em escopos aninhados, `out`/`ref`, variáveis não atribuídas, nomes de membros que o jogo mudou) faz parte da entrega.
+O Claude não tem as `.dll` do jogo, mas tem o código decompilado dele. Dá para compilar o mod contra o decompilado: um programa Roslyn pequeno (`tools/compile-check` deste repositório) junta o mod e o decompilado numa compilação e mostra só os erros dos arquivos do mod (o decompilado tem erros próprios, que são ignorados). Pega tipo errado, membro inexistente, argumentos errados, variável não atribuída, conflito de escopo. Detalhes e instalação: `tools/compile-check/README.md`. Em contêiner novo: `apt-get update && apt-get install -y dotnet-sdk-8.0`, depois `dotnet restore && dotnet build` na pasta da ferramenta e `./fetch-libs.sh`.
+
+O que ela não prova: comportamento, strings (alvos do Harmony, nomes de reflexão) e se o jogo instalado é a mesma versão do decompilado. Pacotes que o decompilado não tem (Input System, UI do Unity, FishNet) entram como stubs. Sem o decompilado ou sem `dotnet`, volte para a checagem de sintaxe (`tree-sitter-c-sharp`) e a releitura atenta (declarações duplicadas em escopos aninhados, `out`/`ref`, variáveis não atribuídas).
 
 ## 10. Checklist antes de dizer "pronto"
 
@@ -148,7 +150,7 @@ O Claude não tem os `.dll` do jogo nem o SDK do .NET aqui, então não compila.
 - [ ] Plugin carrega e loga a versão; patches aplicados aparecem no log.
 - [ ] Toda constante de balanço está numa configuração, com padrão.
 - [ ] Painel e/ou designer mostram o que o jogador precisa para testar.
-- [ ] Sintaxe verificada; releitura de compilação feita.
+- [ ] Compilação verificada contra o decompilado; releitura feita.
 - [ ] Efeitos em multiplayer pensados (global × local; dano em outros jogadores).
 - [ ] `claude.md` atualizado com o que não foi testado.
 - [ ] Mensagem final diz o que testar e que log mandar de volta.

@@ -1,0 +1,4 @@
+# "old=>new": replaced in the mod's text before it is checked. For names that exist in the game's Unity 6 but not in the
+# Unity 2021 reference DLLs this check uses. (The mod itself is never changed.)
+.linearVelocity=>.velocity
+.linearDamping=>.drag

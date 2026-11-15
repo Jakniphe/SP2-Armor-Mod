@@ -6,7 +6,7 @@ A guide for Claude. It was written from what this project (the armor mod, folder
 
 - **Who asks:** usually a player who knows SP2 well and is a beginner in programming and Unity. Explain in small steps, say what was tested and what is a draft, answer in the language of the last message.
 - **Claude can neither run the game nor build for it.** All code is "untested" until the user compiles in Visual Studio and sends `BepInEx/LogOutput.log` or screenshots. Say so when delivering. Do not claim something works.
-- **Before delivering:** run the syntax check (section 9) and reread the code looking for compile errors. A build error costs the user a whole round trip.
+- **Before delivering:** run the compile check (section 9) and reread the code for what it does not catch. A build error costs the user a whole round trip.
 - **Git:** develop on the agreed branch, only update `master` when asked, do not open a PR unless asked, do not bump the version before the whole set is finished. End commits with the trailers the session requires.
 - **Privacy:** do not put personal data (name, e-mail) in anything that goes outside.
 - **Respect for others:** another modder's code goes in only with their permission; credit them in `claude.md` and in the changelog.
@@ -119,7 +119,7 @@ Each item says what exists, how to hook into it, and the known pitfall.
 1. **Choice/minimal question.** Ask only what is the user's to decide (a balance number, an ambiguous behavior). For the rest, pick a default and say which.
 2. **Read the game's code** before assuming (the class, the fields, who calls it). Search the decompiled code with `grep`.
 3. **Write the smallest phase that proves the path** (a log). Then the logic. Then the interface. Then the network.
-4. **Check syntax**, reread, deliver with: what changed, what to expect in the log, how to test, what is still untested.
+4. **Run the compile check**, reread, deliver with: what changed, what to expect in the log, how to test, what is still untested.
 5. **Receive the user's log**, fix, repeat. Only bump the version when the whole set is ready.
 
 ## 7. Mistakes that already happened (do not repeat)
@@ -138,9 +138,11 @@ Each item says what exists, how to hook into it, and the known pitfall.
 - `README`/changelog in the short Discord style, in English, one line per change (grouped: new things, fixes), with the release link and the testers' role mention.
 - Version: patch for fixes, minor for features. Update the `Version` constant, `claude.md` and only then `master`.
 
-## 9. Syntax check without compiling
+## 9. Compile check without the game's DLLs
 
-Claude does not have the game's `.dll` files or the .NET SDK here, so it cannot compile. What can be done: a Python environment with `tree-sitter` and `tree-sitter-c-sharp` that reads every `.cs` and flags invalid structure (braces, parentheses, semicolons). It does not catch type errors or nonexistent names: that is why careful rereading (duplicate declarations in nested scopes, `out`/`ref`, unassigned variables, member names the game has changed) is part of the delivery.
+Claude does not have the game's `.dll` files, but it has the game's decompiled code. The mod can be compiled against the decompile: a small Roslyn program (`tools/compile-check` in this repository) puts the mod and the decompiled game in one compilation and reports only the errors in the mod's files (the decompile has errors of its own, which are ignored). It catches wrong types, nonexistent members, wrong arguments, unassigned variables and scope clashes. Details and setup: `tools/compile-check/README.md`. In a fresh container: `apt-get update && apt-get install -y dotnet-sdk-8.0`, then `dotnet restore && dotnet build` in the tool's folder and `./fetch-libs.sh`.
+
+What it does not prove: behavior, strings (Harmony targets, reflection names) and whether the installed game is the same build as the decompile. Packages the decompile lacks (Input System, Unity UI, FishNet) go in as stubs. Without the decompile or without `dotnet`, fall back to the syntax check (`tree-sitter-c-sharp`) and careful rereading (duplicate declarations in nested scopes, `out`/`ref`, unassigned variables).
 
 ## 10. Checklist before saying "done"
 
@@ -148,7 +150,7 @@ Claude does not have the game's `.dll` files or the .NET SDK here, so it cannot 
 - [ ] The plugin loads and logs the version; applied patches show in the log.
 - [ ] Every balance constant is in a setting, with a default.
 - [ ] Panel and/or designer show the player what they need to test.
-- [ ] Syntax checked; compile reread done.
+- [ ] Compile-checked against the decompile; reread done.
 - [ ] Multiplayer effects thought through (global × local; damage to other players).
 - [ ] `claude.md` updated with what was not tested.
 - [ ] The final message says what to test and which log to send back.
