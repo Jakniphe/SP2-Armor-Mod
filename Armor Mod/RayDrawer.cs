@@ -142,6 +142,17 @@ namespace ArmorFragments
             return m;
         }
 
+        // Are rays drawn right now? DrawRays is the master switch; with HideRaysOutsideViews only the impact camera and the
+        // simulated shot (the two places the rays are there to be watched) get them. What the shot does is the same either way.
+        public static bool Wanted
+        {
+            get
+            {
+                if (!ArmorFragmentsPlugin.DrawRays.Value) return false;
+                return !ArmorFragmentsPlugin.HideRaysOutsideViews.Value || ShotSimulator.Active || ImpactCamera.IsActive;
+            }
+        }
+
         // Animates a glowing head moving along the path, with a fading trail behind it.
         // 'delay' (seconds) waits before starting, so rays can leave after the shell arrives.
         // thick: as thick as the shell's ray, without being the impact ray (see TracerAnimation).

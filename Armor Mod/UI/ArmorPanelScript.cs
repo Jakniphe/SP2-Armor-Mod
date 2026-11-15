@@ -351,6 +351,8 @@ namespace ArmorFragments.UI
             builder.Header("Ray display");
             ToggleSetting(ArmorFragmentsPlugin.DrawRays, "Draw rays",
                 "Shows each fragment ray and impact in the world.");
+            ToggleSetting(ArmorFragmentsPlugin.HideRaysOutsideViews, "Rays only in the camera and simulated shot",
+                "On: rays are drawn only in the impact camera and in the simulated shot; the shots of the world around you draw none (what they do does not change). Off: every shot draws its rays.");
             FloatSetting(ArmorFragmentsPlugin.RayWidthScale, "Ray width scale",
                 "Rays are as thick as what they show (the shell as wide as its caliber, a fragment as wide as the fragment). This multiplies that.", 0.1f, "x");
             FloatSetting(ArmorFragmentsPlugin.MinRayWidth, "Thinnest ray",
@@ -369,6 +371,8 @@ namespace ArmorFragments.UI
             builder.Header("Damage maps", collapsed: true);
             ToggleSetting(ArmorFragmentsPlugin.DamageMapsEnabled, "Marks on armor",
                 "Shots leave dents, holes, grooves and pits on armor plates.");
+            ToggleSetting(ArmorFragmentsPlugin.DamageMapsSimulatedShots, "Marks on simulated shots",
+                "The simulated shot leaves its marks (and impact simulation) on the plates too. Only a look: they never weaken the armor, and Clear removes them.");
             ToggleSetting(ArmorFragmentsPlugin.KeepPlatesApart, "Keep armor plates out of the mesh merge",
                 "Needed for the marks. Takes effect when a flight starts: the game merges the meshes of a group then, and a merged plate cannot be changed.");
             if (!NetSync.GlobalLocked)

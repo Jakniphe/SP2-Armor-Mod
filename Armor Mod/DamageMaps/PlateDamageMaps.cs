@@ -189,11 +189,12 @@ namespace ArmorFragments
         //   strength:  0..1, how hard it was compared with what the plate could take
         //   delay:     seconds until the shell's ray arrives (the mark appears then)
         //   shellMass, speed, keptEnergy: the shell (at the plate), for the simulation; without them the quick marks are used
+        //   visualOnly: a simulated shot's mark: drawn, but not recorded in the armor model (no hole to shoot through, no thinner plate)
         public static void OnImpact(PartScript part, ArmorTag armor, DamageKind kind, Vector3 point, Vector3 normalFacing,
                                     Vector3 direction, float caliberMeters, float strength, float angle, float delay,
-                                    float shellMass = 0f, float speed = 0f, float keptEnergy = 1f)
+                                    float shellMass = 0f, float speed = 0f, float keptEnergy = 1f, bool visualOnly = false)
         {
-            if (!Visuals && !Weakens) return;
+            if (visualOnly ? !Visuals : !Visuals && !Weakens) return;
             if (part == null || part.Aircraft == null || part.Aircraft.LoadContext != CraftLoadContext.Flight) return;
 
             PlateInfo info = InfoOf(part);
@@ -224,7 +225,7 @@ namespace ArmorFragments
                 KeptEnergy = keptEnergy,
             };
 
-            if (Weakens) Record(part, info, impact);
+            if (Weakens && !visualOnly) Record(part, info, impact);   // a simulated shot only draws: it never changes the armor model
             if (Visuals) Show(part, new[] { impact }, delay);
         }
 

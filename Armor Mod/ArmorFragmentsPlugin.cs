@@ -18,6 +18,7 @@ namespace ArmorFragments
         internal static ConfigEntry<int> MaxVisualFragments;
         internal static ConfigEntry<float> BallisticRayRange;
         internal static ConfigEntry<bool> DrawRays;
+        internal static ConfigEntry<bool> HideRaysOutsideViews;   // local: rays only in the impact camera and the simulated shot
         internal static ConfigEntry<float> RayWidthScale;
         internal static ConfigEntry<float> MinRayWidth;
         internal static ConfigEntry<bool> IgnoreGameDamageOnArmor;
@@ -76,6 +77,7 @@ namespace ArmorFragments
         internal static ConfigEntry<float> DefaultFuse;
         internal static ConfigEntry<bool> KeepPlatesApart;          // local: armor plates keep their own renderer in flight
         internal static ConfigEntry<bool> DamageMapsEnabled;        // local: marks on the plates
+        internal static ConfigEntry<bool> DamageMapsSimulatedShots; // local: the simulated shot leaves (visual only) marks too
         internal static ConfigEntry<bool> DamageMapsWeakenArmor;    // global: holes let shots through, dents thin the plate
         internal static ConfigEntry<float> DamageMapsDensity;       // local: pixels per meter of the maps
         internal static ConfigEntry<float> DamageMapsNormalStrength;// local: how deep the dents look
@@ -177,6 +179,10 @@ namespace ArmorFragments
                     new AcceptableValueRange<float>(1f, 1000f)));
             DrawRays = Config.Bind("Debug", "DrawRays", true,
                 "If true, draws each fragment ray in the world (red = hit a part, yellow = hit nothing).");
+            HideRaysOutsideViews = Config.Bind("Debug", "HideRaysOutsideViews", true,
+                "On: the rays are only drawn where they are watched, in the impact camera and in the simulated shot; the shots " +
+                "of the world around you draw none (nothing changes in what they do). Off: every shot draws its rays. " +
+                "(Needs DrawRays on.)");
             RayWidthScale = Config.Bind("Debug", "RayWidthScale", 1f,
                 new ConfigDescription(
                     "A drawn ray is as thick as the thing it shows: the shell as wide as its caliber, a fragment as wide " +
@@ -339,6 +345,10 @@ namespace ArmorFragments
                 "Needed for the damage maps: a merged plate cannot be changed. Takes effect when a flight starts.");
             DamageMapsEnabled = Config.Bind("DamageMaps", "Enabled", true,
                 "Shots leave marks on armor plates: dents, holes, grooves and pits, drawn into the plate's normal map and hole mask.");
+            DamageMapsSimulatedShots = Config.Bind("DamageMaps", "SimulatedShots", false,
+                "The panel's simulated shot leaves its marks (dents, holes, grooves, pits, worked out like a real shot's, with the " +
+                "impact simulation) on the plates it hits. Only the look: they never weaken the armor or let anything through, " +
+                "and the panel's Clear button takes them off.");
             DamageMapsWeakenArmor = Config.Bind("DamageMaps", "WeakenArmor", true,
                 "The marks count: a hole lets shells and fragments through, a dent makes the plate thinner there. " +
                 "(Not synchronized between players yet: each computer keeps the marks of the shots it worked out.)");

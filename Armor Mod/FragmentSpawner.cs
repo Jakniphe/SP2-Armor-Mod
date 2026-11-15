@@ -41,6 +41,13 @@ namespace ArmorFragments
         // The shot simulator sets it for one shot, then clears it.
         public static Dictionary<PartScript, DamageRecord> DamageSink;
 
+        // Does this shot mark the plates it hits? A real one that applies damage does. A simulated one does only when the
+        // setting asks for it, and then the marks are only a look (PlateDamageMaps keeps them out of the armor model).
+        private static bool LeavesMarks(bool simulated, bool applyDamage)
+        {
+            return simulated ? ArmorFragmentsPlugin.DamageMapsSimulatedShots.Value : applyDamage;
+        }
+
         // Same idea for a REAL shot, for the impact camera's X-ray: what each part took, and when the
         // drawn ray reaches it. (A separate one: DamageSink also changes how the rays are drawn.)
         public static Dictionary<PartScript, DamageRecord> ImpactSink;
@@ -147,10 +154,10 @@ namespace ArmorFragments
                 LastImpact.Absorbed = shell.Energy - energyOut;
                 LastImpact.Residual = energyOut;
 
-                if (!simulated && applyDamage)
+                if (LeavesMarks(simulated, applyDamage))
                     PlateDamageMaps.OnImpact(armor, armorTag, DamageKind.Ricochet, point, n, reflected, shell.CaliberMm * 0.001f,
                                              1f - energyOut / Mathf.Max(shell.Energy, 1f), angle, leadTime,
-                                             shell.Mass, shell.Speed, energyOut / Mathf.Max(shell.Energy, 1f));
+                                             shell.Mass, shell.Speed, energyOut / Mathf.Max(shell.Energy, 1f), simulated);
                 LastImpact.Record(tag + "Armor ricochet", angle, Mathf.Min(armorTolerated, 90f), 0, 1, 0f);
                 ArmorFragmentsPlugin.Log.LogInfo(
                     tag + "Armor ricochet: angle " + angle.ToString("F0") + " >= critical " +
@@ -181,10 +188,10 @@ namespace ArmorFragments
             {
                 LastImpact.Record(tag + "Blocked (" + comparison + ")", angle, Mathf.Min(armorTolerated, 90f), 0, 0, 0f);
                 ArmorFragmentsPlugin.Log.LogInfo(tag + "Shell blocked by armor: " + comparison);
-                if (!simulated && applyDamage)
+                if (LeavesMarks(simulated, applyDamage))
                     PlateDamageMaps.OnImpact(armor, armorTag, DamageKind.Blocked, point, facingNormal, direction,
                                              shell.CaliberMm * 0.001f, Mathf.Clamp01(shellEnergy / Mathf.Max(absorbed, 1f)), angle, leadTime,
-                                             shell.Mass, shell.Speed);
+                                             shell.Mass, shell.Speed, 1f, simulated);
 
                 // A shell with a fuse that the plate stops bursts where it stopped: on the plate's surface.
                 if (shell.HasFuse)
@@ -233,10 +240,10 @@ namespace ArmorFragments
                 ricochets + " ricochets, total damage " + totalDamage.ToString("F1") +
                 (applyDamage ? "" : " (not applied)"));
 
-            if (!simulated && applyDamage)
+            if (LeavesMarks(simulated, applyDamage))
                 PlateDamageMaps.OnImpact(armor, armorTag, DamageKind.Penetrated, point, facingNormal, direction,
                                          shell.CaliberMm * 0.001f, Mathf.Clamp01(absorbed / Mathf.Max(shellEnergy, 1f)), angle, leadTime,
-                                         shell.Mass, shell.Speed);
+                                         shell.Mass, shell.Speed, 1f, simulated);
 
             // 4) The shell is not spent by the plate: what the plate did not take and did not turn into
             //    fragments goes on, bent a little toward the plate's normal. (An explosive shell with a fuse
@@ -411,7 +418,7 @@ namespace ArmorFragments
             partsHit = 0;
             ricochets = 0;
             totalDamage = 0f;
-            bool draw = ArmorFragmentsPlugin.DrawRays.Value;
+            bool draw = RayDrawer.Wanted;
 
             // Every ray ends in a bubble (a little sphere object). With hundreds of rays that would be hundreds of
             // objects at once, so a big cloud only gives some of its rays their bubbles.
@@ -668,7 +675,7 @@ namespace ArmorFragments
                 float armorMm = partArmor != null
                     ? partArmor.Thickness / Mathf.Max(Mathf.Cos(angle * Mathf.Deg2Rad), 0.1f)
                     : 0f;
-                bool marks = partArmor != null && applyDamage && DamageSink == null;   // a real shot leaves marks
+                bool marks = partArmor != null && LeavesMarks(DamageSink != null, applyDamage);   // a real shot leaves marks (the simulated one only if asked)
 
                 float density = PartPhysics.Density(part);
                 float energyIn = slug.Energy;
