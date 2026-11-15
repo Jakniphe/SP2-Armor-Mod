@@ -2,6 +2,7 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Threading;
+using ArmorFragments.Sim;
 using Assets.Scripts.Craft;
 using Assets.Scripts.Craft.Parts;
 using UnityEngine;
@@ -439,8 +440,10 @@ namespace ArmorFragments
         }
     }
 
-    // The worker thread: stamps the impacts onto the plates' CPU maps and works out the rectangles to deliver.
-    // It touches no Unity object (only plain arrays), so it cannot hitch the game; the main thread takes what it makes.
+    // The worker thread: plays the impacts onto the plates' CPU maps and works out the rectangles to deliver. A shell's impact
+    // is simulated (ImpactSim, on every thread that is free) when the settings say so; everything else, and any simulation that
+    // is too slow or disagrees with the energy model, gets the quick analytic marks (PlateStamps). It touches no Unity object
+    // (only plain arrays), so it cannot hitch the game; the main thread takes what it makes.
     internal static class DamageWorker
     {
         public sealed class Job
@@ -449,17 +452,59 @@ namespace ArmorFragments
             public PlateVisual Plate;
             public PlateImpact[] Impacts;
             public float DeliverAt;
+
+            // The simulation's settings, taken when the impact happened (the worker never reads the settings).
+            public int SimQuality = -1;        // 0 low, 1 medium, 2 high; -1 = no simulation (the quick marks)
+            public bool AutoQuality;
+            public int TimeLimitMs;
+            public float ResistanceJPerM3;
+            public int Threads;                // 0 = automatic
         }
 
         private static readonly BlockingCollection<Job> Jobs = new BlockingCollection<Job>(new ConcurrentQueue<Job>());
         public static readonly ConcurrentQueue<Delivery> Done = new ConcurrentQueue<Delivery>();
-        public static readonly ConcurrentQueue<string> Messages = new ConcurrentQueue<string>();
+        public static readonly ConcurrentQueue<string> Messages = new ConcurrentQueue<string>();   // warnings, for the main thread to log
+        public static readonly ConcurrentQueue<string> Infos = new ConcurrentQueue<string>();      // information, the same
         private static Thread thread;
         public static volatile int LastMs10;   // the last job, in tenths of a millisecond
+
+        // The simulation's numbers, for the panel.
+        private static int pendingSims;
+        public static int PendingSims { get { return Volatile.Read(ref pendingSims); } }
+        public static volatile int LastSimMs;
+        public static volatile int LastSimQuality = -1;
+        public static volatile int LastSimThreads;
+        public static volatile int SimsDone;
+        public static volatile int Fallbacks;
+        public static volatile int TunedQuality = 2;   // the best quality the time limit lets the simulation use now
+
+        private static SimPool pool;
+        private static int poolWorkers = -1;
+        private static volatile int allowedWorkers = int.MaxValue;
+        private static int goodRuns;
 
         public static int Pending
         {
             get { return Jobs.Count; }
+        }
+
+        public static int WorkersNow
+        {
+            get { SimPool p = pool; return p == null ? 0 : Math.Min(p.Workers, p.MaxWorkers) + 1; }
+        }
+
+        // The game's frame rate dropped: the simulation lends some threads back (or takes them again).
+        public static void SetAllowedWorkers(int workers)
+        {
+            allowedWorkers = Math.Max(0, workers);
+            SimPool p = pool;
+            if (p != null) p.MaxWorkers = Math.Min(p.Workers, allowedWorkers);
+        }
+
+        public static int ConfiguredWorkers(int threads)
+        {
+            int total = threads > 0 ? threads : Math.Max(1, Environment.ProcessorCount - 2);   // automatic: all but two cores
+            return Math.Max(0, total - 1);                                                     // the worker thread itself works too
         }
 
         public static void Enqueue(Job job)
@@ -469,6 +514,7 @@ namespace ArmorFragments
                 thread = new Thread(Run) { IsBackground = true, Name = "ArmorFragments damage maps", Priority = System.Threading.ThreadPriority.BelowNormal };
                 thread.Start();
             }
+            if (job.SimQuality >= 0) Interlocked.Increment(ref pendingSims);
             Jobs.Add(job);
         }
 
@@ -479,7 +525,11 @@ namespace ArmorFragments
                 try
                 {
                     System.Diagnostics.Stopwatch watch = System.Diagnostics.Stopwatch.StartNew();
-                    foreach (PlateImpact impact in job.Impacts) PlateStamps.Apply(job.Plate.Cpu, impact);
+                    foreach (PlateImpact impact in job.Impacts)
+                    {
+                        if (job.SimQuality >= 0 && SimBridge.Wants(impact) && TrySimulate(job, impact)) continue;
+                        PlateStamps.Apply(job.Plate.Cpu, impact);
+                    }
 
                     List<Delivery> output = new List<Delivery>();
                     PlateStamps.Flush(job.Plate.Cpu, job.Plate, job.Owner, job.DeliverAt, output);
@@ -488,9 +538,93 @@ namespace ArmorFragments
                 }
                 catch (Exception e)
                 {
-                    Messages.Enqueue("[DMAP] the worker failed on a stamp: " + e);
+                    Messages.Enqueue("[DMAP] the worker failed on an impact: " + e);
+                }
+                finally
+                {
+                    if (job.SimQuality >= 0) Interlocked.Decrement(ref pendingSims);
                 }
             }
+        }
+
+        // Plays one shell impact with the simulation and lays the result into the plate. False = the quick marks must be used.
+        private static bool TrySimulate(Job job, PlateImpact impact)
+        {
+            try
+            {
+                int quality = job.AutoQuality ? Math.Min(job.SimQuality, TunedQuality) : job.SimQuality;
+                SimPool simPool = EnsurePool(job.Threads);
+                ImpactSimInput input = SimBridge.InputFor(impact, quality, job.TimeLimitMs, job.ResistanceJPerM3);
+                ImpactSimResult result = ImpactSim.Run(input, simPool);
+
+                LastSimMs = (int)result.Ms;
+                LastSimQuality = quality;
+                LastSimThreads = Math.Min(simPool.Workers, simPool.MaxWorkers) + 1;
+                Tune(job, result);
+
+                string what = "[SIMFX] " + impact.Kind + ", quality " + new[] { "low", "medium", "high" }[quality] + ", " + result.Particles +
+                              " particles, " + result.Steps + " steps, " + result.Ms.ToString("F0") + " ms on " + LastSimThreads + " thread(s)";
+                if (result.TimedOut)
+                {
+                    Fallbacks++;
+                    Infos.Enqueue(what + ": too slow (limit " + job.TimeLimitMs + " ms), the quick marks are used");
+                    return false;
+                }
+                if (!SimBridge.Agrees(impact.Kind, result))
+                {
+                    Fallbacks++;
+                    Infos.Enqueue(what + ": it disagrees with the energy model (" + (result.Perforated ? "it got through" : "it did not") +
+                                  "), the quick marks are used");
+                    return false;
+                }
+
+                SimBridge.Apply(job.Plate.Cpu, impact, result);
+                SimsDone++;
+                Infos.Enqueue(what + ", dent " + (result.DepthM * 1000f).ToString("F0") + " mm" +
+                              (result.HoleRadiusM > 0f ? ", hole " + (result.HoleRadiusM * 2000f).ToString("F0") + " mm" : ""));
+                return true;
+            }
+            catch (Exception e)
+            {
+                Fallbacks++;
+                Messages.Enqueue("[SIMFX] the simulation failed, the quick marks are used: " + e.Message);
+                return false;
+            }
+        }
+
+        // The simulation gives itself the best quality the time limit allows: a run that took most of the limit lowers it,
+        // a few quick ones raise it again (up to the setting).
+        private static void Tune(Job job, ImpactSimResult result)
+        {
+            if (!job.AutoQuality || job.TimeLimitMs <= 0) return;
+            if (result.TimedOut || result.Ms > 0.7 * job.TimeLimitMs)
+            {
+                if (TunedQuality > 0)
+                {
+                    TunedQuality--;
+                    Infos.Enqueue("[SIMFX] it was slow: the best quality it will use for now is " + new[] { "low", "medium", "high" }[TunedQuality]);
+                }
+                goodRuns = 0;
+            }
+            else if (result.Ms < 0.2 * job.TimeLimitMs)
+            {
+                if (++goodRuns >= 3 && TunedQuality < 2) { TunedQuality++; goodRuns = 0; }
+            }
+            else goodRuns = 0;
+        }
+
+        private static SimPool EnsurePool(int threads)
+        {
+            int workers = ConfiguredWorkers(threads);
+            if (pool == null || poolWorkers != workers)
+            {
+                if (pool != null) pool.Dispose();
+                pool = new SimPool(workers);
+                poolWorkers = workers;
+                Infos.Enqueue("[SIMFX] simulation threads: " + (workers + 1) + " (" + Environment.ProcessorCount + " cores)");
+            }
+            pool.MaxWorkers = Math.Min(workers, allowedWorkers);
+            return pool;
         }
     }
 }

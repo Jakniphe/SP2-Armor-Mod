@@ -81,6 +81,12 @@ namespace ArmorFragments
         internal static ConfigEntry<float> DamageMapsNormalStrength;// local: how deep the dents look
         internal static ConfigEntry<bool> DamageMapsHoleBothSides;  // local: draw both sides of a holed plate
         internal static ConfigEntry<int> DamageMapsMaxVehicles;     // local: vehicles with maps at once
+        internal static ConfigEntry<int> SimQuality;                // local: 0 off, 1 low, 2 medium, 3 high
+        internal static ConfigEntry<int> SimThreads;                // local: 0 = all cores but two
+        internal static ConfigEntry<float> SimTimeLimit;            // local: seconds before a simulation is given up
+        internal static ConfigEntry<bool> SimAutoQuality;           // local: lower the quality when it is too slow
+        internal static ConfigEntry<int> SimMaxQueue;               // local: simulations waiting before new impacts get the quick marks
+        internal static ConfigEntry<bool> SimShedLoad;              // local: lend threads back when the frame rate drops
         internal static ConfigEntry<float> FragmentArmorFactor;
         internal static ConfigEntry<float> DefaultShellBrittleness;
         internal static ConfigEntry<float> SimShellBrittleness;
@@ -344,6 +350,29 @@ namespace ArmorFragments
                     new AcceptableValueRange<float>(0.2f, 5f)));
             DamageMapsHoleBothSides = Config.Bind("DamageMaps", "HoleBothSides", true,
                 "A plate with a hole is drawn on both sides (shows the inside of the plate through the hole). Off = back faces are not drawn.");
+            SimQuality = Config.Bind("DamageMaps", "SimQuality", 2,
+                new ConfigDescription(
+                    "How a shell's impact on a plate is worked out: 0 = off (the quick analytic marks), 1 = low (a 40 x 40 patch), " +
+                    "2 = medium (64 x 64), 3 = high (96 x 96). It is a small physics simulation of the plate, run in the background " +
+                    "on spare threads; the mark appears when it is ready. Higher = finer, slower. (Only the look: the energy model decides the game.)",
+                    new AcceptableValueRange<int>(0, 3)));
+            SimThreads = Config.Bind("DamageMaps", "SimThreads", 0,
+                new ConfigDescription(
+                    "Threads the simulation may use, the simulation's own included. 0 = automatic (all the cores but two). " +
+                    "They run below the game's own threads and hand the work to whichever is free.",
+                    new AcceptableValueRange<int>(0, 64)));
+            SimTimeLimit = Config.Bind("DamageMaps", "SimTimeLimit", 8f,
+                new ConfigDescription(
+                    "Seconds a simulation may take. One that takes longer is given up and the quick marks are drawn instead.",
+                    new AcceptableValueRange<float>(1f, 60f)));
+            SimAutoQuality = Config.Bind("DamageMaps", "SimAutoQuality", true,
+                "If a simulation takes most of its time limit, the next ones use a lower quality, and go back up when they are quick again.");
+            SimMaxQueue = Config.Bind("DamageMaps", "SimMaxQueue", 3,
+                new ConfigDescription(
+                    "Simulations that may wait their turn. When that many are waiting, new impacts get the quick marks (a burst of shots does not pile up).",
+                    new AcceptableValueRange<int>(1, 10)));
+            SimShedLoad = Config.Bind("DamageMaps", "SimShedLoad", true,
+                "When the frame rate drops, the simulation uses fewer threads for a while (and takes them back when it recovers).");
             DamageMapsMaxVehicles = Config.Bind("DamageMaps", "MaxVehicles", 6,
                 new ConfigDescription("Most vehicles with damage maps at once (each has atlases of up to 32 MB). The one hit longest ago gives it back.",
                     new AcceptableValueRange<int>(1, 20)));

@@ -149,7 +149,8 @@ namespace ArmorFragments
 
                 if (!simulated && applyDamage)
                     PlateDamageMaps.OnImpact(armor, armorTag, DamageKind.Ricochet, point, n, reflected, shell.CaliberMm * 0.001f,
-                                             1f - energyOut / Mathf.Max(shell.Energy, 1f), angle, leadTime);
+                                             1f - energyOut / Mathf.Max(shell.Energy, 1f), angle, leadTime,
+                                             shell.Mass, shell.Speed, energyOut / Mathf.Max(shell.Energy, 1f));
                 LastImpact.Record(tag + "Armor ricochet", angle, Mathf.Min(armorTolerated, 90f), 0, 1, 0f);
                 ArmorFragmentsPlugin.Log.LogInfo(
                     tag + "Armor ricochet: angle " + angle.ToString("F0") + " >= critical " +
@@ -182,7 +183,8 @@ namespace ArmorFragments
                 ArmorFragmentsPlugin.Log.LogInfo(tag + "Shell blocked by armor: " + comparison);
                 if (!simulated && applyDamage)
                     PlateDamageMaps.OnImpact(armor, armorTag, DamageKind.Blocked, point, facingNormal, direction,
-                                             shell.CaliberMm * 0.001f, Mathf.Clamp01(shellEnergy / Mathf.Max(absorbed, 1f)), angle, leadTime);
+                                             shell.CaliberMm * 0.001f, Mathf.Clamp01(shellEnergy / Mathf.Max(absorbed, 1f)), angle, leadTime,
+                                             shell.Mass, shell.Speed);
 
                 // A shell with a fuse that the plate stops bursts where it stopped: on the plate's surface.
                 if (shell.HasFuse)
@@ -233,7 +235,8 @@ namespace ArmorFragments
 
             if (!simulated && applyDamage)
                 PlateDamageMaps.OnImpact(armor, armorTag, DamageKind.Penetrated, point, facingNormal, direction,
-                                         shell.CaliberMm * 0.001f, Mathf.Clamp01(absorbed / Mathf.Max(shellEnergy, 1f)), angle, leadTime);
+                                         shell.CaliberMm * 0.001f, Mathf.Clamp01(absorbed / Mathf.Max(shellEnergy, 1f)), angle, leadTime,
+                                         shell.Mass, shell.Speed);
 
             // 4) The shell is not spent by the plate: what the plate did not take and did not turn into
             //    fragments goes on, bent a little toward the plate's normal. (An explosive shell with a fuse

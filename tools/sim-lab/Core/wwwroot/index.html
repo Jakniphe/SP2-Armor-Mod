@@ -145,10 +145,16 @@ function show(res) {
         <span>Hole</span><b>${s.holeCells > 0 ? f1(s.holeDiameterMm) + ' mm across' : 'none'}</b>
         <span>Energy left</span><b>${f1(s.energyLeftPercent)} %</b>
         <span>Time</span><b>${Math.round(s.ms)} ms on ${s.threads} thread(s)</b>
+        <span>Game uses</span><b>${s.agrees ? 'the simulation' : 'the quick marks (disagreement)'}</b>
         <span>Size</span><b>${s.particles} particles, ${s.steps} steps, cell ${f1(s.cellMm)} mm, patch ${f1(s.patchCm)} cm</b>
       </div></div>
     </div>
-    <h2>Simulation</h2>
+    <h2>As the game draws it <small>(${s.agrees ? 'the simulation, laid into a plate tile at 256 px/m' : 'the simulation disagreed with the model: the quick marks'})</small></h2>
+    <div class="grid">
+      ${img(res.images.gameFront, 'front')}
+      ${img(res.images.gameBack, 'back')}
+    </div>
+    <h2 style="margin-top:14px">The simulation itself</h2>
     <div class="grid">
       ${img(res.images.simFront, 'front (the side the shell hit)')}
       ${img(res.images.simBack, 'back')}

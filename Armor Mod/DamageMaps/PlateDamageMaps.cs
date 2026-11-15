@@ -67,6 +67,21 @@ namespace ArmorFragments
         // What the panel shows.
         public static string Message = "";
 
+        public static string SimStatus
+        {
+            get
+            {
+                if (ArmorFragmentsPlugin.SimQuality.Value == 0) return "off (the quick marks)";
+                string last = DamageWorker.LastSimQuality < 0
+                    ? "no simulation yet"
+                    : "last " + DamageWorker.LastSimMs + " ms, " + new[] { "low", "medium", "high" }[DamageWorker.LastSimQuality] +
+                      ", " + DamageWorker.LastSimThreads + " thread(s)";
+                return last + "; " + DamageWorker.SimsDone + " done, " + DamageWorker.Fallbacks + " fell back, waiting " +
+                       DamageWorker.PendingSims + ", best quality now " + new[] { "low", "medium", "high" }[DamageWorker.TunedQuality] +
+                       ", threads in use up to " + DamageWorker.WorkersNow;
+            }
+        }
+
         public static string Status
         {
             get
@@ -74,7 +89,7 @@ namespace ArmorFragments
                 int plates = 0;
                 foreach (VehicleMaps v in Vehicles.Values) plates += v.Plates.Count;
                 return Vehicles.Count + " vehicle(s), " + plates + " plate(s), " + States.Count + " damaged, queue " +
-                       (DamageWorker.Pending + Holding.Count) + ", last stamp " + (DamageWorker.LastMs10 / 10f).ToString("F1") +
+                       (DamageWorker.Pending + Holding.Count) + ", last job " + (DamageWorker.LastMs10 / 10f).ToString("F1") +
                        " ms (worker), " + lastDeliverMs.ToString("F2") + " ms (main thread)";
             }
         }
@@ -173,8 +188,10 @@ namespace ArmorFragments
         //   direction: the way the shell was going (for a ricochet: the way it bounced off)
         //   strength:  0..1, how hard it was compared with what the plate could take
         //   delay:     seconds until the shell's ray arrives (the mark appears then)
+        //   shellMass, speed, keptEnergy: the shell (at the plate), for the simulation; without them the quick marks are used
         public static void OnImpact(PartScript part, ArmorTag armor, DamageKind kind, Vector3 point, Vector3 normalFacing,
-                                    Vector3 direction, float caliberMeters, float strength, float angle, float delay)
+                                    Vector3 direction, float caliberMeters, float strength, float angle, float delay,
+                                    float shellMass = 0f, float speed = 0f, float keptEnergy = 1f)
         {
             if (!Visuals && !Weakens) return;
             if (part == null || part.Aircraft == null || part.Aircraft.LoadContext != CraftLoadContext.Flight) return;
@@ -200,6 +217,11 @@ namespace ArmorFragments
                 Strength = strength,
                 Thickness = thickness,
                 Seed = unchecked(part.Part.Id * 7919 + (++counter) * 104729),
+                ShellMass = shellMass,
+                Speed = speed,
+                PlateHardness = armor != null ? armor.Hardness : 100f,
+                PlateBrittleness = armor != null ? armor.Brittleness / 100f : 0.5f,
+                KeptEnergy = keptEnergy,
             };
 
             if (Weakens) Record(part, info, impact);
@@ -290,10 +312,30 @@ namespace ArmorFragments
             PlateVisual plate = maps.PlateFor(part);
             if (plate == null) return;
 
-            DamageWorker.Enqueue(new DamageWorker.Job
+            DamageWorker.Job job = new DamageWorker.Job
             {
                 Owner = maps, Plate = plate, Impacts = impacts, DeliverAt = Time.time + Mathf.Max(delay, 0f),
-            });
+            };
+
+            // A shell's impact is simulated if the setting says so and the simulations are not piling up; the settings are taken
+            // here, on the main thread, and travel with the job.
+            int quality = ArmorFragmentsPlugin.SimQuality.Value - 1;
+            if (quality >= 0 && impacts.Length == 1 && SimBridge.Wants(impacts[0]))
+            {
+                if (DamageWorker.PendingSims < ArmorFragmentsPlugin.SimMaxQueue.Value)
+                {
+                    job.SimQuality = quality;
+                    job.AutoQuality = ArmorFragmentsPlugin.SimAutoQuality.Value;
+                    job.TimeLimitMs = Mathf.RoundToInt(ArmorFragmentsPlugin.SimTimeLimit.Value * 1000f);
+                    job.ResistanceJPerM3 = ArmorFragmentsPlugin.ArmorResistance.Value * 1e7f;   // J per mm per cm2 -> J per m3
+                    job.Threads = ArmorFragmentsPlugin.SimThreads.Value;
+                }
+                else
+                {
+                    ArmorFragmentsPlugin.Log.LogInfo("[SIMFX] " + DamageWorker.PendingSims + " simulations are waiting: this impact gets the quick marks");
+                }
+            }
+            DamageWorker.Enqueue(job);
         }
 
         private static VehicleMaps VehicleFor(AircraftScript aircraft)
@@ -335,6 +377,8 @@ namespace ArmorFragments
         {
             string message;
             while (DamageWorker.Messages.TryDequeue(out message)) ArmorFragmentsPlugin.Log.LogWarning(message);
+            while (DamageWorker.Infos.TryDequeue(out message)) ArmorFragmentsPlugin.Log.LogInfo(message);
+            ShedLoad();
 
             // The fragment marks of the frame go to the worker.
             if (Pits.Count > 0)
@@ -376,6 +420,44 @@ namespace ArmorFragments
 
             if (++frame % 120 == 0) Prune();
             TickTest();
+        }
+
+        // ---- The simulation's load ------------------------------------------------------------------
+
+        private static float fastFrame, slowFrame, lastLoadChange;
+        private static int allowedWorkers = int.MaxValue;
+
+        // If the frame rate drops while the simulation works, it lends threads back (one at a time), and takes them again
+        // after a calm moment. "Dropped" = the last few frames are both slow (under 40 fps) and clearly slower than usual.
+        private static void ShedLoad()
+        {
+            float dt = Time.unscaledDeltaTime;
+            if (dt <= 0f || dt > 1f) return;
+            fastFrame = fastFrame <= 0f ? dt : Mathf.Lerp(fastFrame, dt, 0.25f);
+            slowFrame = slowFrame <= 0f ? dt : Mathf.Lerp(slowFrame, dt, 0.02f);
+
+            int configured = DamageWorker.ConfiguredWorkers(ArmorFragmentsPlugin.SimThreads.Value);
+            if (!ArmorFragmentsPlugin.SimShedLoad.Value || DamageWorker.PendingSims == 0)
+            {
+                if (allowedWorkers != int.MaxValue) { allowedWorkers = int.MaxValue; DamageWorker.SetAllowedWorkers(int.MaxValue); }
+                return;
+            }
+
+            float now = Time.unscaledTime;
+            bool pressure = fastFrame > 0.025f && fastFrame > slowFrame * 1.35f;
+            int current = Mathf.Min(allowedWorkers, configured);
+            if (pressure && now - lastLoadChange > 0.5f && current > 0)
+            {
+                allowedWorkers = current - 1;
+                lastLoadChange = now;
+                DamageWorker.SetAllowedWorkers(allowedWorkers);
+            }
+            else if (!pressure && now - lastLoadChange > 1.5f && allowedWorkers < configured)
+            {
+                allowedWorkers++;
+                lastLoadChange = now;
+                DamageWorker.SetAllowedWorkers(allowedWorkers);
+            }
         }
 
         // Aircraft that are gone: free their atlases and forget their plates.
@@ -466,7 +548,8 @@ namespace ArmorFragments
                     Vector3 direction = ray.direction;
                     if (testKind == DamageKind.Ricochet) direction = Vector3.Reflect(ray.direction, hit.normal);
                     OnImpact(part, TagCodec.Parse(part.Part.Name).Armor, testKind, hit.point, hit.normal, direction,
-                             0.075f, 0.7f, Mathf.Min(angle, 85f), 0f);
+                             0.075f, 0.7f, Mathf.Min(angle, 85f), 0f,
+                             EnergyModel.ShellMassForCaliber(75f), 800f, testKind == DamageKind.Ricochet ? 0.3f : 1f);
                     Message = "Test " + testKind + " on '" + part.Part.Name + "'";
                     ArmorFragmentsPlugin.Log.LogInfo(Tag + Message + ", angle " + angle.ToString("F0") + " deg");
                     return;

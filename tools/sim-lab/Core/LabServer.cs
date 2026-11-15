@@ -146,12 +146,21 @@ namespace SimLab
             float[] anaFront, anaBack; byte[] anaHole;
             Analytic(s, input, verdict, energy, absorbed, kept, sim, out anaFront, out anaBack, out anaHole);
 
+            // What the game would draw: the simulation laid into a plate tile (256 px per meter), or the quick marks if the
+            // simulation does not agree with the model (as the game does).
+            float[] gameFront, gameBack; byte[] gameHole; int gameN;
+            DamageKind kind = verdict == "Ricochet" ? DamageKind.Ricochet : (verdict == "Blocked" ? DamageKind.Blocked : DamageKind.Penetrated);
+            bool agrees = SimBridge.Agrees(kind, sim);
+            InGame(s, input, kind, energy, absorbed, kept, sim, agrees, out gameFront, out gameBack, out gameHole, out gameN);
+
             object picture = null;
             if (images)
             {
                 float scale = 4f;
                 picture = new
                 {
+                    gameFront = Png.Relief(gameFront, gameHole, gameN, 1f / 256f, 2f),
+                    gameBack = Png.Relief(gameBack, gameHole, gameN, 1f / 256f, 2f),
                     simFront = Png.Relief(sim.Front, sim.Hole, sim.N, sim.Cell, scale),
                     simBack = Png.Relief(sim.Back, sim.Hole, sim.N, sim.Cell, scale),
                     simSection = Png.Section(sim.Front, sim.Back, sim.Hole, sim.N, sim.Cell, input.ThicknessM, input.CaliberM),
@@ -185,6 +194,7 @@ namespace SimLab
                     steps = sim.Steps,
                     particles = sim.Particles, charged = sim.Charged, broken = sim.Broken,
                     ms = sim.Ms,
+                    agrees,
                     threads = s.Threads > 0 ? s.Threads : Environment.ProcessorCount,
                     cellMm = sim.Cell * 1000f,
                     patchCm = sim.Size * 100f,
@@ -215,6 +225,39 @@ namespace SimLab
                 DirU = input.DirU, DirV = input.DirV, Angle = s.Angle, Caliber = input.CaliberM,
                 Strength = strength, Thickness = input.ThicknessM, Seed = s.Seed,
             });
+
+            front = new float[n * n]; back = new float[n * n]; hole = new byte[n * n];
+            for (int i = 0; i < hole.Length; i++) hole[i] = 255;
+            PlateCpu.Face f0 = cpu.Faces[0], f1 = cpu.Faces[1];
+            for (int j = 0; j < n; j++)
+            {
+                for (int i = 0; i < n; i++)
+                {
+                    int at = (j + PlateCpu.Border) * cpu.Width + (i + PlateCpu.Border);
+                    if (f0 != null) { front[j * n + i] = f0.Height[at]; if (f0.Mask[at] == 0) hole[j * n + i] = 0; }
+                    if (f1 != null) { back[j * n + i] = f1.Height[at]; if (f1.Mask[at] == 0) hole[j * n + i] = 0; }
+                }
+            }
+        }
+
+        // The same thing the game does with a finished simulation: lays it into the plate's tile (or, if it disagrees with the
+        // energy model, draws the quick marks), then reads the tile back as arrays.
+        private static void InGame(Scenario s, ImpactSimInput input, DamageKind kind, float energy, float absorbed, float kept,
+                                   ImpactSimResult sim, bool agrees, out float[] front, out float[] back, out byte[] hole, out int n)
+        {
+            const float plate = 1.0f, density = 256f;
+            n = (int)(plate * density);
+            PlateCpu cpu = new PlateCpu { Width = n + 2 * PlateCpu.Border, Height = n + 2 * PlateCpu.Border, PxU = n / plate, PxV = n / plate };
+            float strength = kind == DamageKind.Blocked ? Math.Min(1f, energy / Math.Max(absorbed, 1f))
+                           : kind == DamageKind.Penetrated ? Math.Min(1f, absorbed / Math.Max(energy, 1f)) : 1f - kept;
+            PlateImpact impact = new PlateImpact
+            {
+                Kind = kind, Front = true, U = plate * 0.5f, V = plate * 0.5f, DirU = input.DirU, DirV = input.DirV, Angle = s.Angle,
+                Caliber = input.CaliberM, Strength = strength, Thickness = input.ThicknessM, Seed = s.Seed,
+                ShellMass = input.ShellMassKg, Speed = input.SpeedMS, PlateHardness = input.PlateHardness,
+                PlateBrittleness = input.PlateBrittleness, KeptEnergy = kept,
+            };
+            if (agrees) SimBridge.Apply(cpu, impact, sim); else PlateStamps.Apply(cpu, impact);
 
             front = new float[n * n]; back = new float[n * n]; hole = new byte[n * n];
             for (int i = 0; i < hole.Length; i++) hole[i] = 255;

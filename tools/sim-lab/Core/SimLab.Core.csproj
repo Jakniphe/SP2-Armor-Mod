@@ -26,6 +26,7 @@
     <Compile Include="../../../Armor Mod/Ammunition.cs" />
     <Compile Include="../../../Armor Mod/PartTags.cs" />
     <Compile Include="../../../Armor Mod/DamageMaps/PlateStamps.cs" />
+    <Compile Include="../../../Armor Mod/DamageMaps/SimBridge.cs" />
   </ItemGroup>
   <ItemGroup>
     <EmbeddedResource Include="wwwroot/index.html" LogicalName="index.html" />

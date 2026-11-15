@@ -382,6 +382,19 @@ namespace ArmorFragments.UI
                 "How deep the dents look.", 0.1f, "x");
             IntSetting(ArmorFragmentsPlugin.DamageMapsMaxVehicles, "Vehicles at once",
                 "Vehicles with maps at the same time. The one hit longest ago gives its maps back.");
+            IntSetting(ArmorFragmentsPlugin.SimQuality, "Simulation quality",
+                "0 = off (the quick marks), 1 = low (40x40), 2 = medium (64x64), 3 = high (96x96). A shell's impact is worked out by a small physics simulation of the plate, in the background; the mark appears when it is ready.");
+            IntSetting(ArmorFragmentsPlugin.SimThreads, "Simulation threads",
+                "Threads the simulation may use. 0 = automatic (all the cores but two). They run below the game's own threads and take work only when free.");
+            FloatSetting(ArmorFragmentsPlugin.SimTimeLimit, "Simulation time limit",
+                "Seconds a simulation may take; a slower one is given up and the quick marks are drawn instead.", 0.5f, " s");
+            ToggleSetting(ArmorFragmentsPlugin.SimAutoQuality, "Lower the quality if it is slow",
+                "If a simulation takes most of its time limit the next ones use a lower quality, and go back up when they are quick.");
+            IntSetting(ArmorFragmentsPlugin.SimMaxQueue, "Simulations that may wait",
+                "When that many are waiting, new impacts get the quick marks.");
+            ToggleSetting(ArmorFragmentsPlugin.SimShedLoad, "Give threads back when the FPS drops",
+                "While a simulation works and the frame rate drops, it uses fewer threads for a while.");
+            Live("Simulation", () => PlateDamageMaps.SimStatus);
             Live("Maps", () => PlateDamageMaps.Status);
             Live("Test", () => PlateDamageMaps.Message);
             builder.Buttons(new List<KeyValuePair<string, Action>>

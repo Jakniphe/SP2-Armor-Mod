@@ -25,6 +25,13 @@ namespace ArmorFragments
         public float Strength;     // 0..1: how hard the hit was compared with what the plate could take
         public float Thickness;    // meters
         public int Seed;
+
+        // What the simulation needs to play the impact (a shell's impact only; fragments do not use it).
+        public float ShellMass;        // kg
+        public float Speed;            // m/s at the plate
+        public float PlateHardness;    // percent
+        public float PlateBrittleness; // 0..1
+        public float KeptEnergy;       // ricochet: the share of its energy the shell keeps
     }
 
     // A piece of the atlas to be overwritten (a small rectangle of one atlas).
@@ -262,7 +269,7 @@ namespace ArmorFragments
             return x1 > x0 && y1 > y0;
         }
 
-        private static void Dirty(PlateCpu.Face f, int x0, int y0, int x1, int y1, bool hole)
+        internal static void Dirty(PlateCpu.Face f, int x0, int y0, int x1, int y1, bool hole)
         {
             if (x0 < f.X0) f.X0 = x0;
             if (y0 < f.Y0) f.Y0 = y0;

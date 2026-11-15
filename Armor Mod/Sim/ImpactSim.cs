@@ -19,6 +19,7 @@ namespace ArmorFragments.Sim
         public float EnergyScale;      // 1 = the shell's real energy (a lab knob)
         public int Quality;            // 0 low, 1 medium, 2 high
         public int Seed;
+        public int TimeLimitMs;        // give up after this long (0 = no limit)
     }
 
     internal sealed class ImpactSimResult
@@ -29,6 +30,7 @@ namespace ArmorFragments.Sim
         public float[] Front;          // height of the front surface over its old place (meters, + = out)
         public float[] Back;           // the same for the back surface (+ = out, the way a shell comes out)
         public byte[] Hole;            // 0 where there is no material, 255 elsewhere
+        public bool TimedOut;          // it took too long and was stopped: nothing else in the result is valid
         public bool Perforated;        // the shell got through
         public float DepthM;           // the deepest dent (the whole thickness if it is through)
         public float HoleRadiusM;      // of the hole, if any
@@ -167,6 +169,9 @@ namespace ArmorFragments.Sim
 
             while (steps < MaxActive + SettleSteps)
             {
+                if (input.TimeLimitMs > 0 && watch.ElapsedMilliseconds > input.TimeLimitMs)
+                    return new ImpactSimResult { TimedOut = true, Steps = steps, Particles = count, Ms = watch.Elapsed.TotalMilliseconds };
+
                 // Where the shell is this step.
                 float speed = 0f;
                 if (shellActive)
@@ -270,25 +275,6 @@ namespace ArmorFragments.Sim
             int brokenLinks = 0;
             for (int slot = 0; slot < rest.Length; slot++) if (rest[slot] < 0f) brokenLinks++;
             result.Broken = brokenLinks / 2;
-            if (Environment.GetEnvironmentVariable("SIMLAB_DEBUG") != null)
-            {
-                int[,] hist = new int[k, 12];
-                int[,] all = new int[k, 12];
-                for (int idx = 0; idx < count; idx++)
-                {
-                    int i = idx % n, j = (idx / n) % n, kk = idx / (n * n);
-                    float x = (i - (n - 1) * 0.5f) * h, y = (j - (n - 1) * 0.5f) * h;
-                    int bin = Math.Min(11, (int)(Math.Sqrt(x * x + y * y) / (radius * 0.4f)));
-                    all[kk, bin]++;
-                    if (charged[idx] != 0) hist[kk, bin]++;
-                }
-                for (int kk = 0; kk < k; kk++)
-                {
-                    string row = "layer " + kk + ": ";
-                    for (int b = 0; b < 12; b++) row += hist[kk, b] + "/" + all[kk, b] + " ";
-                    Console.WriteLine(row + "(rings of " + (radius * 0.4f * 1000f).ToString("F1") + " mm, R=" + (radius * 1000f).ToString("F1") + ")");
-                }
-            }
             result.Ms = watch.Elapsed.TotalMilliseconds;
             return result;
         }
