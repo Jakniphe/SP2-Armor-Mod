@@ -11,6 +11,10 @@ namespace ArmorFragments
         internal static ManualLogSource Log;
         internal static ArmorFragmentsPlugin Instance;
 
+        // Kept so that OnDestroy (Lifecycle.Shutdown) can take back what Awake put in: the Harmony instance and the log listener.
+        internal static Harmony HarmonyInstance;
+        internal static ILogListener MirrorListener;
+
         // These show up in BepInEx/config/com.yourname.armorfragments.cfg
         // after the first run, so you can tune them without rebuilding.
         internal static ConfigEntry<bool> ApplyDamage;
@@ -159,7 +163,9 @@ namespace ArmorFragments
             Log.LogInfo("Armor Fragments " + Version + " loading");
 
             // Keeps this plugin's latest log lines for the in-game panel.
-            BepInEx.Logging.Logger.Listeners.Add(new LogMirror());
+            MirrorListener = new LogMirror();
+            BepInEx.Logging.Logger.Listeners.Add(MirrorListener);
+            Lifecycle.Start();
 
             ApplyDamage = Config.Bind("Fragments", "ApplyDamage", true,
                 "If true, fragments damage the parts they hit.");
@@ -582,9 +588,17 @@ namespace ArmorFragments
                 BlastStrength, BlastType, MaxBlastLb, BlastVisualPercent);
 
             // One patch failing (for example after a game update) must not stop the others.
-            SafePatcher.PatchAll(new Harmony("com.yourname.armorfragments"), typeof(ArmorFragmentsPlugin).Assembly);
+            HarmonyInstance = new Harmony("com.yourname.armorfragments");
+            SafePatcher.PatchAll(HarmonyInstance, typeof(ArmorFragmentsPlugin).Assembly);
             CompatibilityCheck.Run();   // says in the log what a game update has changed
             Log.LogInfo("Armor Fragments loaded!");
+        }
+
+        // The plugin is being destroyed: a reload by the ScriptEngine (the game closing is recognized and left alone).
+        // See Lifecycle for what is undone and in which order.
+        private void OnDestroy()
+        {
+            Lifecycle.Shutdown();
         }
     }
 }
