@@ -502,7 +502,9 @@ __kernel void count_broken(__global const float* rest, __global int* counter, in
         {
             if (particles <= capacity) return;
             Release(ref bP); Release(ref bV); Release(ref bQ); Release(ref bO); Release(ref bRest); Release(ref bRest0); Release(ref bFixed); Release(ref bCharged);
-            capacity = particles;
+            // The biggest simulation the grids allow is 96 x 96 x 14 = 129,024 particles: the first run (the check at the start) makes room for
+            // that, so that a bigger impact later never has to make the card allocate new buffers in the middle of a shot (it took ~200 ms).
+            capacity = Math.Max(particles, 132000);
             bP = Buffer(16L * capacity); bV = Buffer(16L * capacity); bQ = Buffer(16L * capacity); bO = Buffer(16L * capacity);
             bRest = Buffer(4L * 18 * capacity); bRest0 = Buffer(4L * 18 * capacity);
             bFixed = Buffer(capacity); bCharged = Buffer(capacity);
