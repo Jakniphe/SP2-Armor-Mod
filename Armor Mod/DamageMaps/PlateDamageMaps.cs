@@ -339,6 +339,7 @@ namespace ArmorFragments
                 Height = ArmorFragmentsPlugin.DamageMapsRelief.Value != 0,
                 Damage = ArmorFragmentsPlugin.ImpactCameraDamageView.Value,
             };
+            WantGeometry(job, plate);
 
             // A shell's impact is simulated if the setting says so and the simulations are not piling up; the settings are taken
             // here, on the main thread, and travel with the job.
@@ -443,6 +444,8 @@ namespace ArmorFragments
 
             if (++frame % 120 == 0) Prune();
             TickSettings();
+            TickGeometrySettings();
+            TickMeshes();
             TickTest();
         }
 
@@ -450,6 +453,81 @@ namespace ArmorFragments
 
         private static int shownRelief;
         private static bool shownDamageView;
+
+        // Real geometry (experimental): the job also rewrites the plate's mesh, if the setting is on and the plate is a flat rectangle.
+        private static void WantGeometry(DamageWorker.Job job, PlateVisual plate)
+        {
+            if (!ArmorFragmentsPlugin.DamageMapsGeometry.Value || !plate.CanRemesh()) return;
+            job.Geometry = true;
+            job.GridMeters = ArmorFragmentsPlugin.DamageMapsGridMm.Value * 0.001f;
+            job.MaxVertices = ArmorFragmentsPlugin.DamageMapsMaxKiloVertices.Value * 1000;
+        }
+
+        private static readonly List<MeshData> HoldingMeshes = new List<MeshData>();
+        private static bool shownGeometry;
+        private static float shownGrid;
+
+        // What the worker has rewritten goes into the plates' meshes, one at a time and not before the shell's ray has arrived.
+        private static void TickMeshes()
+        {
+            MeshData data;
+            while (DamageWorker.Meshes.TryDequeue(out data)) HoldingMeshes.Add(data);
+            if (HoldingMeshes.Count == 0) return;
+
+            float now = Time.time;
+            for (int i = 0; i < HoldingMeshes.Count; i++)
+            {
+                data = HoldingMeshes[i];
+                if (data.Plate.Owner.Disposed || !ArmorFragmentsPlugin.DamageMapsGeometry.Value) { HoldingMeshes.RemoveAt(i); i--; continue; }
+                if (data.DeliverAt > now) continue;
+
+                HoldingMeshes.RemoveAt(i);
+                try
+                {
+                    double ms = data.Plate.ApplyGeometry(data);
+                    if (data.Plate.GeometryApplied <= 3)
+                        ArmorFragmentsPlugin.Log.LogInfo("[GEOM] plate '" + data.Plate.Info.Part.Part.Name + "': " + data.Columns + " x " + data.Rows +
+                            " cells, " + data.Vertices.Length + " vertices, " + (data.Triangles.Length / 3) + " triangles; built in " +
+                            data.BuildMs.ToString("F1") + " ms (worker), put in the mesh in " + ms.ToString("F1") + " ms");
+                }
+                catch (Exception e)
+                {
+                    ArmorFragmentsPlugin.Log.LogWarning("[GEOM] a plate's mesh could not be rewritten: " + e.Message);
+                }
+                return;   // one a frame
+            }
+        }
+
+        // The geometry setting (or its grid) changed: every damaged plate is rewritten, or given its own mesh back.
+        private static void TickGeometrySettings()
+        {
+            bool on = ArmorFragmentsPlugin.DamageMapsGeometry.Value;
+            float grid = ArmorFragmentsPlugin.DamageMapsGridMm.Value;
+            if (on == shownGeometry && (!on || Mathf.Approximately(grid, shownGrid))) return;
+
+            bool turnedOff = shownGeometry && !on;
+            shownGeometry = on;
+            shownGrid = grid;
+
+            foreach (VehicleMaps maps in Vehicles.Values)
+            {
+                if (maps.Disposed) continue;
+                foreach (PlateVisual plate in maps.Plates.Values)
+                {
+                    if (!plate.Applied || (plate.Cpu.Faces[0] == null && plate.Cpu.Faces[1] == null)) continue;
+                    if (turnedOff) plate.RestoreGeometry();
+
+                    DamageWorker.Job job = new DamageWorker.Job
+                    {
+                        Owner = maps, Plate = plate, Impacts = new PlateImpact[0], DeliverAt = Time.time,
+                        Height = ArmorFragmentsPlugin.DamageMapsRelief.Value != 0, Damage = ArmorFragmentsPlugin.ImpactCameraDamageView.Value,
+                        Everything = turnedOff,   // without geometry the holes need the hole atlas again
+                    };
+                    WantGeometry(job, plate);
+                    DamageWorker.Enqueue(job);
+                }
+            }
+        }
 
         // The vehicle's maps, if it has any (the impact camera's damage view draws from them).
         internal static VehicleMaps MapsFor(AircraftScript aircraft)
@@ -481,11 +559,13 @@ namespace ArmorFragments
                 foreach (PlateVisual plate in maps.Plates.Values)
                 {
                     if (!plate.Applied || (plate.Cpu.Faces[0] == null && plate.Cpu.Faces[1] == null)) continue;
-                    DamageWorker.Enqueue(new DamageWorker.Job
+                    DamageWorker.Job job = new DamageWorker.Job
                     {
                         Owner = maps, Plate = plate, Impacts = new PlateImpact[0], DeliverAt = Time.time,
                         Height = relief != 0, Damage = view, Everything = true,
-                    });
+                    };
+                    WantGeometry(job, plate);
+                    DamageWorker.Enqueue(job);
                 }
             }
         }
@@ -565,6 +645,7 @@ namespace ArmorFragments
             Refused.Clear();
             Pits.Clear();
             Holding.Clear();
+            HoldingMeshes.Clear();
             Message = "Cleared";
         }
 

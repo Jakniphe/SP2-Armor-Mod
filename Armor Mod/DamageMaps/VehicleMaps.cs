@@ -262,7 +262,7 @@ namespace ArmorFragments
             staging.Apply(false, false);
             Graphics.CopyTexture(staging, 0, 0, 0, 0, d.W, d.H, target, 0, 0, d.X, d.Y);
 
-            if (d.Kind == AtlasKind.Hole && d.Plate != null) d.Plate.EnsureLit();
+            if (d.Kind == AtlasKind.Hole && d.Plate != null && !d.Plate.UsesGeometry) d.Plate.EnsureLit();   // real geometry has real holes
             return watch.Elapsed.TotalMilliseconds;
         }
 
@@ -362,6 +362,131 @@ namespace ArmorFragments
         private List<Vector2> originalUv0;
         private List<Vector4> originalTangents;
         private bool wroteMesh;
+
+        // ---- Real geometry (experimental, see PlateMesher) ----
+        public PlateMeshSource Source;   // the mesh as it was, read once on the main thread; Ok says whether it can be rewritten
+        public int PendingJobs;          // jobs for this plate the worker has not finished (it builds the mesh only after the last one)
+        public int GeometryApplied;      // how many times its mesh has been rewritten (for the log)
+
+        private sealed class SavedMesh
+        {
+            public Vector3[] Vertices, Normals;
+            public int[] Triangles;
+            public readonly List<Vector2> Uv0 = new List<Vector2>();
+            public readonly List<Vector4> Uv1 = new List<Vector4>();
+            public readonly List<Vector4> Tangents = new List<Vector4>();
+            public IndexFormat Format;
+            public int Uv1Dimension;
+        }
+        private SavedMesh saved;
+
+        // The plate is drawn with real geometry (setting on and the plate can be rewritten): its holes are missing cells of the
+        // mesh, and its relief is the mesh's own.
+        public bool UsesGeometry
+        {
+            get { return ArmorFragmentsPlugin.DamageMapsGeometry.Value && Source != null && Source.Ok; }
+        }
+
+        // Main thread. Can this plate's mesh be rewritten as real geometry? (Reads the mesh the first time, and logs why not.)
+        public bool CanRemesh()
+        {
+            if (!Applied) return false;
+            if (Source == null)
+            {
+                Source = PlateMeshSource.Read(Info);
+                if (!Source.Ok)
+                    ArmorFragmentsPlugin.Log.LogInfo("[GEOM] plate '" + Info.Part.Part.Name + "' stays flat: " + Source.Why);
+            }
+            return Source.Ok;
+        }
+
+        // Puts a rewritten mesh into the game's own mesh object (so nothing that refers to it is disturbed). The normal map and the
+        // parallax are switched off for this renderer: the geometry carries the relief now. Returns the milliseconds it took.
+        public double ApplyGeometry(MeshData data)
+        {
+            Mesh mesh = Info.Mesh;
+            if (mesh == null || Owner.Disposed || !Applied || Source == null || !Source.Ok) return 0;
+            System.Diagnostics.Stopwatch watch = System.Diagnostics.Stopwatch.StartNew();
+
+            if (saved == null) saved = Save(mesh);
+            mesh.Clear();
+            mesh.indexFormat = data.Vertices.Length > 65000 ? IndexFormat.UInt32 : IndexFormat.UInt16;
+            mesh.SetVertices(data.Vertices);
+            mesh.SetNormals(data.Normals);
+            mesh.SetUVs(0, data.Uv0);
+            if (data.Uv1 != null) SetUv1(mesh, data.Uv1, Source.Uv1Dimension);
+            mesh.SetTriangles(data.Triangles, 0, true);
+            mesh.RecalculateTangents();
+
+            Renderer renderer = Info.Map.Renderer;
+            if (renderer != null)
+            {
+                MaterialPropertyBlock block = new MaterialPropertyBlock();
+                block.SetFloat("_BumpScale", 0f);
+                block.SetFloat("_Parallax", 0f);
+                renderer.SetPropertyBlock(block);
+            }
+            GeometryApplied++;
+            return watch.Elapsed.TotalMilliseconds;
+        }
+
+        // The mesh as the game made it (and then as the maps left it: with the normal map's UV0), so it can be put back.
+        private SavedMesh Save(Mesh mesh)
+        {
+            SavedMesh copy = new SavedMesh
+            {
+                Vertices = mesh.vertices, Normals = mesh.normals, Triangles = mesh.GetTriangles(0), Format = mesh.indexFormat,
+                Uv1Dimension = Source != null ? Source.Uv1Dimension : 0,
+            };
+            mesh.GetUVs(0, copy.Uv0);
+            mesh.GetTangents(copy.Tangents);
+            if (copy.Uv1Dimension > 0) mesh.GetUVs(1, copy.Uv1);
+            return copy;
+        }
+
+        private static void SetUv1(Mesh mesh, Vector4[] values, int dimension)
+        {
+            if (dimension == 2)
+            {
+                Vector2[] two = new Vector2[values.Length];
+                for (int i = 0; i < two.Length; i++) two[i] = values[i];
+                mesh.SetUVs(1, two);
+            }
+            else if (dimension == 3)
+            {
+                Vector3[] three = new Vector3[values.Length];
+                for (int i = 0; i < three.Length; i++) three[i] = values[i];
+                mesh.SetUVs(1, three);
+            }
+            else
+            {
+                mesh.SetUVs(1, values);
+            }
+        }
+
+        // The game's own geometry back (the maps keep working on it).
+        public void RestoreGeometry()
+        {
+            if (saved == null) return;
+            SavedMesh copy = saved;
+            saved = null;
+
+            Mesh mesh = Info.Mesh;
+            if (mesh != null)
+            {
+                mesh.Clear();
+                mesh.indexFormat = copy.Format;
+                mesh.SetVertices(copy.Vertices);
+                mesh.SetNormals(copy.Normals);
+                mesh.SetUVs(0, copy.Uv0);
+                if (copy.Uv1Dimension > 0 && copy.Uv1.Count == copy.Vertices.Length) SetUv1(mesh, copy.Uv1.ToArray(), copy.Uv1Dimension);
+                mesh.SetTriangles(copy.Triangles, 0, true);
+                if (copy.Tangents.Count == copy.Vertices.Length) mesh.SetTangents(copy.Tangents);
+                else mesh.RecalculateTangents();
+            }
+            Renderer renderer = Info.Map != null ? Info.Map.Renderer : null;
+            if (renderer != null) renderer.SetPropertyBlock(null);
+        }
 
         // UV0 into the plate's tiles, tangents, and the vehicle's material.
         public bool TryApply()
@@ -499,6 +624,7 @@ namespace ArmorFragments
             {
                 if (restore && Applied)
                 {
+                    RestoreGeometry();
                     Info.Map.OriginalMaterials = originalMaterials;
                     Info.Map.ExcludeFromMeshCombine = originalExclude;
                     if (Info.Map.Renderer != null) Info.Map.SetRendererMaterial(originalMaterials);
@@ -544,10 +670,16 @@ namespace ArmorFragments
             public bool Height;
             public bool Damage;
             public bool Everything;
+
+            // Real geometry (experimental): after the last queued job for the plate the worker also rewrites its mesh.
+            public bool Geometry;
+            public float GridMeters;
+            public int MaxVertices;
         }
 
         private static readonly BlockingCollection<Job> Jobs = new BlockingCollection<Job>(new ConcurrentQueue<Job>());
         public static readonly ConcurrentQueue<Delivery> Done = new ConcurrentQueue<Delivery>();
+        public static readonly ConcurrentQueue<MeshData> Meshes = new ConcurrentQueue<MeshData>();   // rewritten plate meshes, for the main thread
         public static readonly ConcurrentQueue<string> Messages = new ConcurrentQueue<string>();   // warnings, for the main thread to log
         public static readonly ConcurrentQueue<string> Infos = new ConcurrentQueue<string>();      // information, the same
         private static Thread thread;
@@ -605,6 +737,7 @@ namespace ArmorFragments
                 thread.Start();
             }
             if (job.SimQuality >= 0) Interlocked.Increment(ref pendingSims);
+            if (job.Plate != null) Interlocked.Increment(ref job.Plate.PendingJobs);
             try
             {
                 Jobs.Add(job);
@@ -613,6 +746,7 @@ namespace ArmorFragments
             {
                 // Shutdown closed the queue between the check above and here.
                 if (job.SimQuality >= 0) Interlocked.Decrement(ref pendingSims);
+                if (job.Plate != null) Interlocked.Decrement(ref job.Plate.PendingJobs);
             }
         }
 
@@ -635,6 +769,8 @@ namespace ArmorFragments
 
             Delivery done;
             while (Done.TryDequeue(out done)) { }
+            MeshData rewritten;
+            while (Meshes.TryDequeue(out rewritten)) { }
             string text;
             while (Messages.TryDequeue(out text)) { }
             while (Infos.TryDequeue(out text)) { }
@@ -647,6 +783,7 @@ namespace ArmorFragments
                 if (stopping)
                 {
                     if (job.SimQuality >= 0) Interlocked.Decrement(ref pendingSims);
+                    if (job.Plate != null) Interlocked.Decrement(ref job.Plate.PendingJobs);
                     continue;   // drain what is left without working on it
                 }
 
@@ -665,6 +802,17 @@ namespace ArmorFragments
                     List<Delivery> output = new List<Delivery>();
                     PlateStamps.Flush(job.Plate.Cpu, job.Plate, job.Owner, job.DeliverAt, output, job.Height, job.Damage, job.Everything);
                     foreach (Delivery d in output) Done.Enqueue(d);
+
+                    // Real geometry: the plate's mesh is rewritten once the last job queued for it is done (the later jobs would
+                    // only make this one's work stale).
+                    if (job.Geometry && job.Plate.Source != null && job.Plate.Source.Ok && Volatile.Read(ref job.Plate.PendingJobs) <= 1)
+                    {
+                        MeshData mesh = PlateMesher.Build(job.Plate.Cpu, job.Plate.Info.Geometry, job.Plate.Source, job.Owner,
+                                                          job.GridMeters, job.MaxVertices);
+                        mesh.Plate = job.Plate;
+                        mesh.DeliverAt = job.DeliverAt;
+                        Meshes.Enqueue(mesh);
+                    }
                     LastMs10 = (int)(watch.Elapsed.TotalMilliseconds * 10.0);
                 }
                 catch (Exception e)
@@ -674,6 +822,7 @@ namespace ArmorFragments
                 finally
                 {
                     if (job.SimQuality >= 0) Interlocked.Decrement(ref pendingSims);
+                    if (job.Plate != null) Interlocked.Decrement(ref job.Plate.PendingJobs);
                 }
             }
         }

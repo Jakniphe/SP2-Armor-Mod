@@ -50,6 +50,9 @@ namespace ArmorFragments
         internal static ConfigEntry<bool> ImpactCameraXRay;
         internal static ConfigEntry<bool> ImpactCameraDamageView;   // local: the damage map drawn over the plates in the impact camera
         internal static ConfigEntry<int> DamageMapsRelief;           // local: 0 normal map, 1 bump (height) map, 2 both
+        internal static ConfigEntry<bool> DamageMapsGeometry;        // local, experimental: marked flat plates are rewritten as real geometry
+        internal static ConfigEntry<float> DamageMapsGridMm;         // local: that geometry's cell size
+        internal static ConfigEntry<int> DamageMapsMaxKiloVertices;  // local: the most vertices one plate's geometry may have (thousands)
         internal static ConfigEntry<int> ImpactCameraGhostLayer;
 
         // Shot simulation and X-ray view.
@@ -387,6 +390,17 @@ namespace ArmorFragments
                     "How a mark's relief is shown on the plate: 0 = the normal map (as before), 1 = the bump (height) map, which the " +
                     "shader's parallax reads and which moves the surface itself, 2 = both together.",
                     new AcceptableValueRange<int>(0, 2)));
+            DamageMapsGeometry = Config.Bind("DamageMaps", "RealGeometry", false,
+                "EXPERIMENTAL. A flat rectangular armor plate that has been marked is rewritten as real geometry: a fine grid pushed in or " +
+                "out by the damage, and a hole is cells that are not there. Keeps the plate's own paint, texture and decals (a hole " +
+                "needs no other material). Plates that are thick, curved or not rectangular keep the maps. The normal and bump maps " +
+                "are switched off on a plate that has it.");
+            DamageMapsGridMm = Config.Bind("DamageMaps", "GridMillimeters", 8f,
+                new ConfigDescription("Cell size of the real geometry's grid, in millimeters. Smaller = finer, more vertices.",
+                    new AcceptableValueRange<float>(2f, 40f)));
+            DamageMapsMaxKiloVertices = Config.Bind("DamageMaps", "MaxKiloVertices", 120,
+                new ConfigDescription("Most vertices (in thousands) one plate's real geometry may have; a bigger plate gets a coarser grid.",
+                    new AcceptableValueRange<int>(10, 500)));
             DamageMapsHoleBothSides = Config.Bind("DamageMaps", "HoleBothSides", true,
                 "A plate with a hole is drawn on both sides (shows the inside of the plate through the hole). Off = back faces are not drawn.");
             SimQuality = Config.Bind("DamageMaps", "SimQuality", 2,
