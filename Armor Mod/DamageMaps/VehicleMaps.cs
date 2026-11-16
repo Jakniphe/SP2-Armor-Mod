@@ -611,15 +611,21 @@ namespace ArmorFragments
                 SimPool simPool = EnsurePool(job.Threads);
                 ImpactSimInput input = SimBridge.InputFor(impact, quality, job.TimeLimitMs, job.ResistanceJPerM3);
                 input.Cancelled = StopRequested;
+
+                // The quality is the finest grid the simulation may use. A thick plate or a big shell on a fine grid would run past the
+                // time limit (and give nothing), so the grid is the finest one whose predicted time fits the budget.
+                string grid;
+                input.Columns = ChooseColumns(impact, input, quality, out grid);
                 ImpactSimResult result = ImpactSim.Run(input, simPool);
                 if (stopping) return false;   // cut short by Shutdown: not a slow run, nothing to tune or report
+                LearnCost(impact, input, result);
 
                 LastSimMs = (int)result.Ms;
                 LastSimQuality = quality;
                 LastSimThreads = Math.Min(simPool.Workers, simPool.MaxWorkers) + 1;
                 Tune(job, result);
 
-                string what = "[SIMFX] " + impact.Kind + ", quality " + new[] { "low", "medium", "high" }[quality] + ", " + result.Particles +
+                string what = "[SIMFX] " + impact.Kind + ", quality " + new[] { "low", "medium", "high" }[quality] + grid + ", " + result.Particles +
                               " particles, " + result.Steps + " steps, " + result.Ms.ToString("F0") + " ms on " + LastSimThreads + " thread(s)";
                 if (result.TimedOut)
                 {
@@ -647,6 +653,57 @@ namespace ArmorFragments
                 Messages.Enqueue("[SIMFX] the simulation failed, the quick marks are used: " + e.Message);
                 return false;
             }
+        }
+
+        // ---- Choosing the grid ---------------------------------------------------------------------
+        //
+        // A run costs about  c x columns^3 x layers  milliseconds: the lattice has columns^2 x layers particles and the shell takes
+        // a number of steps that grows with the columns (a step is a fixed fraction of a cell). 'c' depends on the machine and on the
+        // outcome (a shell that goes through takes more steps than one that is stopped), so it is learned from the runs themselves,
+        // one value per kind of impact. The first guesses come from the first real runs in the game (Mono, 14 threads).
+        private const double BudgetShare = 0.45;                // of the time limit: a mark that comes later than this is too late to matter
+        private static readonly int[] Ladder = { 96, 80, 64, 56, 48, 40, 32 };
+        private static readonly double[] CostPerUnit = { 2.0e-3, 1.4e-3, 2.1e-3 };   // ms per (columns^3 x layers): ricochet, blocked, penetrated
+
+        private static int CostClass(DamageKind kind)
+        {
+            return kind == DamageKind.Penetrated ? 2 : kind == DamageKind.Blocked ? 1 : 0;
+        }
+
+        private static double Units(ImpactSimInput input, int columns)
+        {
+            return (double)columns * columns * columns * ImpactSim.LayersFor(input.CaliberM, input.ThicknessM, columns);
+        }
+
+        // The finest grid (not above the quality's own) whose predicted time fits the budget; the coarsest one if none does.
+        private static int ChooseColumns(PlateImpact impact, ImpactSimInput input, int quality, out string note)
+        {
+            int wanted = ImpactSim.ColumnsOfQuality(quality);
+            note = "";
+            if (input.TimeLimitMs <= 0) return wanted;   // no limit: nothing to fit
+
+            double budget = input.TimeLimitMs * BudgetShare;
+            double cost = CostPerUnit[CostClass(impact.Kind)];
+            int chosen = Ladder[Ladder.Length - 1];
+            foreach (int columns in Ladder)
+            {
+                if (columns > wanted) continue;
+                chosen = columns;
+                if (Units(input, columns) * cost <= budget) break;
+            }
+            if (chosen < wanted)
+                note = " (a " + chosen + "x" + chosen + " grid: " + wanted + "x" + wanted + " would take about " +
+                       (Units(input, wanted) * cost / 1000.0).ToString("F1") + " s)";
+            return chosen;
+        }
+
+        // What the run really cost, per unit. A run that was stopped by the time limit only says it cost AT LEAST this much.
+        private static void LearnCost(PlateImpact impact, ImpactSimInput input, ImpactSimResult result)
+        {
+            int index = CostClass(impact.Kind);
+            double observed = result.Ms / Math.Max(Units(input, input.Columns), 1.0);
+            double known = CostPerUnit[index];
+            CostPerUnit[index] = result.TimedOut ? Math.Max(known, observed * 1.2) : Math.Max(0.5 * known + 0.5 * observed, 2e-4);
         }
 
         // The simulation gives itself the best quality the time limit allows: a run that took most of the limit lowers it,

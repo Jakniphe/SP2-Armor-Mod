@@ -18,6 +18,7 @@ namespace ArmorFragments.Sim
         public float KeptEnergy;       // ricochet: the share of its energy the shell keeps
         public float EnergyScale;      // 1 = the shell's real energy (a lab knob)
         public int Quality;            // 0 low, 1 medium, 2 high
+        public int Columns;            // the grid's columns per side; 0 = the quality's own (40, 64 or 96). The game picks a smaller one when the quality's would take too long
         public int Seed;
         public int TimeLimitMs;        // give up after this long (0 = no limit)
         public Func<bool> Cancelled;   // asked once a step: true = stop now (the result then says TimedOut). Null = never
@@ -99,6 +100,22 @@ namespace ArmorFragments.Sim
             return sim.Execute(input, pool);
         }
 
+        // The columns per side of a quality's own grid.
+        public static int ColumnsOfQuality(int quality)
+        {
+            return quality <= 0 ? 40 : (quality == 1 ? 64 : 96);
+        }
+
+        // How many layers deep the lattice is for a shell of this caliber and a plate of this thickness, on a grid of 'columns'.
+        // (The cost of a run grows with columns^2 x layers x the steps it takes, and the steps grow with the columns too.)
+        public static int LayersFor(float caliberM, float thicknessM, int columns)
+        {
+            float r = Math.Max(caliberM * 0.5f, 0.002f);
+            float thickness = Math.Max(thicknessM, 0.002f);
+            float cell = Math.Max(r * 2f * 7f, 0.1f) / columns;
+            return Math.Max(2, Math.Min(14, (int)MathF.Round(thickness / cell)));
+        }
+
         private ImpactSimResult Execute(ImpactSimInput input, SimPool pool)
         {
             System.Diagnostics.Stopwatch watch = System.Diagnostics.Stopwatch.StartNew();
@@ -106,10 +123,10 @@ namespace ArmorFragments.Sim
             // ---- The patch --------------------------------------------------------------------
             radius = Math.Max(input.CaliberM * 0.5f, 0.002f);
             t = Math.Max(input.ThicknessM, 0.002f);
-            n = input.Quality <= 0 ? 40 : (input.Quality == 1 ? 64 : 96);
+            n = input.Columns >= 16 ? input.Columns : ColumnsOfQuality(input.Quality);
             size = Math.Max(radius * 2f * 7f, 0.1f);
             h = size / n;
-            k = Math.Max(2, Math.Min(14, (int)MathF.Round(t / h)));
+            k = LayersFor(input.CaliberM, input.ThicknessM, n);
             hz = t / k;
             count = n * n * k;
             particleRadius = 0.35f * Math.Min(h, hz);
