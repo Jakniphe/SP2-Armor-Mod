@@ -359,7 +359,7 @@ Armadura por face (Jakniphe, branch `face-armor`). Resumo para o jogador: `PATCH
 ## v0.9.0.1
 Painel da armadura: o peso por face ganha uma linha por face (Front, Back, Left, Right, Top, Bottom; "open" para face aberta) abaixo de "Armor weight", em vez de uma linha só.
 
-## v0.9.1.1 (versão atual)
+## v0.9.1.1
 Correções e acréscimos na armadura por face (Jakniphe, branch `armor-fixes`).
 - **Faces:** `ArmorFaces.Classify` escolhe, para cada pedaço da superfície, a face cuja direção para fora (paredes laterais inclinadas pelo afunilamento e pelo trapézio, pontas ao longo do bloco) é a mais próxima da normal. Uma superfície fatiada ou cortada é uma face só em toda a largura; ponta cortada continua ponta até 45°.
 - **Superfície do bloco (`ArmorSurface.cs`):** só a malha do casco (`JFuselageScript._renderer`), nunca decalques ou textos. Furos de peças de corte (carving) ficam abertos: as paredes do furo não são face (no designer pela camada de pintura ≥ 5 dos submeshes; em voo, onde a malha é uma peça só, por olharem para dentro dos colisores convexos), e onde uma linha cruza o colisor sem superfície visível o furo é aberto (`SurfaceAt`, só em blocos com cortadores). Usado pela cor das faces, pelo peso, pelos raios (`Boundaries`) e pelo primeiro contato (`CannonHitPatch`, `HostResolver`).
@@ -368,3 +368,7 @@ Correções e acréscimos na armadura por face (Jakniphe, branch `armor-fixes`).
 - **Designer:** azul mais forte, a cor segue a camada atual do bloco (arrastado) e "Per face" fica como estava ao trocar de bloco.
 - **Diagnóstico de morte (`KillDiagnostics.cs`):** só log. Quando o próprio jogo mata um veículo (`AircraftScript.MarkAsCriticallyDamaged` fora do `VehicleRules.Kill`), registra peças ligadas ao cockpit e área de asa contra o início, o limite (70%), se é blindado, as peças desligadas e de onde veio a chamada. O jogo checa isso a cada reconstrução da estrutura (depois de uma explosão que alcance o veículo ou de uma junta quebrar), mesmo com as explosões de dano desligadas.
 - **Cor das faces:** só desenhada no designer, nunca durante um voo, e só com o bloco visível.
+
+## v0.9.2 (versão atual)
+Encaixe dos projéteis no porta-munição (Jakniphe, branch `rack-packing`).
+- **`RackGrid.Search`:** o rack testa várias disposições e fica com a que guarda mais projéteis: 9 direções (ao longo da fuselagem, atravessado, em pé e as 6 diagonais de 45° entre elas) × grade alinhada ou girada 45° em volta dos projéteis × fileiras retas ou intercaladas (cada camada meia distância deslocada, camadas a √3/2 da distância), centralizadas; depois as duas melhores em todos os deslocamentos (centro, encostada, encostada + meia distância). A disposição antiga (ao longo, reta, centralizada) é testada primeiro e só é trocada por uma que guarde mais: nenhum rack perde projéteis. A escolhida fica em cache por forma e projétil (`LayoutCache`). Os projéteis continuam todos apontando para o mesmo lado. Retirada: do mais alto para o mais baixo. Com colisores (sem malha) só a disposição antiga. O painel do rack mostra a disposição na linha "Layout".

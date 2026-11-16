@@ -45,16 +45,28 @@ Changed: `FragmentSpawner.cs`, `ShellFlight.cs`, `Net/NetSync.cs`, `PartTags.cs`
   nothing.
 
 ## Shape and packing (`RackGrid`)
-- Frame: Z along the fuselage (`JFuselageData` offset), X/Y across; rounds lie along Z.
-- Measured from the render mesh (`XRayView.GhostSources`; designer colliders are bounding boxes): sliced along Z
-  (~1 cm, at most 1500 cuts), 5 scanlines per round circle, inside test by nonzero winding from both sides.
-  Collider fallback.
-- Across: a grid with pitch = diameter x (1 + `RoundSpacingPercent`/100). Each (column, layer) row holds as many
-  whole rounds end to end as fit its own length.
-- Removal order: top layer first, then left to right, then front to back.
+- Frame: Z = the direction the rounds lie in, X/Y across. The part's own axes: L along the fuselage
+  (`JFuselageData` offset), A across, U up.
+- Measured from the render mesh (`XRayView.GhostSources`; designer colliders are bounding boxes), kept in the part's
+  rotation and turned into each layout's frame: sliced along Z (~1 cm, at most 1500 cuts), 5 lines per round
+  circle, inside test by nonzero winding from both sides; the cut's segments are binned by height so a line only
+  reads its own band.
+- Across: a grid with pitch = diameter x (1 + `RoundSpacingPercent`/100): square, or staggered (odd layers shifted
+  half a pitch, layers pitch x sqrt(3)/2 apart). Each (column, layer) row holds as many whole rounds end to end as
+  fit its own length.
+- Layout search (`Search`, mesh only): 9 directions (L, A, U and the six 45-degree diagonals between them) x the
+  cross grid square or turned 45 degrees about Z x square or staggered, centered: 36 layouts; then the two best at
+  every shift (X and Y each centered, flush low, or flush plus half a pitch). A layout replaces the best only with
+  more rounds, and the lengthwise square centered one is tried first, so no rack holds fewer than before. A layout
+  whose box grid can't beat the best is skipped. The winner is cached per shape (vertex count, bounds, vertex sum
+  to the mm, L) and round (diameter, length, pitch) in `LayoutCache`, so later measures are one fill. The collider
+  fallback uses the lengthwise square centered layout only.
+- `WorldCenter`: the middle of the part's shape in its own axes, whatever the layout.
+- Removal order: highest first (height in the part, to the mm), then by X, then by Z.
 - `HitsRounds(transform, point, direction, thickness)`: the line through the point (both ways) is clipped to the
   rounds' box and sampled; `RoundAt` finds a present round within radius x 1.0488 + thickness, searching
-  neighboring columns and layers. Shells pass half their caliber (a tube); fragments pass 0.
+  neighboring layers and, per layer (with its stagger shift), columns. Shells pass half their caliber (a tube);
+  fragments pass 0.
 - `DebugDumpShape` writes the measured shape and rounds to `BepInEx/ammo-rack-shape.obj`.
 
 ## Feeding and weight

@@ -54,6 +54,9 @@ Weight
 
 Ammo racks are fuselages that hold a cannon's ammunition. When hit through their rounds they can catch fire and explode inside the vehicle, killing it without blowing the hull apart.
 
+0.9.2
+- Racks pack their rounds in whichever layout holds the most: lying along the fuselage, across it, upright, or on a 45-degree diagonal; in square or staggered rows (each row nested into the gaps of the one below); centered or shifted. The rounds still all point the same way. A rack never holds fewer rounds than before. The rack's panel shows the layout it picked.
+
 0.8.1
 - Cannons pick their own ammo racks with "Add rack" and "Remove rack". Cannons of different sizes each draw from their own racks, instead of every cannon sharing every rack.
 - With no rack picked, a cannon uses its Ammo Count slider.
@@ -64,7 +67,7 @@ Ammo racks are fuselages that hold a cannon's ammunition. When hit through their
 
 Setting up
 - Turn on "Ammo rack" on a fuselage (`[AMM]`) and "Cannon" on the gun (`[CAN]`). On the cannon, "Add rack" opens the game's part picker: click the racks it draws from (as a wheel picks its engine). A cannon can draw from several racks, and cannons that fire the same round can share one. With no rack picked, the cannon keeps its Ammo Count slider.
-- A rack holds whole rounds sized from the cannons that draw from it, packed into the fuselage's real shape. It weighs its rounds and empties from the top layer down. A cannon empties its racks in the "Empty order" set on each rack (`o=`).
+- A rack holds whole rounds sized from the cannons that draw from it, packed into the fuselage's real shape. It weighs its rounds and empties from the top down. A cannon empties its racks in the "Empty order" set on each rack (`o=`).
 - Mark a fuselage at the turret ring or a hatch as a "Cook-off vent" (`[VNT]`).
 
 Cook-off

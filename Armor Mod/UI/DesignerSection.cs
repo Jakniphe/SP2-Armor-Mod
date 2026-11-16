@@ -545,7 +545,7 @@ namespace ArmorFragments.UI
                 measured && mixed ? "OK (mixed: biggest round)" : grid.Status,
                 feeds,
                 grid.Capacity.ToString(CultureInfo.InvariantCulture),
-                hasGrid ? "up to " + grid.Slots + " long x " + grid.Columns + " wide x " + grid.Layers + " high" : "-",
+                hasGrid ? grid.Orientation + ", up to " + grid.Slots + " x " + grid.Columns + " x " + grid.Layers : "-",
                 grid.LostToShape.ToString(CultureInfo.InvariantCulture),
                 grid.InsideLength > 0f ? Cm(grid.InsideLength) + " x " + Cm(grid.InsideWidth) + " x " + Cm(grid.InsideHeight) + " cm" : "-",
                 round.ShortSize(),
