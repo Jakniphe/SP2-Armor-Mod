@@ -20,6 +20,7 @@ namespace ArmorFragments.Sim
         public int Quality;            // 0 low, 1 medium, 2 high
         public int Seed;
         public int TimeLimitMs;        // give up after this long (0 = no limit)
+        public Func<bool> Cancelled;   // asked once a step: true = stop now (the result then says TimedOut). Null = never
     }
 
     internal sealed class ImpactSimResult
@@ -169,7 +170,8 @@ namespace ArmorFragments.Sim
 
             while (steps < MaxActive + SettleSteps)
             {
-                if (input.TimeLimitMs > 0 && watch.ElapsedMilliseconds > input.TimeLimitMs)
+                if ((input.TimeLimitMs > 0 && watch.ElapsedMilliseconds > input.TimeLimitMs) ||
+                    (input.Cancelled != null && input.Cancelled()))
                     return new ImpactSimResult { TimedOut = true, Steps = steps, Particles = count, Ms = watch.Elapsed.TotalMilliseconds };
 
                 // Where the shell is this step.

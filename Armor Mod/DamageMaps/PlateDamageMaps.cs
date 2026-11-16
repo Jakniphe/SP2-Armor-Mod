@@ -521,6 +521,18 @@ namespace ArmorFragments
             Message = "Cleared";
         }
 
+        // The plugin is being unloaded: the plates look as the game made them, the worker thread and the simulation's threads stop
+        // (without waiting for them) and every texture is freed. The model's holes and dents are forgotten with the rest.
+        public static void Shutdown()
+        {
+            Clear();                     // restores every plate and frees the atlases
+            DamageWorker.Shutdown();
+            VehicleMaps.ReleaseStaging();
+            Infos.Clear();
+            NoInfo.Clear();
+            testPending = false;
+        }
+
         // ---- Test impacts (panel) ----------------------------------------------------------------
 
         private static bool testPending;

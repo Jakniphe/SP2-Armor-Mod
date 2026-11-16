@@ -212,6 +212,15 @@ namespace ArmorFragments
             return texture;
         }
 
+        // The plugin is being unloaded: the staging textures are shared by every vehicle, so they are freed here, not in Dispose.
+        public static void ReleaseStaging()
+        {
+            foreach (Texture2D texture in StagingTextures.Values)
+                if (texture != null) UnityEngine.Object.Destroy(texture);
+            StagingTextures.Clear();
+            PaddedBuffers.Clear();
+        }
+
         // The staging texture takes a whole texture's worth of bytes, of exactly its size (one buffer per size, reused).
         private static byte[] Padded(int bucket, bool alpha, int length)
         {
@@ -483,6 +492,10 @@ namespace ArmorFragments
         private static volatile int allowedWorkers = int.MaxValue;
         private static int goodRuns;
 
+        // Set by Shutdown (the plugin is being unloaded): no new job is taken, a simulation that is running stops at its next step.
+        private static volatile bool stopping;
+        private static readonly object PoolGate = new object();
+
         public static int Pending
         {
             get { return Jobs.Count; }
@@ -509,27 +522,69 @@ namespace ArmorFragments
 
         public static void Enqueue(Job job)
         {
+            if (stopping) return;   // unloading: nobody will take it
             if (thread == null)
             {
                 thread = new Thread(Run) { IsBackground = true, Name = "ArmorFragments damage maps", Priority = System.Threading.ThreadPriority.BelowNormal };
                 thread.Start();
             }
             if (job.SimQuality >= 0) Interlocked.Increment(ref pendingSims);
-            Jobs.Add(job);
+            try
+            {
+                Jobs.Add(job);
+            }
+            catch (InvalidOperationException)
+            {
+                // Shutdown closed the queue between the check above and here.
+                if (job.SimQuality >= 0) Interlocked.Decrement(ref pendingSims);
+            }
+        }
+
+        // The plugin is being unloaded: stop the worker thread and the simulation's threads without waiting for them (a simulation can
+        // take seconds, and this is called from the game's main thread). The queue is closed (no new job; the thread ends when it has
+        // looked at what is left, which it now skips), a simulation in progress stops at its next step, and the pool's threads leave.
+        // Nothing here touches a Unity object.
+        public static void Shutdown()
+        {
+            stopping = true;
+            try { Jobs.CompleteAdding(); }
+            catch (ObjectDisposedException) { }
+
+            lock (PoolGate)
+            {
+                if (pool != null) pool.Dispose();
+                pool = null;
+                poolWorkers = -1;
+            }
+
+            Delivery done;
+            while (Done.TryDequeue(out done)) { }
+            string text;
+            while (Messages.TryDequeue(out text)) { }
+            while (Infos.TryDequeue(out text)) { }
         }
 
         private static void Run()
         {
             foreach (Job job in Jobs.GetConsumingEnumerable())
             {
+                if (stopping)
+                {
+                    if (job.SimQuality >= 0) Interlocked.Decrement(ref pendingSims);
+                    continue;   // drain what is left without working on it
+                }
+
                 try
                 {
                     System.Diagnostics.Stopwatch watch = System.Diagnostics.Stopwatch.StartNew();
                     foreach (PlateImpact impact in job.Impacts)
                     {
+                        if (stopping) break;
                         if (job.SimQuality >= 0 && SimBridge.Wants(impact) && TrySimulate(job, impact)) continue;
+                        if (stopping) break;   // the simulation was cut short by Shutdown
                         PlateStamps.Apply(job.Plate.Cpu, impact);
                     }
+                    if (stopping) continue;    // nobody is left to take what this job makes
 
                     List<Delivery> output = new List<Delivery>();
                     PlateStamps.Flush(job.Plate.Cpu, job.Plate, job.Owner, job.DeliverAt, output);
@@ -555,7 +610,9 @@ namespace ArmorFragments
                 int quality = job.AutoQuality ? Math.Min(job.SimQuality, TunedQuality) : job.SimQuality;
                 SimPool simPool = EnsurePool(job.Threads);
                 ImpactSimInput input = SimBridge.InputFor(impact, quality, job.TimeLimitMs, job.ResistanceJPerM3);
+                input.Cancelled = StopRequested;
                 ImpactSimResult result = ImpactSim.Run(input, simPool);
+                if (stopping) return false;   // cut short by Shutdown: not a slow run, nothing to tune or report
 
                 LastSimMs = (int)result.Ms;
                 LastSimQuality = quality;
@@ -613,18 +670,28 @@ namespace ArmorFragments
             else goodRuns = 0;
         }
 
+        private static bool StopRequested()
+        {
+            return stopping;
+        }
+
         private static SimPool EnsurePool(int threads)
         {
             int workers = ConfiguredWorkers(threads);
-            if (pool == null || poolWorkers != workers)
+            lock (PoolGate)
             {
-                if (pool != null) pool.Dispose();
-                pool = new SimPool(workers);
-                poolWorkers = workers;
-                Infos.Enqueue("[SIMFX] simulation threads: " + (workers + 1) + " (" + Environment.ProcessorCount + " cores)");
+                if (pool == null || poolWorkers != workers)
+                {
+                    if (pool != null) pool.Dispose();
+                    pool = new SimPool(workers);
+                    poolWorkers = workers;
+                    Infos.Enqueue("[SIMFX] simulation threads: " + (workers + 1) + " (" + Environment.ProcessorCount + " cores)");
+                }
+                pool.MaxWorkers = Math.Min(workers, allowedWorkers);
+                // Shutdown ran while this job was starting: the pool just made must not outlive it.
+                if (stopping) pool.Dispose();
+                return pool;
             }
-            pool.MaxWorkers = Math.Min(workers, allowedWorkers);
-            return pool;
         }
     }
 }
