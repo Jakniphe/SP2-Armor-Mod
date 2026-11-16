@@ -124,12 +124,11 @@ namespace ArmorFragments
             Window(e.Start - 3 * perSecond, e.Start, out before, out beforeAverage, out beforeWorst);
 
             string focus = Application.isFocused ? "game window in focus" : "game window NOT in focus (frame times mean little)";
-            long managed = System.GC.GetTotalMemory(false) / (1024 * 1024);                                   // the C# heap
-            long unity = UnityEngine.Profiling.Profiler.GetTotalAllocatedMemoryLong() / (1024 * 1024);        // Unity's own allocations (meshes, textures...)
+            long managed = System.GC.GetTotalMemory(false) / (1024 * 1024);   // the C# heap (cheap; Unity's own profiler counters cost hundreds of ms)
             ArmorFragmentsPlugin.Log.LogInfo("[PERF] a simulation of " + e.Particles + " particles on " + (e.Gpu ? "the graphics card" : "the CPU") + " took " +
                 e.Ms.ToString("F0") + " ms; frames during it: " + during + ", average " + (duringAverage * 1000f).ToString("F1") + " ms, worst " +
                 (duringWorst * 1000f).ToString("F1") + " ms; the 3 s before it: " + before + " frames, average " + (beforeAverage * 1000f).ToString("F1") +
-                " ms, worst " + (beforeWorst * 1000f).ToString("F1") + " ms; " + focus + "; C# heap " + managed + " MB, Unity allocated " + unity + " MB");
+                " ms, worst " + (beforeWorst * 1000f).ToString("F1") + " ms; " + focus + "; C# heap " + managed + " MB");
         }
     }
 }

@@ -556,6 +556,7 @@ namespace ArmorFragments
         // UV0 into the plate's tiles, tangents, and the vehicle's material.
         public bool TryApply()
         {
+            System.Diagnostics.Stopwatch setupWatch = System.Diagnostics.Stopwatch.StartNew();
             PartMaterialScript.RendererMaterialMap map = Info.Map;
             Renderer renderer = map.Renderer;
             if (renderer == null || !renderer.enabled)
@@ -589,6 +590,9 @@ namespace ArmorFragments
             SetMaterial(clone);
             map.ExcludeFromMeshCombine = true;
             Applied = true;
+            double setupMs = setupWatch.Elapsed.TotalMilliseconds;
+            if (setupMs > 8.0)
+                ArmorFragmentsPlugin.Log.LogInfo("[PERF] first use of plate '" + Info.Part.Part.Name + "' took " + setupMs.ToString("F1") + " ms (" + mesh.vertexCount + " vertices)");
             return true;
         }
 

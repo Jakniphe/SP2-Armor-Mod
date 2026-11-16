@@ -423,15 +423,29 @@ namespace ArmorFragments
             while (DamageWorker.Messages.TryDequeue(out message)) ArmorFragmentsPlugin.Log.LogWarning(message);
             while (DamageWorker.Infos.TryDequeue(out message)) ArmorFragmentsPlugin.Log.LogInfo(message);
             ShedLoad();
+            PerfMonitor.Lap("DMAP messages");
 
-            // The fragment marks of the frame go to the worker.
+            // The fragment marks go to the worker. A plate's first mark makes its setup (its mesh gets the atlas UVs and tangents, which can
+            // take milliseconds on a big mesh), so a burst that reaches dozens of plates at once would be one very long frame: at most
+            // MaxSetupsPerFrame plates are set up a frame, and the marks of the others wait for the next frames.
             if (Pits.Count > 0)
             {
+                int setups = 0;
+                List<PartScript> shown = null;
                 foreach (KeyValuePair<PartScript, PitBuffer> pair in Pits)
-                    if (pair.Key != null && pair.Value.Impacts.Count > 0)
-                        Show(pair.Key, pair.Value.Impacts.ToArray(), pair.Value.Delay);
-                Pits.Clear();
+                {
+                    if (pair.Key == null || pair.Value.Impacts.Count == 0) { (shown ?? (shown = new List<PartScript>())).Add(pair.Key); continue; }
+                    if (NeedsSetup(pair.Key))
+                    {
+                        if (setups >= MaxSetupsPerFrame) continue;   // the next frame
+                        setups++;
+                    }
+                    Show(pair.Key, pair.Value.Impacts.ToArray(), pair.Value.Delay);
+                    (shown ?? (shown = new List<PartScript>())).Add(pair.Key);
+                }
+                if (shown != null) foreach (PartScript part in shown) Pits.Remove(part);
             }
+            PerfMonitor.Lap("DMAP pits");
 
             // What the worker has finished goes into the atlases, a few rectangles a frame (and not before the shell's
             // ray has arrived), never more than a couple of milliseconds.
@@ -462,12 +476,25 @@ namespace ArmorFragments
                 }
             }
 
+            PerfMonitor.Lap("DMAP deliver");
             if (++frame % 120 == 0) Prune();
             TickSettings();
             TickGeometrySettings();
             TickMeshes();
             GeometryView.Tick(Vehicles.Values);
             TickTest();
+        }
+
+        private const int MaxSetupsPerFrame = 2;
+
+        // Would marking this plate now have to set it up first (make the vehicle's maps, or the plate's own mesh and material)?
+        private static bool NeedsSetup(PartScript part)
+        {
+            if (part.Aircraft == null) return false;
+            VehicleMaps maps;
+            if (!Vehicles.TryGetValue(part.Aircraft, out maps)) return !Refused.Contains(part.Aircraft);
+            PlateVisual plate;
+            return maps.Plates.TryGetValue(part, out plate) && !plate.Applied && !plate.Failed;
         }
 
         // ---- Settings that change what is drawn ---------------------------------------------------
