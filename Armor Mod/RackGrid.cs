@@ -135,7 +135,7 @@ namespace ArmorFragments
             }
             if (fuselage == null) return Fail("Not a fuselage", "only fuselages can be ammo racks");
             if (fuselage.IsHollow) return Fail("Hollow: holds nothing", "hollow fuselages can't hold rounds");
-            if (IsCut(fuselage)) return Fail("Cut: holds nothing", "cut fuselages can't hold rounds");
+            // A cut fuselage is packed to its cut shape, like any other: the mesh below is the block as drawn.
             if (round.Diameter <= 0f || round.Length <= 0f)
                 return Fail("No cannon draws from it", "no cannon draws from this rack");
 
@@ -771,18 +771,6 @@ namespace ArmorFragments
         {
             Status = status;
             return problem;
-        }
-
-        private static bool IsCut(JFuselageData fuselage)
-        {
-            for (int i = 0; i < fuselage.NumSlices; i++)
-            {
-                JFuselageData.CuttingParams cut = fuselage.GetCutting(i);
-                if ((cut.x.HasValue && cut.x.Value != 0m) || (cut.y.HasValue && cut.y.Value != 0m) ||
-                    (cut.z.HasValue && cut.z.Value != 0m) || (cut.w.HasValue && cut.w.Value != 0m))
-                    return true;
-            }
-            return false;
         }
 
         // The part's own solid colliders (the same ones the fragments hit).

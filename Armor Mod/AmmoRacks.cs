@@ -133,7 +133,8 @@ namespace ArmorFragments
             public readonly List<Group> Groups = new List<Group>();
             public readonly List<Feed> Feeds = new List<Feed>();
             public bool Measured;
-            public float GiveUpMeasuringAt;
+            public float GiveUpMeasuringAt;   // real time (Time.realtimeSinceStartup): the game may run faster or slower
+            public float NextLateMeasure;     // real time: racks whose mesh came late are measured again
         }
 
         private static readonly Dictionary<AircraftScript, Craft> Crafts = new Dictionary<AircraftScript, Craft>();
@@ -216,7 +217,7 @@ namespace ArmorFragments
 
         private static Craft Build(AircraftScript aircraft)
         {
-            Craft craft = new Craft { Aircraft = aircraft, GiveUpMeasuringAt = Time.time + 5f };
+            Craft craft = new Craft { Aircraft = aircraft, GiveUpMeasuringAt = Time.realtimeSinceStartup + 10f };
             Dictionary<string, Group> byName = new Dictionary<string, Group>();
             Dictionary<int, Rack> byId = new Dictionary<int, Rack>();
             List<KeyValuePair<PartData, PartTags>> cannons = new List<KeyValuePair<PartData, PartTags>>();
@@ -356,6 +357,7 @@ namespace ArmorFragments
                 {
                     Craft craft = pair.Value;
                     if (!craft.Measured && !TryMeasure(craft)) continue;
+                    MeasureLate(craft);
                     foreach (Rack rack in craft.Racks) Update(rack);
                     SyncCannons(craft);
                     foreach (Group group in craft.Groups) UpdateVariables(group);
@@ -425,6 +427,35 @@ namespace ArmorFragments
                 if (feed.Cannon != null) CurrentAmmo(feed.Cannon) = feed.Available;
         }
 
+        // A rack whose mesh and colliders weren't built yet when the wait ran out (the game builds fuselage meshes after
+        // the craft appears, sometimes much later) is measured again once a (real) second until it has a shape; then it
+        // fills and the cannons drawing from it get its rounds.
+        private static void MeasureLate(Craft craft)
+        {
+            if (Time.realtimeSinceStartup < craft.NextLateMeasure) return;
+            craft.NextLateMeasure = Time.realtimeSinceStartup + 1f;
+
+            bool changed = false;
+            foreach (Rack rack in craft.Racks)
+            {
+                if (rack.Grid == null || rack.Grid.Problem != RackGrid.NoColliders) continue;
+                if (rack.Part == null || rack.Burning || rack.Exploded) continue;
+                RackGrid grid = RackGrid.Measure(rack.Part, rack.HasRound ? rack.Round : default(AmmoRound));
+                if (grid.Problem == RackGrid.NoColliders) continue;
+
+                rack.Grid = grid;
+                rack.BaseMassScale = rack.Part.Part.MassScale;
+                rack.BaseLoadedMass = rack.Part.Part.LoadedMass;
+                UpdateMass(rack);
+                changed = true;
+                ArmorFragmentsPlugin.Log.LogInfo("Ammo rack '" + rack.Label + "' measured late (its shape wasn't built at spawn): " +
+                    (grid.Problem == null ? grid.Remaining + " rounds of " + rack.Round.Describe() + " (" + grid.Describe() +
+                                            ", shape from " + grid.Method + ")"
+                                          : "holds nothing: " + grid.Problem));
+            }
+            if (changed) SyncCannons(craft);
+        }
+
         private static bool TryMeasure(Craft craft)
         {
             bool waitForColliders = false;
@@ -435,7 +466,7 @@ namespace ArmorFragments
             }
 
             // Colliders may come a few frames after the aircraft.
-            if (waitForColliders && Time.time < craft.GiveUpMeasuringAt) return false;
+            if (waitForColliders && Time.realtimeSinceStartup < craft.GiveUpMeasuringAt) return false;
 
             craft.Measured = true;
             foreach (Rack rack in craft.Racks)
@@ -486,7 +517,7 @@ namespace ArmorFragments
 
         private static void Forget(AircraftScript aircraft)
         {
-            KnockedOut.Remove(aircraft);
+            VehicleRules.Forget(aircraft);
             Craft craft;
             if (!Crafts.TryGetValue(aircraft, out craft)) return;
             foreach (Rack rack in craft.Racks) RackOf.Remove(rack.Part);
@@ -496,12 +527,20 @@ namespace ArmorFragments
 
         // ---- Firing (CannonScript.Fire) ---------------------------------------------------
 
+        // A rack-fed cannon fires when one of its racks has a round it can feed and the vehicle has crew to load it
+        // (Crew.CanLoad).
         public static bool CanFire(CannonScript cannon)
         {
             Feed feed;
             if (cannon == null || !FeedOf.TryGetValue(cannon, out feed)) return true;
+            if (!Crew.CanLoad(cannon)) return false;
             if (!feed.Craft.Measured) return true;
             return feed.Available > 0;
+        }
+
+        public static bool IsRackFed(CannonScript cannon)
+        {
+            return cannon != null && FeedOf.ContainsKey(cannon);
         }
 
         public static void OnFired(CannonScript cannon)
@@ -862,24 +901,15 @@ namespace ArmorFragments
 
         // ---- Knocked out -----------------------------------------------------------------
         //
-        // A vehicle with a burning or exploded rack is a knocked-out shell: the game's own explosions for it are
-        // off (AircraftScript.QueueExplosion, the "vehicle destroyed" blast, and BodyScript.ExplodePart, which blows
-        // single parts off and, for a part of the cockpit's group, queues that blast), on any vehicle. Parts can
-        // still reach full damage. When the rack explodes, the vehicle is killed (VehicleRules.Kill: the game's own
+        // A vehicle with a burning or exploded rack is a knocked-out shell (VehicleRules.KnockOut): the game's own
+        // explosions for it are off (AircraftScript.QueueExplosion, the "vehicle destroyed" blast, and
+        // BodyScript.ExplodePart, which blows single parts off and, for a part of the cockpit's group, queues that
+        // blast), on any vehicle. When the rack explodes, the vehicle is killed (VehicleRules.Kill: the game's own
         // death, without breaking anything).
-
-        private static readonly HashSet<AircraftScript> KnockedOut = new HashSet<AircraftScript>();
 
         private static void KnockOut(AircraftScript aircraft)
         {
-            if (aircraft == null || !KnockedOut.Add(aircraft)) return;
-            ArmorFragmentsPlugin.Log.LogInfo("Vehicle knocked out by a burning ammo rack: the game's own vehicle and part " +
-                                             "explosions are off for it, so it stays an intact shell");
-        }
-
-        public static bool IsKnockedOut(AircraftScript aircraft)
-        {
-            return aircraft != null && KnockedOut.Contains(aircraft);
+            VehicleRules.KnockOut(aircraft, "a burning ammo rack");
         }
 
         // ---- The blast: one bang, then a jet of fire -------------------------------------------
@@ -1625,9 +1655,10 @@ namespace ArmorFragments
         }
     }
 
-    // ExplodePart is also never allowed on a rack itself: every fuselage type has damageDisconnect="true", so
-    // each new damage stage rolls a chance to ExplodePart it (BodyScript.OnPartDamageLevelIncreased) before it
-    // reaches 0 health, and for a rack in the cockpit's group that blows the whole vehicle up at once.
+    // ExplodePart is also never allowed on a rack or a crew block (Crew.cs): every fuselage type has
+    // damageDisconnect="true", so each new damage stage rolls a chance to ExplodePart it
+    // (BodyScript.OnPartDamageLevelIncreased) before it reaches 0 health, and for a part in the cockpit's group
+    // that blows the whole vehicle up at once.
     // ExplodePart is only ever called because of damage (the damage-stage roll, fuel tanks, propellers, explosion
     // chains): see VehicleRules for all of them. Same rule as above.
     [HarmonyPatch(typeof(BodyScript), "ExplodePart", new Type[] { typeof(PartScript) })]
@@ -1635,7 +1666,7 @@ namespace ArmorFragments
     {
         private static bool Prefix(PartScript part)
         {
-            return part == null || (!AmmoRacks.IsRack(part) && VehicleRules.GameMayExplode(part.Aircraft));
+            return part == null || (!AmmoRacks.IsRack(part) && !Crew.IsCrew(part) && VehicleRules.GameMayExplode(part.Aircraft));
         }
     }
 
@@ -1644,7 +1675,7 @@ namespace ArmorFragments
     {
         private static bool Prefix(PartScript part)
         {
-            return part == null || (!AmmoRacks.IsRack(part) && VehicleRules.GameMayExplode(part.Aircraft));
+            return part == null || (!AmmoRacks.IsRack(part) && !Crew.IsCrew(part) && VehicleRules.GameMayExplode(part.Aircraft));
         }
     }
 

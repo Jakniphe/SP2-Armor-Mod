@@ -30,6 +30,18 @@ namespace ArmorFragments
 
             ContactPoint contact = collision.GetContact(0);
             if (contact.otherCollider == null) return;
+
+            // A crew member on the way to this surface, in the same physics step (crew have no colliders): he is
+            // what the shell meets first.
+            PartScript seat;
+            Vector3 bodyPoint;
+            Vector3 bodyNormal;
+            if (CrewShellFlightPatch.BodyBefore(__instance, contact.point, out seat, out bodyPoint, out bodyNormal))
+            {
+                __state = ResolvePart(__instance, seat, bodyPoint, bodyNormal, ____previousFrameVelocity, ____cannonScript);
+                return;
+            }
+
             PartScript part = contact.otherCollider.GetComponentInParent<PartScript>();
             if (part == null)
             {
@@ -38,6 +50,15 @@ namespace ArmorFragments
                 return;
             }
 
+            __state = ResolvePart(__instance, part, contact.point, contact.normal, ____previousFrameVelocity, ____cannonScript);
+        }
+
+        // A shell meeting a part: its collider (Prefix above), or a crew body its path crossed (CrewShellFlightPatch).
+        // Returns true if the model took the shell over (the physical shell must then go: Retire).
+        internal static bool ResolvePart(CannonProjectileScript __instance, PartScript part, Vector3 point, Vector3 normal,
+                                         Vector3 ____previousFrameVelocity, CannonScript ____cannonScript)
+        {
+            bool __state = false;
             // Only parts whose name carries an [ARM ...] tag act as armor.
             ArmorTag armor = TagCodec.Parse(part.Part.Name).Armor;
 
@@ -50,7 +71,7 @@ namespace ArmorFragments
             float speed = ____previousFrameVelocity.magnitude;
 
             // 0 degrees = head-on, 90 degrees = grazing.
-            float angle = Vector3.Angle(direction, contact.normal);
+            float angle = Vector3.Angle(direction, normal);
             angle = Mathf.Min(angle, 180f - angle);
 
             // The shell as the energy model sees it: its real mass and speed, and its caliber.
@@ -67,13 +88,13 @@ namespace ArmorFragments
             if (!Handled.Add(__instance.GetInstanceID()))
             {
                 ArmorFragmentsPlugin.Log.LogInfo("Shell already handled, skipping fragments");
-                return; // once per shell
+                return __state; // once per shell
             }
 
             // A shot of yours that hit another vehicle: the impact camera may show it.
             try
             {
-                ImpactCamera.OnShellImpact(part, contact.point, direction, __instance.Owner);
+                ImpactCamera.OnShellImpact(part, point, direction, __instance.Owner);
             }
             catch (System.Exception e)
             {
@@ -102,21 +123,21 @@ namespace ArmorFragments
                 // started) to meet whatever is inside and the block's other faces.
                 if (armor != null && armor.PerFace)
                 {
-                    Vector3 outward = Vector3.Dot(contact.normal, direction) > 0f ? -contact.normal : contact.normal;
-                    int face = ArmorFaces.Classify(part, contact.point, outward);
+                    Vector3 outward = Vector3.Dot(normal, direction) > 0f ? -normal : normal;
+                    int face = ArmorFaces.Classify(part, point, outward);
                     float mm = face >= 0 ? armor.Faces[face] : 0f;
-                    bool hole = mm > 0f && !ArmorSurface.SurfaceAt(part, contact.point, direction);
+                    bool hole = mm > 0f && !ArmorSurface.SurfaceAt(part, point, direction);
                     if (hole) mm = 0f;
                     if (mm <= 0f)
                     {
                         ArmorFragmentsPlugin.Log.LogInfo("It touched " + (hole ? "a hole carved in the " : "an open face (") +
                             (face >= 0 ? ArmorFaces.Names[face] : "inner wall") + (hole ? " face" : ")") +
                             ": the shell flies on into the block");
-                        ShellFlight.Continue(contact.point, direction, shell, cannon, null, null, 0f,
+                        ShellFlight.Continue(point, direction, shell, cannon, null, null, 0f,
                                              FragmentSpawner.ShellLeadIn, RayKind.None,
                                              ArmorFragmentsPlugin.ApplyDamage.Value, false, 1, false, 0, part);
                         __state = true;
-                        return;
+                        return __state;
                     }
                     ArmorFragmentsPlugin.Log.LogInfo("It hit the " + ArmorFaces.Names[face] + " face (" +
                                                      mm.ToString("0.#") + " mm)");
@@ -128,21 +149,21 @@ namespace ArmorFragments
                     if (shell.Kind == AmmoKind.HE)
                     {
                         // An explosive shell without a fuse bursts on the first thing it touches.
-                        BurstOnPart(shell, speed, contact.point, direction, contact.normal, angle,
+                        BurstOnPart(shell, speed, point, direction, normal, angle,
                                     "it burst on touching a part (no fuse)");
                     }
                     else
                     {
                         // Not armor: the game stops the shell here (damage, explosion...).
                         // A ballistic ray carries on in its place, until it meets armor (or, with a fuse, bursts).
-                        ContinueAsBallisticRay(part, cannon, shell, contact.point, direction);
+                        ContinueAsBallisticRay(part, cannon, shell, point, direction);
                     }
                     __state = true;   // the ray (or the burst) replaces the shell
-                    return;
+                    return __state;
                 }
 
-                FragmentSpawner.Spawn(part, armor, cannon, shell, contact.point, direction,
-                    contact.normal, angle, ArmorFragmentsPlugin.ApplyDamage.Value);
+                FragmentSpawner.Spawn(part, armor, cannon, shell, point, direction,
+                    normal, angle, ArmorFragmentsPlugin.ApplyDamage.Value);
 
                 // Whatever happened (blocked, penetrated, burst, or bounced off: the bounced shell flies on as a
                 // ray), the energy has been accounted for and the physical shell has done its job.
@@ -161,6 +182,7 @@ namespace ArmorFragments
                 FragmentSpawner.ImpactSink = null;
                 if (impactSink != null) ImpactCamera.OnImpactResolved(impactSink, impactTime);
             }
+            return __state;
         }
 
         // After the game has handled the collision: a shell that is still alive and was resolved by our model is

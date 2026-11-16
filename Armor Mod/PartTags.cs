@@ -73,6 +73,8 @@ namespace ArmorFragments
         public ModuleTag Module;
         public AmmoRackTag AmmoRack;
         public VentTag Vent;
+        public CrewTag Crew;
+        public AimTag Aim;
         public HoleTag Hole;           // null = the walls of the holes this cutter carves are no armor
     }
 
@@ -80,6 +82,38 @@ namespace ArmorFragments
     internal sealed class HoleTag
     {
         public float Thickness = 20f;  // t: millimeters
+    }
+
+    // Rotator turned by the crew's Aim job (see Crew.cs): it turns at its speed x the aim efficiency.
+    internal sealed class AimTag
+    {
+    }
+
+    // Seat used as a crew member (see Crew.cs): dies when the seat has lost all its health; the vehicle dies
+    // with its last crew member.
+    internal sealed class CrewTag
+    {
+        public CrewTrade Trade = CrewTrade.None;       // t: what the crewman is trained as (none: no role yet)
+        public CrewJobs Jobs = CrewJobs.None;          // j: jobs he also does besides his trade's own (drive,aim,load)
+    }
+
+    internal enum CrewTrade
+    {
+        Commander,
+        Gunner,
+        Loader,
+        Driver,
+        Radio,
+        None,        // no role: a new, copied or mirrored crew seat until the player picks one
+    }
+
+    [System.Flags]
+    internal enum CrewJobs
+    {
+        None = 0,
+        Drive = 1,   // engines' power
+        Aim = 2,     // rotators' speed
+        Load = 4,    // reload of rack-fed cannons
     }
 
     // Any part: ammo rack cook-offs vent through the nearest one of these (a turret ring, a hatch).
@@ -91,7 +125,7 @@ namespace ArmorFragments
     {
         // [ARM t=20 h=100]   -> kind + a list of key=value pairs
         private static readonly Regex Block =
-            new Regex(@"\[(ARM|CAN|MOD|AMM|VNT|HOL)((?:\s+[a-z]+=[^\s\]]+)*)\s*\]");
+            new Regex(@"\[(ARM|CAN|MOD|AMM|VNT|CRW|AIM|HOL)((?:\s+[a-z]+=[^\s\]]+)*)\s*\]");
         private static readonly Regex Pair = new Regex(@"([a-z]+)=([^\s\]]+)");
         private static readonly Regex ExtraSpaces = new Regex(@"\s{2,}");
 
@@ -152,9 +186,21 @@ namespace ArmorFragments
                 {
                     tags.Vent = new VentTag();
                 }
+                else if (kind == "AIM")
+                {
+                    tags.Aim = new AimTag();
+                }
                 else if (kind == "HOL")
                 {
                     tags.Hole = new HoleTag { Thickness = Get(values, "t", 20f) };
+                }
+                else if (kind == "CRW")
+                {
+                    tags.Crew = new CrewTag
+                    {
+                        Trade = ReadTrade(ReadText(block.Groups[2].Value, "t")),
+                        Jobs = ReadJobs(ReadText(block.Groups[2].Value, "j")),
+                    };
                 }
                 else if (kind == "AMM")
                 {
@@ -198,6 +244,11 @@ namespace ArmorFragments
                        (tags.AmmoRack.Fill.HasValue && tags.AmmoRack.Fill.Value < 100f ? " f=" + Number(tags.AmmoRack.Fill.Value) : "") + "]");
             if (tags.Vent != null)
                 Append(name, "[VNT]");
+            if (tags.Crew != null)
+                Append(name, "[CRW" + (tags.Crew.Trade == CrewTrade.None ? "" : " t=" + tags.Crew.Trade.ToString().ToLowerInvariant()) +
+                       JobsPair(tags.Crew.Jobs) + "]");
+            if (tags.Aim != null)
+                Append(name, "[AIM]");
             if (tags.Hole != null)
                 Append(name, "[HOL t=" + Number(tags.Hole.Thickness) + "]");
 
@@ -229,6 +280,38 @@ namespace ArmorFragments
                 text.Append(ids[i].ToString(CultureInfo.InvariantCulture));
             }
             return text.ToString();
+        }
+
+        // t=commander|gunner|loader|driver|radio (none or anything else: no role).
+        private static CrewTrade ReadTrade(string text)
+        {
+            if (!string.IsNullOrEmpty(text))
+                foreach (CrewTrade trade in (CrewTrade[])System.Enum.GetValues(typeof(CrewTrade)))
+                    if (string.Equals(trade.ToString(), text, System.StringComparison.OrdinalIgnoreCase)) return trade;
+            return CrewTrade.None;
+        }
+
+        // j=drive,aim,load
+        private static CrewJobs ReadJobs(string text)
+        {
+            CrewJobs jobs = CrewJobs.None;
+            if (string.IsNullOrEmpty(text)) return jobs;
+            foreach (string item in text.Split(','))
+            {
+                if (string.Equals(item, "drive", System.StringComparison.OrdinalIgnoreCase)) jobs |= CrewJobs.Drive;
+                else if (string.Equals(item, "aim", System.StringComparison.OrdinalIgnoreCase)) jobs |= CrewJobs.Aim;
+                else if (string.Equals(item, "load", System.StringComparison.OrdinalIgnoreCase)) jobs |= CrewJobs.Load;
+            }
+            return jobs;
+        }
+
+        private static string JobsPair(CrewJobs jobs)
+        {
+            List<string> names = new List<string>();
+            if ((jobs & CrewJobs.Drive) != 0) names.Add("drive");
+            if ((jobs & CrewJobs.Aim) != 0) names.Add("aim");
+            if ((jobs & CrewJobs.Load) != 0) names.Add("load");
+            return names.Count == 0 ? "" : " j=" + string.Join(",", names.ToArray());
         }
 
         // "12,15" -> [12, 15] (no repeats, in order).

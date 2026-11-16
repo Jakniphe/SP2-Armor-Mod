@@ -19,14 +19,17 @@ namespace ArmorFragments
     //  - The game kills a vehicle only when it loses parts: AircraftStructureChanged -> CheckForCriticalDamage (the
     //    share of parts or wing area left below CriticalDamageThreshold) -> MarkAsCriticallyDamaged, which raises
     //    AircraftKilled (kill credit, kill cam, respawn; sent to the other players). With its damage explosions off,
-    //    an armored vehicle loses no parts, so the mod kills it itself through Kill: an ammo rack exploding is the
-    //    kill switch.
-    //  - On an armored vehicle only damage modules ([MOD]) and ammo racks ([AMM]) take the mod's damage
-    //    (ArmoredStructureDamage = false): the structure only slows shells and fragments down
+    //    an armored vehicle loses no parts, so the mod kills it itself through Kill: an ammo rack exploding, or the
+    //    last crew member dying (Crew.cs), is the kill switch.
+    //  - A knocked-out vehicle (a rack burning or exploded, or the whole crew dead) keeps its shape: the game's own
+    //    vehicle and part explosions are off for it, on any vehicle. Parts can still reach full damage.
+    //  - On an armored vehicle only damage modules ([MOD]), ammo racks ([AMM]) and crew ([CRW]) take the mod's
+    //    damage (ArmoredStructureDamage = false): the structure only slows shells and fragments down
     //    (FragmentSpawner.Deposit). Vehicles without armor take it on every part.
     internal static class VehicleRules
     {
         private static readonly Dictionary<AircraftScript, bool> Armored = new Dictionary<AircraftScript, bool>();
+        private static readonly HashSet<AircraftScript> KnockedOut = new HashSet<AircraftScript>();
 
         private static readonly MethodInfo MarkAsCriticallyDamaged =
             AccessTools.Method(typeof(AircraftScript), "MarkAsCriticallyDamaged");
@@ -34,8 +37,27 @@ namespace ArmorFragments
         // May the game blow this vehicle (or one of its parts) up because of damage?
         public static bool GameMayExplode(AircraftScript aircraft)
         {
-            if (AmmoRacks.IsKnockedOut(aircraft)) return false;
+            if (IsKnockedOut(aircraft)) return false;
             return !IsArmored(aircraft) || ArmorFragmentsPlugin.GameDamageExplosions.Value;
+        }
+
+        // From now on no game explosion may blow this vehicle (or a part of it) apart.
+        public static void KnockOut(AircraftScript aircraft, string reason)
+        {
+            if (aircraft == null || !KnockedOut.Add(aircraft)) return;
+            ArmorFragmentsPlugin.Log.LogInfo("Vehicle knocked out (" + reason + "): the game's own vehicle and part " +
+                                             "explosions are off for it, so it stays an intact shell");
+        }
+
+        public static bool IsKnockedOut(AircraftScript aircraft)
+        {
+            return aircraft != null && KnockedOut.Contains(aircraft);
+        }
+
+        // A vehicle that is gone.
+        public static void Forget(AircraftScript aircraft)
+        {
+            KnockedOut.Remove(aircraft);
         }
 
         // The game's own death for this vehicle (only in its owner's game): kill credit, kill cam, respawn, and the
@@ -65,7 +87,7 @@ namespace ArmorFragments
         public static bool TakesModDamage(PartScript part, PartTags tags)
         {
             if (tags.Armor != null) return false;
-            if (tags.Module != null || tags.AmmoRack != null) return true;
+            if (tags.Module != null || tags.AmmoRack != null || tags.Crew != null) return true;
             return ArmorFragmentsPlugin.ArmoredStructureDamage.Value || !IsArmored(part.Aircraft);
         }
 

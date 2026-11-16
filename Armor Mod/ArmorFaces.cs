@@ -407,6 +407,7 @@ namespace ArmorFragments
                     continue;
                 }
                 if (part == ignore || part.Part == null) continue;
+                if (CrewBodies.IsBody(part)) continue;   // a crew seat: the body sitting in it is met instead (below)
 
                 ArmorTag armor = TagCodec.Parse(part.Part.Name).Armor;
                 if (armor != null && armor.PerFace)
@@ -458,6 +459,9 @@ namespace ArmorFragments
                     });
                 }
             }
+
+            // Crew bodies (CrewBodies): where the line first gets into each.
+            CrewBodies.AddEvents(start, dir, maxDistance + BackOff, BackOff, Touch, ignore, into);
 
             // Nearest first; where two surfaces touch, the way out of one block before the way into the next.
             into.Sort((a, b) => SortKey(a).CompareTo(SortKey(b)));

@@ -12,7 +12,7 @@ Vehicles without armor die as in the base game.
 New:
 - `AmmoRacks.cs`: runtime. Registries (`Craft` with its `Rack`s, a `Feed` per rack-fed cannon, and the `Group`s that
   name the variables), feeding, weight, damage and cook-off, the
-  explosion and its blast, the knocked-out state, and the rack Harmony patches (end of file).
+  explosion and its blast, and the rack Harmony patches (end of file).
 - `AmmoRound.cs`: a round's size, mass, energy and explosive pounds, from the cannon's `CannonData`.
 - `RackGrid.cs`: measures a rack's shape, packs the rounds, line-vs-rounds test, removal order, rounds mesh.
 - `RackVisualizer.cs`: see-through racks with their rounds in the designer.
@@ -35,8 +35,8 @@ Changed: `FragmentSpawner.cs`, `ShellFlight.cs`, `Net/NetSync.cs`, `PartTags.cs`
 - `[CAN ... r=<id>,<id>]`: the part ids of the racks the cannon draws from, picked in the designer. No `r` (or no
   id that is still a rack) = the game's Ammo Count. Several cannons can list the same rack.
 - `[VNT]` on a fuselage: a cook-off vent.
-- In the designer, armor is exclusive with `[MOD]`, `[AMM]` and `[VNT]` (armor takes no damage). Hollow/cut
-  fuselages and armor hold no rounds.
+- In the designer, armor is exclusive with `[MOD]`, `[AMM]` and `[VNT]` (armor takes no damage). Hollow
+  fuselages and armor hold no rounds; a cut fuselage is packed to its cut shape (the mesh is measured as drawn).
 
 ## Rounds (`AmmoRound`)
 - Shell: mass = `ProjectileVolume x 11342` kg; length 1.5 calibers (Slug) or 1 (Sphere); energy = ½ m v².
@@ -55,6 +55,7 @@ Changed: `FragmentSpawner.cs`, `ShellFlight.cs`, `Net/NetSync.cs`, `PartTags.cs`
   rotation and turned into each layout's frame: sliced along Z (~1 cm, at most 1500 cuts), 5 lines per round
   circle, inside test by nonzero winding from both sides; the cut's segments are binned by height so a line only
   reads its own band.
+- In flight the game builds a fuselage's mesh after the craft appears: `TryMeasure` waits up to 10 s of real time (`GiveUpMeasuringAt`, independent of the game speed) for every rack to have a shape; a rack still without one is measured again each real second (`MeasureLate`) until it has, then fills and its cannons get its rounds.
 - Across: a grid with pitch = diameter x (1 + `RoundSpacingPercent`/100): square, or staggered (odd layers shifted
   half a pitch, layers pitch x sqrt(3)/2 apart). Each (column, layer) row holds as many whole rounds end to end as
   fit its own length.
@@ -138,7 +139,7 @@ Changed: `FragmentSpawner.cs`, `ShellFlight.cs`, `Net/NetSync.cs`, `PartTags.cs`
 ## Vehicle death (`VehicleRules`)
 - `GameMayExplode(aircraft)` = not knocked out and (no `[ARM]` part or `GameDamageExplosions`, default false):
   unarmored vehicles keep the base game's damage explosions. Used by the `QueueExplosion` patch and both
-  `ExplodePart` patches (never `ExplodePart` on a rack). The game reaches these only from damage:
+  `ExplodePart` patches (never `ExplodePart` on a rack or a crew seat). The game reaches these only from damage:
   `PartScript.OnDamaged` (damage ≥ `DamageLimit` → `QueueExplosion(MainCockpit, 100)`),
   `OnPartDamageLevelIncreased` (roll on `DamageDisconnect` parts and destroyed parts; a cockpit-group part →
   `QueueExplosion`), `FuelTankScript`, `PropellerAssemblyScript`, `ExplosionScript`. Parts only disconnect
@@ -147,9 +148,11 @@ Changed: `FragmentSpawner.cs`, `ShellFlight.cs`, `Net/NetSync.cs`, `PartTags.cs`
   or wing area left, below `CriticalDamageThreshold`) → `MarkAsCriticallyDamaged` (sets `CriticallyDamaged`, raises
   `AircraftKilled` in `OnLateUpdate`: kill credit, kill cam, respawn; `NetworkAircraftScript.OnAircraftKilled`
   tells the other players). An armored vehicle loses no parts, so `VehicleRules.Kill` calls
-  `MarkAsCriticallyDamaged` (reflection) itself, in the owner's game, when a rack explodes. Planned: kills
-  decided by modules in general; a rack exploding stays a kill.
-- `TakesModDamage(part, tags)`: armor never; `[MOD]`/`[AMM]` always; other parts only when the vehicle has no
+  `MarkAsCriticallyDamaged` (reflection) itself, in the owner's game, when a rack explodes or the last crew
+  member dies (`Crew.cs`). Planned: more module kinds that decide kills; a rack exploding stays a kill.
+- Knocked out (`VehicleRules.KnockOut`, set by a burning rack and by the whole crew dying): `GameMayExplode` is
+  false, on any vehicle, so the shell stays intact.
+- `TakesModDamage(part, tags)`: armor never; `[MOD]`/`[AMM]`/`[CRW]` always; other parts only when the vehicle has no
   `[ARM]` part (`IsArmored`, cached) or `ArmoredStructureDamage` is on. Used by `FragmentSpawner.Deposit` and the
   blast.
 

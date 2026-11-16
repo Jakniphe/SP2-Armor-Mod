@@ -253,13 +253,18 @@ namespace ArmorFragments.UI
             // can be taken off.
             bool canVent = canArmor || tags.Vent != null;
 
+            // Crew members are seats (Seat, Seat Ejection, Car Seat). A part of another kind already marked as crew
+            // keeps its toggle, so the mark can be taken off.
+            bool canCrew = Has<SeatData>() || tags.Crew != null;
+            // Rotators (hinge, small rotator, rotator) can be turned by the crew's Aim job.
+            bool canAim = Has<JointRotatorData>() || tags.Aim != null;
             // A hole cutter that cuts into armor can armor its holes' walls (a cutter already marked keeps its toggle,
             // so the mark can be taken off); one that cuts no armor shows nothing.
             builtIsCutter = Has<MeshModifierBaseData>();
             builtCutArmor = builtIsCutter ? ArmoredBlocksCut(part) : null;
             bool canHole = builtIsCutter && ((builtCutArmor != null && builtCutArmor.Count > 0) || tags.Hole != null);
 
-            if (!canArmor && !canCannon && !canModule && !canVent && !canHole)
+            if (!canArmor && !canCannon && !canModule && !canVent && !canCrew && !canAim && !canHole)
             {
                 container.Visible = false;
                 return;
@@ -396,6 +401,10 @@ namespace ArmorFragments.UI
 
                     Live(builder, new[] { "Rounds", "Round (W x L)", "Shell" },
                          () => CannonSignature(cannonPart), () => CannonTexts(cannonPart));
+                    // Rack-fed cannons are loaded by the crew (Crew.cs).
+                    if (racks.Count > 0)
+                        Live(builder, new[] { "Reload", "Loaded by", "Round weight" },
+                             () => string.Join("|", ReloadTexts(cannonPart)), () => ReloadTexts(cannonPart));
                 }
             }
 
@@ -472,6 +481,168 @@ namespace ArmorFragments.UI
                         if (on) tags.Armor = null;
                     }));
             }
+
+            if (canCrew)
+            {
+                builder.Toggle("Crew",
+                    "A crew member sits here in flight. Shells and fragments hit his body, not the seat. " +
+                    "The vehicle dies with its last crew member.",
+                    tags.Crew != null,
+                    on => Switch(tags, () =>
+                    {
+                        tags.Crew = on ? new CrewTag() : null;
+                        if (on) tags.Armor = null;
+                    }));
+                if (tags.Crew != null && !Has<SeatData>())
+                    builder.Text("Warning", "Not a seat: only seats can be crew");
+                else if (tags.Crew != null)
+                    CrewRows(builder, tags);
+            }
+
+            if (canAim)
+            {
+                builder.Toggle("Aimed by crew",
+                    "For a turret ring or gun elevation: turns at its speed x the aimer's efficiency, slower as crew are lost.",
+                    tags.Aim != null,
+                    on => Switch(tags, () => tags.Aim = on ? new AimTag() : null));
+                if (tags.Aim != null)
+                {
+                    CrewJobs needed;
+                    List<CrewSeat> seats = Crew.DesignCrew(part.Aircraft, out needed);
+                    builder.Text("Turn speed", seats.Count == 0
+                        ? "100% (no crew)"
+                        : CrewModel.Percent(CrewModel.JobEfficiency(seats, CrewJobs.Aim)));
+                }
+            }
+        }
+
+        // ---- Crew ----------------------------------------------------------------------------
+
+        private static readonly CrewTrade[][] TradeRows =
+        {
+            new[] { CrewTrade.Commander, CrewTrade.Gunner, CrewTrade.Loader },
+            new[] { CrewTrade.Driver, CrewTrade.Radio, CrewTrade.None },
+        };
+
+        // Trade buttons (the trade brings its own job), "Also does" toggles for the other jobs, then what this crew
+        // member and the whole crew do as they would start a flight.
+        private static void CrewRows(PanelBuilder builder, PartTags tags)
+        {
+            CrewJobs needed;
+            List<CrewSeat> seats = Crew.DesignCrew(part.Aircraft, out needed);
+            CrewSeat self = seats.Find(s => s.Data == part.Part);
+
+            // One Driver, one Commander and one Radio operator per vehicle, and one crew member driving: what another
+            // seat already has is marked * and can't be picked here.
+            bool driveTaken = seats.Exists(s => s.Data != part.Part && (s.Designed & CrewJobs.Drive) != 0);
+            bool anyTaken = false;
+
+            builder.Text("Trained as", CrewModel.TradeName(tags.Crew.Trade));
+            foreach (CrewTrade[] row in TradeRows)
+            {
+                List<KeyValuePair<string, Action>> buttons = new List<KeyValuePair<string, Action>>();
+                foreach (CrewTrade trade in row)
+                {
+                    CrewTrade picked = trade;
+                    string text = trade == CrewTrade.Radio ? "Radio op." : trade == CrewTrade.None ? "No role" : trade.ToString();
+                    bool taken = trade != tags.Crew.Trade &&
+                                 ((CrewModel.Unique(trade) && seats.Exists(s => s.Data != part.Part && s.Trade == trade)) ||
+                                  (trade == CrewTrade.Driver && driveTaken));
+                    if (trade == tags.Crew.Trade) text = "[" + text + "]";
+                    if (taken)
+                    {
+                        anyTaken = true;
+                        buttons.Add(new KeyValuePair<string, Action>(text + "*", () => { }));
+                        continue;
+                    }
+                    buttons.Add(new KeyValuePair<string, Action>(text, () => Switch(tags, () =>
+                    {
+                        tags.Crew.Trade = picked;
+                        tags.Crew.Jobs &= ~CrewModel.OwnJob(picked);   // his own job now: not an extra
+                    })));
+                }
+                builder.Buttons(buttons);
+            }
+            if (anyTaken) builder.Text("*", "another seat has it");
+
+            CrewJobs own = CrewModel.OwnJob(tags.Crew.Trade);
+            builder.Text("Own job", own == CrewJobs.None ? "none (spare)" : CrewModel.JobName(own));
+            builder.Text("Also does", "");
+            if (own != CrewJobs.Drive && driveTaken && (tags.Crew.Jobs & CrewJobs.Drive) == 0)
+                builder.Text("   Driving", "another seat drives");
+            else
+                JobToggle(builder, tags, own, CrewJobs.Drive, "   Driving",
+                    "Engines give their horsepower x the driver's efficiency. Only one crew member drives.");
+            JobToggle(builder, tags, own, CrewJobs.Aim, "   Aiming",
+                "Rotators with \"Aimed by crew\" turn at their speed x the aim efficiency. A second aimer adds 30% of his.");
+            JobToggle(builder, tags, own, CrewJobs.Load, "   Loading",
+                "Rack-fed cannons reload in Firing Delay / the load efficiency. A round takes one loader per 20 kg; extras keep helping, each less.");
+
+            // One short row per job: the panel's rows are a label and a value side by side.
+            if (self != null)
+            {
+                builder.Text("This seat", self.Jobs == CrewJobs.None ? "spare (no job)" : "");
+                foreach (CrewJobs job in CrewModel.AllJobs)
+                {
+                    if ((self.Jobs & job) == 0) continue;
+                    builder.Text("   " + CrewModel.JobName(job), CrewModel.Percent(CrewModel.Efficiency(self, job)) +
+                                 ((self.Designed & job) == 0 ? " (auto)" : ""));
+                }
+            }
+
+            builder.Text("Vehicle", seats.Count == 1 ? "1 crew" : seats.Count.ToString(CultureInfo.InvariantCulture) + " crew");
+            foreach (CrewJobs job in CrewModel.AllJobs)
+            {
+                if ((needed & job) == 0) continue;
+                int doing = CrewModel.Doing(seats, job);
+                builder.Text("   " + CrewModel.JobName(job), CrewModel.Percent(CrewModel.JobEfficiency(seats, job)) +
+                             (doing > 1 ? " (" + doing + " crew)" : ""));
+            }
+            builder.Text("Alive variable", Crew.AliveVariableName);
+            builder.Text("Job variables", "Crew_drive/_aim/_load");
+        }
+
+        // A job besides the trade's own (none for the trade's own job, which he always does).
+        private static void JobToggle(PanelBuilder builder, PartTags tags, CrewJobs own, CrewJobs job, string label, string tooltip)
+        {
+            if (job == own) return;
+            builder.Toggle(label, tooltip + " A " + CrewModel.TradeName(tags.Crew.Trade) + " does it at " +
+                                  CrewModel.Percent(CrewModel.SkillOf(tags.Crew.Trade, job)) +
+                                  "; each job beyond his first takes 10% off all of them.",
+                (tags.Crew.Jobs & job) != 0,
+                on => Switch(tags, () => tags.Crew.Jobs = on ? tags.Crew.Jobs | job : tags.Crew.Jobs & ~job));
+        }
+
+        // A rack-fed cannon's reload with the crew as they would start a flight: the reload, who loads, and its round's
+        // weight with the loaders it takes (CrewModel.LoadEfficiency).
+        private static string[] ReloadTexts(PartScript cannonPart)
+        {
+            CannonData cannon = null;
+            foreach (PartModifierData modifier in cannonPart.Part.Modifiers)
+                if (modifier is CannonData) cannon = (CannonData)modifier;
+            if (cannon == null) return new[] { "", "", "" };
+
+            AmmoRound round = AmmoRound.FromCannon(cannon);
+            float kg = round.RoundMass;
+            int hands = CrewModel.Hands(kg);
+            string weight = kg.ToString("0", CultureInfo.InvariantCulture) + " kg, " +
+                            (hands > 1 ? hands + " loaders" : "1 loader");
+
+            CrewJobs needed;
+            List<CrewSeat> seats = Crew.DesignCrew(cannonPart.Aircraft, out needed);
+            if (seats.Count == 0) return new[] { "won't fire", "no crew seat", weight };
+
+            float load = CrewModel.LoadEfficiency(seats, kg);
+            int loaders = CrewModel.Doing(seats, CrewJobs.Load);
+            CrewSeat loader = seats.Find(s => CrewModel.Efficiency(s, CrewJobs.Load) > 0f);
+            if (loader == null || load <= 0f) return new[] { "won't fire", "nobody", weight };
+            return new[]
+            {
+                (cannon.FiringDelay / load).ToString("0.0", CultureInfo.InvariantCulture) + " s (base " +
+                cannon.FiringDelay.ToString("0.0", CultureInfo.InvariantCulture) + " s)",
+                (loaders > 1 ? loaders + " crew" : CrewModel.TradeName(loader.Trade)) + ", " + CrewModel.Percent(load),
+                weight,
+            };
         }
 
         // ---- Ammo rack read-outs ---------------------------------------------------------

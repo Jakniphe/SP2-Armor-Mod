@@ -673,7 +673,7 @@ namespace ArmorFragments
                     // A grazing hit throws it back. What it keeps is sin^2 of the angle; the rest stays
                     // in whatever it hit.
                     float angle = ImpactAngle(dir, e.Normal);
-                    if (bounces < maxBounces && angle >= tolerated)
+                    if (bounces < maxBounces && angle >= tolerated && !CrewBodies.IsBody(part))   // bodies don't throw it back
                     {
                         float kept = EnergyModel.RicochetEnergyOut(slug.Energy, angle);
                         if (part != null)
