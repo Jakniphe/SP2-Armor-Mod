@@ -16,6 +16,7 @@ namespace ArmorFragments.Sim
         public float ResistanceJPerM3; // the energy it takes to push a cubic meter of plate out of the way
         public bool Ricochet;          // the model says the shell bounces: it only skims
         public float KeptEnergy;       // ricochet: the share of its energy the shell keeps
+        public float DeflectionDeg;    // a shell that gets through is turned toward the plate's normal by this much (the energy model's own number)
         public float EnergyScale;      // 1 = the shell's real energy (a lab knob)
         public int Quality;            // 0 low, 1 medium, 2 high
         public int Columns;            // the grid's columns per side; 0 = the quality's own (40, 64 or 96). The game picks a smaller one when the quality's would take too long
@@ -32,6 +33,9 @@ namespace ArmorFragments.Sim
         public float[] Front;          // height of the front surface over its old place (meters, + = out)
         public float[] Back;           // the same for the back surface (+ = out, the way a shell comes out)
         public byte[] Hole;            // 0 where there is no material, 255 elsewhere
+        public float[] Solid;          // per column, 0..1: how much of the column's material is left (1 = all). A hole is where it falls under one half
+        public float[] CrackFront;     // per column, 0..1: how torn the front surface is there (broken links across it)
+        public float[] CrackBack;      // the same for the back surface
         public bool TimedOut;          // it took too long and was stopped: nothing else in the result is valid
         public bool Perforated;        // the shell got through
         public float DepthM;           // the deepest dent (the whole thickness if it is through)
@@ -123,16 +127,36 @@ namespace ArmorFragments.Sim
         // The columns per side of a quality's own grid.
         public static int ColumnsOfQuality(int quality)
         {
-            return quality <= 0 ? 40 : (quality == 1 ? 64 : 96);
+            return quality <= 0 ? 40 : quality == 1 ? 64 : quality == 2 ? 96 : quality == 3 ? 128 : 192;
+        }
+
+        public const int MaxQuality = 4;
+
+        public static string QualityName(int quality)
+        {
+            return quality <= 0 ? "low" : quality == 1 ? "medium" : quality == 2 ? "high" : quality == 3 ? "ultra" : "extreme";
+        }
+
+        // How wide (meters) the patch of plate is that is simulated: so many calibres, never under 10 cm. Measured (the damage reaches 1.7 to
+        // 2.7 calibres from the impact head-on, and 3.4 to 4 or more at 60 degrees and beyond, where it ran into the patch's fixed border and
+        // a ricochet's groove was cut short at 40% of the patch), 7 calibres is about the least that holds a head-on hit, and a slanted one
+        // gets a wider patch: 7 up to 40 degrees, 11 at 80 (the cells are then a little coarser, which the ultra qualities make up for).
+        public static float PatchCalibers = 7f;
+
+        public static float PatchSize(float caliberM, float angleDeg)
+        {
+            float r = Math.Max(caliberM * 0.5f, 0.002f);
+            float slant = Math.Min(Math.Max((angleDeg - 40f) / 40f, 0f), 1f);
+            return Math.Max(r * 2f * (PatchCalibers + 4f * slant), 0.1f);
         }
 
         // How many layers deep the lattice is for a shell of this caliber and a plate of this thickness, on a grid of 'columns'.
         // (The cost of a run grows with columns^2 x layers x the steps it takes, and the steps grow with the columns too.)
-        public static int LayersFor(float caliberM, float thicknessM, int columns)
+        public static int LayersFor(float caliberM, float thicknessM, int columns, float angleDeg = 0f)
         {
             float r = Math.Max(caliberM * 0.5f, 0.002f);
             float thickness = Math.Max(thicknessM, 0.002f);
-            float cell = Math.Max(r * 2f * 7f, 0.1f) / columns;
+            float cell = PatchSize(caliberM, angleDeg) / columns;
             return Math.Max(2, Math.Min(14, (int)MathF.Round(thickness / cell)));
         }
 
@@ -144,9 +168,9 @@ namespace ArmorFragments.Sim
             radius = Math.Max(input.CaliberM * 0.5f, 0.002f);
             t = Math.Max(input.ThicknessM, 0.002f);
             n = input.Columns >= 16 ? input.Columns : ColumnsOfQuality(input.Quality);
-            size = Math.Max(radius * 2f * 7f, 0.1f);
+            size = PatchSize(input.CaliberM, input.AngleDeg);
             h = size / n;
-            k = LayersFor(input.CaliberM, input.ThicknessM, n);
+            k = LayersFor(input.CaliberM, input.ThicknessM, n, input.AngleDeg);
             hz = t / k;
             count = n * n * k;
             particleRadius = 0.35f * Math.Min(h, hz);
@@ -173,6 +197,7 @@ namespace ArmorFragments.Sim
             ax = MathF.Sin(angle) * du;
             ay = MathF.Sin(angle) * dv;
             az = -MathF.Cos(angle);
+            float deflection = input.Ricochet ? 0f : Math.Min(Math.Max(input.DeflectionDeg, 0f), 30f) * (float)(Math.PI / 180.0);
 
             // The tip starts a few cells above the point of impact on the front surface.
             float start = radius + 3f * h;
@@ -220,6 +245,7 @@ namespace ArmorFragments.Sim
                 state[ClSolver.PRicochet] = input.Ricochet ? 1f : 0f; state[ClSolver.PKept] = input.KeptEnergy;
                 state[ClSolver.PDu] = du; state[ClSolver.PDv] = dv;
                 state[ClSolver.PEps] = EarlySettle ? SettleCalm * speed0 : 0f; state[ClSolver.PMinSettle] = 4f;
+                state[ClSolver.PDeflect] = deflection;
                 state[ClSolver.PEnergy] = (float)energy0; state[ClSolver.PShellActive] = 1f; state[ClSolver.PDeepest] = deepestTip;
                 gpu.WriteParams(state);
 
@@ -262,6 +288,14 @@ namespace ArmorFragments.Sim
 
                     float tipZ = cz + az * radius;
                     tipS = (cx + ax * radius - tx0) * ax0 + (cy + ay * radius - ty0) * ay0 + (tipZ - tz0) * az0;
+                    // The plate turns the shell toward its own normal as it goes through (the energy model's deflection, spread over the thickness).
+                    if (deflection > 0f && !bounced && !skimming)
+                    {
+                        float progress = Math.Min(Math.Max((t * 0.5f - tipZ) / t, 0f), 1f);
+                        float theta = Math.Max(angle - deflection * progress, 0f);
+                        float sn = MathF.Sin(theta);
+                        ax = sn * du; ay = sn * dv; az = -MathF.Cos(theta);
+                    }
                     // A shell that ricochets digs in to a shallow depth, skims along the plate for a while (the groove), then leaves.
                     if (input.Ricochet && !bounced && !skimming && (t * 0.5f - tipZ) >= depthLimit)
                     {
@@ -351,10 +385,17 @@ namespace ArmorFragments.Sim
 
             int gpuBroken = 0;
             if (gpu != null) gpu.End(px, py, pz, out gpuBroken);   // the particles come back to be read as they are now
+            int[] gpuCracks = null;
+            if (gpu != null)
+            {
+                gpuCracks = new int[2 * n * n];
+                gpu.ReadCracks(n, k, gpuCracks);
+            }
 
             double loopMs = watch.Elapsed.TotalMilliseconds;
             ImpactSimResult result = Sample(exited || (energy > 0 && !stopped && az < 0f && exited), input.EnergyScale);
             double sampleMs = watch.Elapsed.TotalMilliseconds - loopMs;
+            FillCracks(result, gpuCracks);
             result.EnergyLeft = (float)Math.Max(energy / energy0, 0.0);
             result.Particles = count;
             result.Steps = steps;
@@ -702,6 +743,36 @@ namespace ArmorFragments.Sim
             }
         }
 
+        // How torn each column's front and back surface is: the links across the plate that have broken, out of 8, three or more being a
+        // full crack. From the card's counts, or (on the CPU) from the links themselves.
+        private void FillCracks(ImpactSimResult result, int[] gpuCounts)
+        {
+            float[] front = new float[n * n], back = new float[n * n];
+            for (int cell = 0; cell < n * n; cell++)
+            {
+                int brokenFront = 0, brokenBack = 0;
+                if (gpuCounts != null)
+                {
+                    brokenFront = gpuCounts[cell];
+                    brokenBack = gpuCounts[n * n + cell];
+                }
+                else
+                {
+                    int top = (k - 1) * n * n + cell, bottom = cell;
+                    for (int o = 0; o < Links; o++)
+                    {
+                        if (Oz[o] != 0) continue;
+                        if (rest[top * Links + o] < 0f) brokenFront++;
+                        if (rest[bottom * Links + o] < 0f) brokenBack++;
+                    }
+                }
+                front[cell] = Math.Min(1f, brokenFront / 3f);
+                back[cell] = Math.Min(1f, brokenBack / 3f);
+            }
+            result.CrackFront = front;
+            result.CrackBack = back;
+        }
+
         // The change of the front and back surfaces, per column, and the columns where nothing is left (the hole).
         private ImpactSimResult Sample(bool perforated, float energyScale)
         {
@@ -712,7 +783,7 @@ namespace ArmorFragments.Sim
             ImpactSimResult result = new ImpactSimResult
             {
                 N = n, Cell = h, Size = size,
-                Front = new float[n * n], Back = new float[n * n], Hole = new byte[n * n],
+                Front = new float[n * n], Back = new float[n * n], Hole = new byte[n * n], Solid = new float[n * n],
                 Perforated = perforated,
             };
             int holeCells = 0;
@@ -723,6 +794,18 @@ namespace ArmorFragments.Sim
                 {
                     int cell = j * n + i;
                     bool border = i == 0 || j == 0 || i == n - 1 || j == n - 1;
+                    // How much of the column's material is left, against what it started with: a smooth number, so the edge of a hole falls
+                    // between the columns, not on them (a shell that was stopped leaves a crater, never a hole).
+                    float solid = 1f;
+                    if (perforated && !border && baseCover[cell] > 0) solid = Math.Min(1f, cover[cell] / (float)baseCover[cell]);
+                    result.Solid[cell] = solid;
+                    if (perforated && !border && solid < 0.5f)
+                    {
+                        result.Hole[cell] = 0;
+                        holeCells++;
+                        deepest = t;
+                        continue;
+                    }
                     if (cover[cell] == 0 && !border)
                     {
                         if (perforated)

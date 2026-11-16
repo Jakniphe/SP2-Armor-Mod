@@ -19,7 +19,7 @@ namespace ArmorFragments.Sim
         public const int PMass = 26, PSpeed0 = 27, PEnergy0 = 28, PCost = 29, PThickness = 30, PHz = 31, PDepthLimit = 32, PSkimLength = 33,
                          PRicochet = 34, PKept = 35, PDu = 36, PDv = 37, PEps = 38, PMinSettle = 39;
         public const int PEnergy = 40, PShellActive = 41, PStopped = 42, PExited = 43, PBounced = 44, PSkimming = 45, PSkimLeft = 46,
-                         PDeepest = 47, PSteps = 48, PSettle = 49, PStoppedSteps = 50, PShellSteps = 51, PLastCount = 52, PDone = 53, PMoving = 54;
+                         PDeepest = 47, PSteps = 48, PSettle = 49, PStoppedSteps = 50, PShellSteps = 51, PLastCount = 52, PDone = 53, PMoving = 54, PDeflect = 55;
         public const int PCx = 0, PCy = 1, PCz = 2, PAx = 3, PAy = 4, PAz = 5, PTipS = 6, PTx0 = 7, PTy0 = 8, PTz0 = 9, PAx0 = 10, PAy0 = 11,
                          PAz0 = 12, PRadius = 13, PBody = 14, PParticle = 15, PH = 16, PDt = 17, PDamp = 18, PHasShell = 19, PBackOpen = 20,
                          PBreak = 21, PYield = 22, PRate = 23, PDuctility = 24, PReach2 = 25;
@@ -85,6 +85,7 @@ __constant int OZ[18] = {0,0,0,0,1,-1,0,0,0,0,1,-1,1,-1,1,-1,1,-1};
 #define P_LASTCOUNT 52
 #define P_DONE 53
 #define P_MOVING 54
+#define P_DEFLECT 55
 
 #define MAX_ACTIVE 600.0f
 #define SETTLE_STEPS 24.0f
@@ -326,6 +327,16 @@ __kernel void shell_step(__global float* S, __global const int* counter, __globa
         float tipZ = cz + az * radius;
         S[P_TIPS] = (cx + ax * radius - S[P_TX0]) * S[P_AX0] + (cy + ay * radius - S[P_TY0]) * S[P_AY0] + (tipZ - S[P_TZ0]) * S[P_AZ0];
 
+        // The plate turns the shell toward its own normal as it goes through (the energy model's deflection, spread over the thickness).
+        if (S[P_DEFLECT] > 0.0f && !bounced && !skimming)
+        {
+            float theta0 = acos(clamp(-S[P_AZ0], -1.0f, 1.0f));
+            float progress = clamp((t * 0.5f - tipZ) / t, 0.0f, 1.0f);
+            float theta = fmax(theta0 - S[P_DEFLECT] * progress, 0.0f);
+            float sn = sin(theta);
+            ax = sn * S[P_DU]; ay = sn * S[P_DV]; az = -cos(theta);
+        }
+
         if (S[P_RICOCHET] > 0.5f && !bounced && !skimming && (t * 0.5f - tipZ) >= S[P_DEPTHLIMIT])
         {
             skimming = 1;
@@ -378,6 +389,25 @@ __kernel void shell_step(__global float* S, __global const int* counter, __globa
     S[P_DAMP] = active ? 0.995f : 0.85f;
     if (active) S[P_SHELLSTEPS] += 1.0f;
     S[P_STEPS] = steps + 1.0f;
+}
+
+// The cracks on the two surfaces: for each column, how many of the 8 links across the plate (not through it) have torn, in the front layer
+// (face 0, the top one) and in the back layer (face 1, the bottom one).
+__kernel void crack_map(__global const float* rest, __global int* cracks, int n, int k, int count)
+{
+    int gid = get_global_id(0);
+    if (gid >= 2 * n * n) return;
+    int face = gid / (n * n);
+    int cell = gid % (n * n);
+    int l = face == 0 ? k - 1 : 0;
+    int idx = l * n * n + cell;
+    int broken = 0;
+    for (int o = 0; o < LINKS; o++)
+    {
+        if (OZ[o] != 0) continue;
+        if (rest[o * count + idx] < 0.0f) broken++;
+    }
+    cracks[gid] = broken;
 }
 
 __kernel void count_broken(__global const float* rest, __global int* counter, int total)
@@ -488,12 +518,12 @@ __kernel void relax_fused(__global const float4* qin, __global float4* qout, __g
         private const int FusedTile = 8, FusedMaxLayers = 14;
         private bool fusedNow;          // used by the simulation in progress
         private int groupsX, groupsY;
-        private IntPtr kInit, kPredict, kPush, kTear, kRelax, kFlow, kFinish, kBroken, kShell;
+        private IntPtr kInit, kPredict, kPush, kTear, kRelax, kFlow, kFinish, kBroken, kShell, kCrack;
 
         // True = the shell's logic runs on the card too (the whole simulation is queued in chunks, with a wait only after each chunk).
         // False = the old way: the CPU runs the shell and the card is waited for twice a step (kept to compare the two).
         public bool DeviceShell = true;
-        private IntPtr bP, bV, bQ, bO, bRest, bRest0, bFixed, bCharged, bCounter, bParams, bMoving;
+        private IntPtr bP, bV, bQ, bO, bRest, bRest0, bFixed, bCharged, bCounter, bParams, bMoving, bCracks;
         private int capacity;
         private int n, k, count;
         private float[] zeros4;
@@ -579,7 +609,7 @@ __kernel void relax_fused(__global const float4* qin, __global float4* qout, __g
             BuildMs = build.Elapsed.TotalMilliseconds;
 
             kInit = Kernel("init_links"); kPredict = Kernel("predict_push"); kPush = Kernel("push"); kTear = Kernel("tear");
-            kRelax = Kernel("relax"); kFlow = Kernel("flow"); kFinish = Kernel("finish"); kBroken = Kernel("count_broken"); kShell = Kernel("shell_step");
+            kRelax = Kernel("relax"); kFlow = Kernel("flow"); kFinish = Kernel("finish"); kBroken = Kernel("count_broken"); kShell = Kernel("shell_step"); kCrack = Kernel("crack_map");
             bParams = Buffer(ParamCount * 4);
             bCounter = Buffer(4);
             bMoving = Buffer(4);
@@ -821,6 +851,24 @@ __kernel void relax_fused(__global const float4* qin, __global float4* qout, __g
             return state[PDone] > 0.5f;
         }
 
+        private int crackCapacity;
+
+        // How many of the 8 across-the-plate links have torn at each column's front layer (dest[0 .. n*n)) and back layer (dest[n*n .. 2*n*n)).
+        // Call after the simulation, with the same columns and layers it had.
+        public void ReadCracks(int columns, int layers, int[] dest)
+        {
+            int cells = columns * columns;
+            if (2 * cells > crackCapacity)
+            {
+                Release(ref bCracks);
+                crackCapacity = 2 * cells;
+                bCracks = Buffer(4L * crackCapacity);
+            }
+            Arg(kCrack, 0, bRest); Arg(kCrack, 1, bCracks); Arg(kCrack, 2, columns); Arg(kCrack, 3, layers); Arg(kCrack, 4, columns * columns * layers);
+            Run(kCrack, 2 * cells);
+            Check(ClNative.clEnqueueReadBuffer(queue, bCracks, 1, UIntPtr.Zero, (UIntPtr)(4L * 2 * cells), dest, 0, null, IntPtr.Zero), "read the cracks");
+        }
+
         // The simulation is over: the particles' places come back, and the number of links that tore.
         public void End(float[] px, float[] py, float[] pz, out int brokenLinks)
         {
@@ -849,10 +897,10 @@ __kernel void relax_fused(__global const float4* qin, __global float4* qout, __g
             try
             {
                 Release(ref bP); Release(ref bV); Release(ref bQ); Release(ref bQ2); Release(ref bO); Release(ref bRest); Release(ref bRest0);
-                Release(ref bFixed); Release(ref bCharged); Release(ref bCounter); Release(ref bParams); Release(ref bMoving);
-                foreach (IntPtr kernel in new[] { kInit, kPredict, kPush, kTear, kRelax, kFlow, kFinish, kBroken, kShell, kFused })
+                Release(ref bFixed); Release(ref bCharged); Release(ref bCounter); Release(ref bParams); Release(ref bMoving); Release(ref bCracks);
+                foreach (IntPtr kernel in new[] { kInit, kPredict, kPush, kTear, kRelax, kFlow, kFinish, kBroken, kShell, kFused, kCrack })
                     if (kernel != IntPtr.Zero) ClNative.clReleaseKernel(kernel);
-                kInit = kPredict = kPush = kTear = kRelax = kFlow = kFinish = kBroken = kShell = kFused = IntPtr.Zero;
+                kInit = kPredict = kPush = kTear = kRelax = kFlow = kFinish = kBroken = kShell = kFused = kCrack = IntPtr.Zero;
                 if (program != IntPtr.Zero) ClNative.clReleaseProgram(program);
                 if (queue != IntPtr.Zero) ClNative.clReleaseCommandQueue(queue);
                 if (context != IntPtr.Zero) ClNative.clReleaseContext(context);

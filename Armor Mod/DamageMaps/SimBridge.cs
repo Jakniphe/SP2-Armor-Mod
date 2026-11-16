@@ -31,6 +31,7 @@ namespace ArmorFragments
                 ResistanceJPerM3 = resistanceJPerM3,
                 Ricochet = impact.Kind == DamageKind.Ricochet,
                 KeptEnergy = impact.KeptEnergy,
+                DeflectionDeg = impact.Kind == DamageKind.Penetrated ? impact.Deflection : 0f,
                 EnergyScale = 1f,
                 Quality = quality,
                 Seed = impact.Seed,
@@ -50,7 +51,9 @@ namespace ArmorFragments
 
         // Lays the simulation's grid into the plate's face tiles: the front's heights on the face the shell hit, the back's on
         // the other face, and the holes through both. The grid is coarser than the tile's pixels, so it is sampled smoothly.
-        public static void Apply(PlateCpu cpu, PlateImpact impact, ImpactSimResult sim)
+        //   cracks:      the torn links make thin grooves in the surfaces
+        //   smoothEdges: the edge of a hole follows where the material runs out between the columns, a little ragged, not the columns' square steps
+        public static void Apply(PlateCpu cpu, PlateImpact impact, ImpactSimResult sim, bool cracks = true, bool smoothEdges = true)
         {
             int entry = impact.Front ? 0 : 1;
             PlateCpu.Face faceIn = cpu.Get(entry), faceOut = cpu.Get(1 - entry);
@@ -64,6 +67,10 @@ namespace ArmorFragments
 
             int n = sim.N;
             bool anyHole = false;
+            bool grooves = cracks && sim.CrackFront != null && sim.CrackBack != null;
+            bool smooth = smoothEdges && sim.Solid != null;
+            float grooveDepth = Mathf.Clamp(0.04f * impact.Caliber, 0.0004f, 0.002f);   // meters at a full crack
+            float ragged = smooth ? 0.10f + 0.20f * Mathf.Clamp01(impact.PlateBrittleness) : 0f;
             for (int y = y0; y < y1; y++)
             {
                 for (int x = x0; x < x1; x++)
@@ -79,16 +86,46 @@ namespace ArmorFragments
                     int idx = y * cpu.Width + x;
                     faceIn.Height[idx] += Sample(sim.Front, n, i, j, fx, fy);
                     faceOut.Height[idx] += Sample(sim.Back, n, i, j, fx, fy);
-                    if (SampleHole(sim.Hole, n, i, j, fx, fy) < 0.5f)
+                    float solid = smooth ? Sample(sim.Solid, n, i, j, fx, fy) : SampleHole(sim.Hole, n, i, j, fx, fy);
+                    float threshold = 0.5f + ragged * Noise(x, y, impact.Seed);
+                    if (solid < threshold)
                     {
                         faceIn.Mask[idx] = 0;
                         faceOut.Mask[idx] = 0;
                         anyHole = true;
                     }
+                    else if (grooves)
+                    {
+                        faceIn.Height[idx] -= grooveDepth * Sample(sim.CrackFront, n, i, j, fx, fy);
+                        faceOut.Height[idx] -= grooveDepth * Sample(sim.CrackBack, n, i, j, fx, fy);
+                    }
                 }
             }
             PlateStamps.Dirty(faceIn, x0, y0, x1, y1, anyHole);
             PlateStamps.Dirty(faceOut, x0, y0, x1, y1, anyHole);
+        }
+
+        // Smooth noise in -1..1 on a lattice of 3 pixels (the same for the same seed): the ragged edge of torn metal.
+        private static float Noise(float x, float y, int seed)
+        {
+            float gx = x / 3f, gy = y / 3f;
+            int ix = Mathf.FloorToInt(gx), iy = Mathf.FloorToInt(gy);
+            float tx = gx - ix, ty = gy - iy;
+            tx = tx * tx * (3f - 2f * tx);
+            ty = ty * ty * (3f - 2f * ty);
+            float a = Hash(ix, iy, seed), b = Hash(ix + 1, iy, seed), c = Hash(ix, iy + 1, seed), d = Hash(ix + 1, iy + 1, seed);
+            return (a * (1f - tx) + b * tx) * (1f - ty) + (c * (1f - tx) + d * tx) * ty;
+        }
+
+        private static float Hash(int x, int y, int seed)
+        {
+            unchecked
+            {
+                uint h = (uint)(x * 374761393 + y * 668265263 + seed * 1442695041);
+                h = (h ^ (h >> 13)) * 1274126177u;
+                h ^= h >> 16;
+                return (h & 0xFFFF) / 32767.5f - 1f;
+            }
         }
 
         private static float Sample(float[] grid, int n, int i, int j, float fx, float fy)

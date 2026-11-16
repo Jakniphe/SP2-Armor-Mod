@@ -32,6 +32,7 @@ namespace ArmorFragments
         public float PlateHardness;    // percent
         public float PlateBrittleness; // 0..1
         public float KeptEnergy;       // ricochet: the share of its energy the shell keeps
+        public float Deflection;       // degrees: how far the plate turns a shell that goes through it (the energy model's number)
     }
 
     // The atlases a vehicle's plates are drawn into (one rectangle at a time).

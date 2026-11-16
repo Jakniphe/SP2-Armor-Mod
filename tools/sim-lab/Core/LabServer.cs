@@ -138,6 +138,8 @@ namespace SimLab
                 ThicknessM = s.Thickness * 0.001f, PlateHardness = s.Hardness, PlateBrittleness = s.Brittleness / 100f,
                 ResistanceJPerM3 = ArmorFragmentsPlugin.ArmorResistance.Value * 1e7f,
                 Ricochet = ricochet, KeptEnergy = kept, EnergyScale = s.EnergyScale, Quality = s.Quality, Seed = s.Seed,
+                // a shell that goes through is turned toward the plate's normal by the energy model's own number
+                DeflectionDeg = verdict == "Penetrated" ? EnergyModel.DeflectionDegrees(armor, shell, s.Angle) : 0f,
             };
             SimPool simPool = PoolFor(s.Threads);
             ImpactSimResult sim = ImpactSim.Run(input, simPool);
@@ -255,7 +257,7 @@ namespace SimLab
                 Kind = kind, Front = true, U = plate * 0.5f, V = plate * 0.5f, DirU = input.DirU, DirV = input.DirV, Angle = s.Angle,
                 Caliber = input.CaliberM, Strength = strength, Thickness = input.ThicknessM, Seed = s.Seed,
                 ShellMass = input.ShellMassKg, Speed = input.SpeedMS, PlateHardness = input.PlateHardness,
-                PlateBrittleness = input.PlateBrittleness, KeptEnergy = kept,
+                PlateBrittleness = input.PlateBrittleness, KeptEnergy = kept, Deflection = input.DeflectionDeg,
             };
             if (agrees) SimBridge.Apply(cpu, impact, sim); else PlateStamps.Apply(cpu, impact);
 

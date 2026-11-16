@@ -253,7 +253,7 @@ namespace ArmorFragments
             if (LeavesMarks(simulated, applyDamage))
                 PlateDamageMaps.OnImpact(armor, armorTag, DamageKind.Penetrated, point, facingNormal, direction,
                                          shell.CaliberMm * 0.001f, Mathf.Clamp01(absorbed / Mathf.Max(shellEnergy, 1f)), angle, leadTime,
-                                         shell.Mass, shell.Speed, 1f, simulated);
+                                         shell.Mass, shell.Speed, 1f, simulated, EnergyModel.DeflectionDegrees(armorTag, shell, angle));
 
             // 4) The shell is not spent by the plate: what the plate did not take and did not turn into
             //    fragments goes on, bent a little toward the plate's normal. (An explosive shell with a fuse

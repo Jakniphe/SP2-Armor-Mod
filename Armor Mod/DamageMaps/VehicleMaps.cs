@@ -784,6 +784,7 @@ namespace ArmorFragments
             public bool Height;
             public bool Damage;
             public bool Everything;
+            public bool SimCracks, SimSmooth;  // the marks' cracks and the smooth edge of a hole
             public bool UseGpu;                // the player's wish (the card is used only if it was found and passed its test)
 
             // Real geometry (experimental): after the last queued job for the plate the worker also rewrites its mesh.
@@ -815,7 +816,7 @@ namespace ArmorFragments
         }
         public static volatile int SimsDone;
         public static volatile int Fallbacks;
-        public static volatile int TunedQuality = 2;   // the best quality the time limit lets the simulation use now
+        public static volatile int TunedQuality = ImpactSim.MaxQuality;   // the best quality the time limit lets the simulation use now
 
         private static SimPool pool;
         private static int poolWorkers = -1;
@@ -1017,7 +1018,7 @@ namespace ArmorFragments
                 LastSimThreads = onGpu ? 0 : Math.Min(simPool.Workers, simPool.MaxWorkers) + 1;
                 Tune(job, result);
 
-                string what = "[SIMFX] " + impact.Kind + ", quality " + new[] { "low", "medium", "high" }[quality] + grid + ", " + result.Particles +
+                string what = "[SIMFX] " + impact.Kind + ", quality " + ImpactSim.QualityName(quality) + grid + ", " + result.Particles +
                               " particles, " + result.Steps + " steps, " + result.Ms.ToString("F0") + " ms on " +
                               (onGpu ? "the graphics card" : LastSimThreads + " thread(s)");
                 if (result.TimedOut)
@@ -1035,7 +1036,7 @@ namespace ArmorFragments
                 }
 
                 long appliedAt = System.Diagnostics.Stopwatch.GetTimestamp();
-                SimBridge.Apply(job.Plate.Cpu, impact, result);
+                SimBridge.Apply(job.Plate.Cpu, impact, result, job.SimCracks, job.SimSmooth);
                 Infos.Enqueue("[PERF] where the time of that simulation went: " + result.Breakdown + "; laying the result into the plate " +
                               PerfMonitor.Since(appliedAt).ToString("F1") + " ms; the whole job " + PerfMonitor.Since(startedAt).ToString("F1") + " ms");
                 SimsDone++;
@@ -1058,7 +1059,7 @@ namespace ArmorFragments
         // outcome (a shell that goes through takes more steps than one that is stopped), so it is learned from the runs themselves,
         // one value per kind of impact. The first guesses come from the first real runs in the game (Mono, 14 threads).
         private const double BudgetShare = 0.45;                // of the time limit: a mark that comes later than this is too late to matter
-        private static readonly int[] Ladder = { 96, 80, 64, 56, 48, 40, 32 };
+        private static readonly int[] Ladder = { 192, 160, 128, 112, 96, 80, 64, 56, 48, 40, 32 };
         private static readonly double[] CostPerUnit = { 2.0e-3, 1.4e-3, 2.1e-3 };   // ms per (columns^3 x layers): ricochet, blocked, penetrated
         private static readonly double[] CostPerUnitGpu = { 4.0e-5, 4.0e-5, 4.0e-5 };    // the same on the graphics card (measured: about 3e-5)
         private static string GridNote = "";
@@ -1070,7 +1071,7 @@ namespace ArmorFragments
 
         private static double Units(ImpactSimInput input, int columns)
         {
-            return (double)columns * columns * columns * ImpactSim.LayersFor(input.CaliberM, input.ThicknessM, columns);
+            return (double)columns * columns * columns * ImpactSim.LayersFor(input.CaliberM, input.ThicknessM, columns, input.AngleDeg);
         }
 
         // The finest grid (not above the quality's own) whose predicted time fits the budget; the coarsest one if none does.
@@ -1117,13 +1118,13 @@ namespace ArmorFragments
                 if (TunedQuality > 0)
                 {
                     TunedQuality--;
-                    Infos.Enqueue("[SIMFX] it was slow: the best quality it will use for now is " + new[] { "low", "medium", "high" }[TunedQuality]);
+                    Infos.Enqueue("[SIMFX] it was slow: the best quality it will use for now is " + ImpactSim.QualityName(TunedQuality));
                 }
                 goodRuns = 0;
             }
             else if (result.Ms < 0.2 * job.TimeLimitMs)
             {
-                if (++goodRuns >= 3 && TunedQuality < 2) { TunedQuality++; goodRuns = 0; }
+                if (++goodRuns >= 3 && TunedQuality < ImpactSim.MaxQuality) { TunedQuality++; goodRuns = 0; }
             }
             else goodRuns = 0;
         }
