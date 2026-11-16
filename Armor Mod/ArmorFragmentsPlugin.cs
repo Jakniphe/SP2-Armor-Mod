@@ -138,8 +138,16 @@ namespace ArmorFragments
         // Shown in the log and the panel, to tell which build the game is really running.
         public const string Version = "0.9.1.1";
 
+        private float attachMenuAt = -1f;
+
         private void Update()
         {
+            if (attachMenuAt > 0f && UnityEngine.Time.unscaledTime >= attachMenuAt)
+            {
+                attachMenuAt = -1f;
+                try { UI.ArmorPanel.AttachToExistingMenus(); }
+                catch (System.Exception e) { Log.LogWarning("Couldn't add the menu button to the open flight menu: " + e.Message); }
+            }
             UI.DesignerSection.Tick();
             XRayView.Tick();
             VehicleXRay.Tick();
@@ -592,6 +600,7 @@ namespace ArmorFragments
             SafePatcher.PatchAll(HarmonyInstance, typeof(ArmorFragmentsPlugin).Assembly);
             CompatibilityCheck.Run();   // says in the log what a game update has changed
             Log.LogInfo("Armor Fragments loaded!");
+            attachMenuAt = UnityEngine.Time.unscaledTime + 0.5f;   // loaded in the middle of a flight (a reload): the flight menu is already built
         }
 
         // The plugin is being destroyed: a reload by the ScriptEngine (the game closing is recognized and left alone).

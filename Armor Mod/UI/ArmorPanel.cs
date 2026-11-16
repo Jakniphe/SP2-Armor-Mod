@@ -1,5 +1,6 @@
 using System;
 using System.Xml.Linq;
+using Assets.Scripts.Flight.UI.Panels;
 using Jundroo.Juicy;
 using Jundroo.Juicy.Widgets;
 
@@ -42,6 +43,19 @@ namespace ArmorFragments.UI
             menuButton = button;
             panel = null;   // a new flight scene means any old panel is gone
             UpdateButtonColor();
+        }
+
+        // A copy of the plugin loaded while a flight is on (a reload with F6) missed the moment the game built the flight menu, so
+        // it adds its button to the menu that is already there. Called a moment after loading, so that the copy it replaces has
+        // taken its own button out first.
+        public static void AttachToExistingMenus()
+        {
+            foreach (MenuPanelScript script in UnityEngine.Object.FindObjectsByType<MenuPanelScript>(
+                         UnityEngine.FindObjectsInactive.Include, UnityEngine.FindObjectsSortMode.None))
+            {
+                Widget widget = script != null ? script.Widget : null;
+                if (widget != null) AddMenuButton(widget);
+            }
         }
 
         // The plugin is being unloaded: the panel is closed and the button leaves the flight menu.
