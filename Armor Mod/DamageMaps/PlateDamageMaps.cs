@@ -478,10 +478,15 @@ namespace ArmorFragments
 
             PerfMonitor.Lap("DMAP deliver");
             if (++frame % 120 == 0) Prune();
+            PerfMonitor.Lap("DMAP prune");
             TickSettings();
+            PerfMonitor.Lap("DMAP settings");
             TickGeometrySettings();
+            PerfMonitor.Lap("DMAP geometry settings");
             TickMeshes();
+            PerfMonitor.Lap("DMAP meshes");
             GeometryView.Tick(Vehicles.Values);
+            PerfMonitor.Lap("DMAP geometry view");
             TickTest();
         }
 
