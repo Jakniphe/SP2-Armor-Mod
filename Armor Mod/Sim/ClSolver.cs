@@ -391,8 +391,17 @@ __kernel void count_broken(__global const float* rest, __global int* counter, in
 
         // A new simulation: the particles go to the card (their places, where they started, and which are held fixed), and the links' rest
         // lengths are worked out there from those places.
+        // Where the time of the last simulation went (Stopwatch ticks), for the [PERF] breakdown: Begin = everything the start does; ParamWrite =
+        // the blocking upload of each step's numbers (an in-order queue makes it wait for the step before); Dispatch = queueing the kernels;
+        // CounterRead = the wait for the shell's swept-particle count; Finish = the wait for the card to end; Readback = the particles back.
+        public long TicksBegin, TicksParamWrite, TicksDispatch, TicksCounterRead, TicksFinish, TicksReadback;
+        public int Steps, SyncedSteps;
+
         public void Begin(float[] px, float[] py, float[] pz, float[] ox, float[] oy, float[] oz, byte[] fixedFlag, int columns, int layers)
         {
+            long beganAt = System.Diagnostics.Stopwatch.GetTimestamp();
+            TicksBegin = TicksParamWrite = TicksDispatch = TicksCounterRead = TicksFinish = TicksReadback = 0;
+            Steps = SyncedSteps = 0;
             n = columns; k = layers; count = n * n * k;
             Reserve(count);
 
@@ -423,13 +432,18 @@ __kernel void count_broken(__global const float* rest, __global int* counter, in
             Arg(kFinish, 0, bP); Arg(kFinish, 1, bV); Arg(kFinish, 2, bQ); Arg(kFinish, 3, bFixed); Arg(kFinish, 4, bParams); Arg(kFinish, 5, count);
 
             Run(kInit, count);
+            TicksBegin = System.Diagnostics.Stopwatch.GetTimestamp() - beganAt;
         }
 
         // One step of the particles. Returns how many particles the shell has swept through so far (in all); that number is only read back
         // while the shell is in play (afterwards nobody waits for the card between steps).
         public int Step(float[] parameters, bool hasShell, int iterations)
         {
+            long t0 = System.Diagnostics.Stopwatch.GetTimestamp();
             Check(ClNative.clEnqueueWriteBuffer(queue, bParams, 1, UIntPtr.Zero, (UIntPtr)(ParamCount * 4), parameters, 0, null, IntPtr.Zero), "upload the step's numbers");
+            long t1 = System.Diagnostics.Stopwatch.GetTimestamp();
+            TicksParamWrite += t1 - t0;
+            Steps++;
 
             Run(kPredict, count);
             Run(kTear, count);
@@ -445,16 +459,23 @@ __kernel void count_broken(__global const float* rest, __global int* counter, in
             if (hasShell) Run(kPush, count);
             Run(kFlow, count);
             Run(kFinish, count);
+            long t2 = System.Diagnostics.Stopwatch.GetTimestamp();
+            TicksDispatch += t2 - t1;
 
             if (!hasShell) return counterValue[0];
             Check(ClNative.clEnqueueReadBuffer(queue, bCounter, 1, UIntPtr.Zero, (UIntPtr)4, counterValue, 0, null, IntPtr.Zero), "read the counter");
+            TicksCounterRead += System.Diagnostics.Stopwatch.GetTimestamp() - t2;
+            SyncedSteps++;
             return counterValue[0];
         }
 
         // The simulation is over: the particles' places come back, and the number of links that tore.
         public void End(float[] px, float[] py, float[] pz, out int brokenLinks)
         {
+            long f0 = System.Diagnostics.Stopwatch.GetTimestamp();
             ClNative.clFinish(queue);
+            long f1 = System.Diagnostics.Stopwatch.GetTimestamp();
+            TicksFinish = f1 - f0;
             float[] position = new float[4 * count];
             Check(ClNative.clEnqueueReadBuffer(queue, bP, 1, UIntPtr.Zero, (UIntPtr)(16L * count), position, 0, null, IntPtr.Zero), "read the particles back");
             for (int i = 0; i < count; i++)
@@ -468,6 +489,7 @@ __kernel void count_broken(__global const float* rest, __global int* counter, in
             Run(kBroken, count * 18);
             Check(ClNative.clEnqueueReadBuffer(queue, bCounter, 1, UIntPtr.Zero, (UIntPtr)4, counterValue, 0, null, IntPtr.Zero), "read the count of torn links");
             brokenLinks = counterValue[0] / 2;
+            TicksReadback = System.Diagnostics.Stopwatch.GetTimestamp() - f1;
         }
 
         public void Dispose()

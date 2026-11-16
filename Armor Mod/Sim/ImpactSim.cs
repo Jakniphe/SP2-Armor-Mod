@@ -42,6 +42,7 @@ namespace ArmorFragments.Sim
         public int Broken;             // links that tore
         public int Charged;            // particles the shell displaced (each cost it ResistanceJPerM3 x its volume)
         public double Ms;
+        public string Breakdown;       // where the time went, for the [PERF] log (null when not measured)
     }
 
     // A SIMPLIFIED IMPACT SIMULATION, MADE TO LOOK RIGHT, NOT TO BE ENGINEERING-ACCURATE.
@@ -156,6 +157,7 @@ namespace ArmorFragments.Sim
             Allocate();
             Build(input.Seed);
             Surfaces(out baseTop, out baseBottom, out baseCover);   // the plate before the shot (its lattice is not perfectly smooth)
+            double setupMs = watch.Elapsed.TotalMilliseconds;
 
             // ---- The shell --------------------------------------------------------------------
             float angle = Math.Min(Math.Max(input.AngleDeg, 0f), 85f) * (float)(Math.PI / 180.0);
@@ -196,7 +198,7 @@ namespace ArmorFragments.Sim
             bool shellActive = true;
             bool stopped = false;
             bool exited = false;
-            int steps = 0, settle = 0, stoppedSteps = 0;
+            int steps = 0, settle = 0, stoppedSteps = 0, shellSteps = 0;
             const int MaxActive = 600;
             const int SettleSteps = 24;
 
@@ -262,6 +264,7 @@ namespace ArmorFragments.Sim
                 }
 
                 bool hasShell = shellActive;
+                if (hasShell) shellSteps++;
                 float damp = shellActive ? 0.995f : 0.85f;
 
                 float chargedNow = 0f;
@@ -311,7 +314,9 @@ namespace ArmorFragments.Sim
             int gpuBroken = 0;
             if (gpu != null) gpu.End(px, py, pz, out gpuBroken);   // the particles come back to be read as they are now
 
+            double loopMs = watch.Elapsed.TotalMilliseconds;
             ImpactSimResult result = Sample(exited || (energy > 0 && !stopped && az < 0f && exited), input.EnergyScale);
+            double sampleMs = watch.Elapsed.TotalMilliseconds - loopMs;
             result.EnergyLeft = (float)Math.Max(energy / energy0, 0.0);
             result.Particles = count;
             result.Steps = steps;
@@ -330,6 +335,22 @@ namespace ArmorFragments.Sim
             }
             result.Charged = chargedCount;
             result.Ms = watch.Elapsed.TotalMilliseconds;
+
+            double perTick = 1000.0 / System.Diagnostics.Stopwatch.Frequency;
+            string breakdown = "lattice " + setupMs.ToString("F1") + " ms; " + shellSteps + " steps with the shell + " + (steps - shellSteps) + " settling";
+            if (gpu != null)
+            {
+                breakdown += "; card: start " + (gpu.TicksBegin * perTick).ToString("F1") + " ms, numbers upload (waits for the step before) " +
+                    (gpu.TicksParamWrite * perTick).ToString("F1") + " ms, queueing " + (gpu.TicksDispatch * perTick).ToString("F1") +
+                    " ms, wait for the shell's count (" + gpu.SyncedSteps + " steps) " + (gpu.TicksCounterRead * perTick).ToString("F1") +
+                    " ms, finish " + (gpu.TicksFinish * perTick).ToString("F1") + " ms, read back " + (gpu.TicksReadback * perTick).ToString("F1") + " ms";
+            }
+            else
+            {
+                breakdown += "; stepping " + (loopMs - setupMs).ToString("F1") + " ms";
+            }
+            breakdown += "; reading the surfaces " + sampleMs.ToString("F1") + " ms";
+            result.Breakdown = breakdown;
             return result;
         }
 

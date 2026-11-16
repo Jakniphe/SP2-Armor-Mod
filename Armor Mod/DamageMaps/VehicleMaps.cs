@@ -989,7 +989,10 @@ namespace ArmorFragments
                     return false;
                 }
 
+                long appliedAt = System.Diagnostics.Stopwatch.GetTimestamp();
                 SimBridge.Apply(job.Plate.Cpu, impact, result);
+                Infos.Enqueue("[PERF] where the time of that simulation went: " + result.Breakdown + "; laying the result into the plate " +
+                              PerfMonitor.Since(appliedAt).ToString("F1") + " ms; the whole job " + PerfMonitor.Since(startedAt).ToString("F1") + " ms");
                 SimsDone++;
                 Infos.Enqueue(what + ", dent " + (result.DepthM * 1000f).ToString("F0") + " mm" +
                               (result.HoleRadiusM > 0f ? ", hole " + (result.HoleRadiusM * 2000f).ToString("F0") + " mm" : ""));
