@@ -90,7 +90,20 @@ namespace ArmorFragments
             grid.present = new bool[grid.rounds.Count];
             for (int i = 0; i < grid.present.Length; i++) grid.present[i] = true;
             grid.BuildRemovalOrder();
+            grid.LoadToFullness(part);
             return grid;
+        }
+
+        // The rack's Fullness (f=, percent): the rounds above it are taken out, from the top, as if already fired.
+        // Capacity stays what the shape holds; Remaining is what is loaded.
+        public float FullnessPercent = 100f;
+
+        private void LoadToFullness(PartScript part)
+        {
+            AmmoRackTag tag = part != null && part.Part != null ? TagCodec.Parse(part.Part.Name).AmmoRack : null;
+            FullnessPercent = tag != null && tag.Fill.HasValue ? Mathf.Clamp(tag.Fill.Value, 0f, 100f) : 100f;
+            int loaded = Mathf.RoundToInt(rounds.Count * FullnessPercent / 100f);
+            while (Remaining > loaded && TakeRound()) { }
         }
 
         // Returns null if measured, or the reason the rack can hold nothing.

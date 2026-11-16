@@ -56,6 +56,7 @@ namespace ArmorFragments
     {
         public string Group;               // g: names its Funky Trees variables, <group>_rounds... (null = the default group)
         public int? Order;                 // o: a cannon empties its racks from the lowest number up (null = after the numbered ones)
+        public float? Fill;                // f: percent of its rounds loaded at spawn, the top ones left out (null = full)
     }
 
     // Part that reacts to fragment damage (engine, tank, propeller, some fuselages).
@@ -162,6 +163,7 @@ namespace ArmorFragments
                     {
                         Group = ReadText(block.Groups[2].Value, "g"),
                         Order = values.TryGetValue("o", out order) ? Mathf.RoundToInt(order) : (int?)null,
+                        Fill = Optional(values, "f"),
                     };
                 }
             }
@@ -192,7 +194,8 @@ namespace ArmorFragments
             if (tags.AmmoRack != null)
                 Append(name, "[AMM" +
                        (string.IsNullOrEmpty(tags.AmmoRack.Group) ? "" : " g=" + tags.AmmoRack.Group) +
-                       (tags.AmmoRack.Order.HasValue ? " o=" + tags.AmmoRack.Order.Value : "") + "]");
+                       (tags.AmmoRack.Order.HasValue ? " o=" + tags.AmmoRack.Order.Value : "") +
+                       (tags.AmmoRack.Fill.HasValue && tags.AmmoRack.Fill.Value < 100f ? " f=" + Number(tags.AmmoRack.Fill.Value) : "") + "]");
             if (tags.Vent != null)
                 Append(name, "[VNT]");
             if (tags.Hole != null)

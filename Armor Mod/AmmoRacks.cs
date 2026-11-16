@@ -440,9 +440,9 @@ namespace ArmorFragments
                 }
                 ArmorFragmentsPlugin.Log.LogInfo("Ammo rack '" + rack.Label + "' (group " + rack.Group.Name +
                     (rack.Order != int.MaxValue ? ", order " + rack.Order : "") + "): " +
-                    (rack.Grid.Problem == null ? rack.Grid.Capacity + " rounds of " + rack.Round.Describe() + " (" +
+                    (rack.Grid.Problem == null ? (rack.Grid.Remaining < rack.Grid.Capacity ? rack.Grid.Remaining + " of " : "") + rack.Grid.Capacity + " rounds of " + rack.Round.Describe() + " (" +
                                                  rack.Grid.Describe() + ", shape from " + rack.Grid.Method + "), weighing " +
-                                                 Fmt(rack.Grid.Capacity * rack.Round.RoundMass, "F0") + " kg, for " +
+                                                 Fmt(rack.Grid.Remaining * rack.Round.RoundMass, "F0") + " kg, for " +
                                                  rack.Cannons + " cannon(s)"
                                                : "holds nothing: " + rack.Grid.Problem));
                 if (rack.Mixed)
@@ -1455,7 +1455,14 @@ namespace ArmorFragments
                 ? round.Describe() + mixed + cannons : "none";
             return roundText + "|" + ShapeSignature(rack) + "|" +
                    ArmorFragmentsPlugin.CaseDiameterRatio.Value + "/" + ArmorFragmentsPlugin.CaseLitresPerMJ.Value + "/" +
-                   ArmorFragmentsPlugin.RoundSpacingPercent.Value;
+                   ArmorFragmentsPlugin.RoundSpacingPercent.Value + "|f" + RackFill(rack);
+        }
+
+        // The rack's Fullness (f=), percent.
+        private static float RackFill(PartScript rack)
+        {
+            AmmoRackTag tag = rack != null && rack.Part != null ? TagCodec.Parse(rack.Part.Name).AmmoRack : null;
+            return tag != null && tag.Fill.HasValue ? tag.Fill.Value : 100f;
         }
 
         // The part's collider boxes in its own rotation, to the millimeter, and its fuselage offset.
@@ -1509,7 +1516,7 @@ namespace ArmorFragments
                 bool mixed;
                 if (!DesignRound(rack.PartScript, out round, out cannons, out mixed)) continue;
                 if (cannons > 1) shared = true;
-                total += RackGrid.Measure(rack.PartScript, round).Capacity;
+                total += RackGrid.Measure(rack.PartScript, round).Remaining;   // loaded, after Fullness
             }
             return total;
         }

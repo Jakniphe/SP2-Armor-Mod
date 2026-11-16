@@ -435,6 +435,9 @@ namespace ArmorFragments.UI
                     Slider(builder, tags, "Empty order", "A cannon empties its racks from the lowest number up. 0 = after the numbered ones.",
                         0f, 20f, 1f, tags.AmmoRack.Order ?? 0, "",
                         v => tags.AmmoRack.Order = v < 0.5f ? (int?)null : Mathf.RoundToInt(v));
+                    Slider(builder, tags, "Fullness", "How full the rack starts: the share of its rounds loaded at spawn. The top ones are left out, as if already fired.",
+                        0f, 100f, 5f, tags.AmmoRack.Fill ?? 100f, " %",
+                        v => tags.AmmoRack.Fill = v >= 99.5f ? (float?)null : v);
                     if (tags.Armor != null)
                         builder.Text("Warning", "Armor: holds no rounds");
                     Live(builder, new[] { "Status", "Feeds", "Rounds held", "Layout", "Lost to shape", "Space (L x W x H)", "Round (W x L)", "Shell", "Rounds weight" },
@@ -544,13 +547,15 @@ namespace ArmorFragments.UI
             {
                 measured && mixed ? "OK (mixed: biggest round)" : grid.Status,
                 feeds,
-                grid.Capacity.ToString(CultureInfo.InvariantCulture),
+                grid.Remaining < grid.Capacity
+                    ? grid.Remaining + " of " + grid.Capacity + " (" + grid.FullnessPercent.ToString("F0", CultureInfo.InvariantCulture) + "% full)"
+                    : grid.Capacity.ToString(CultureInfo.InvariantCulture),
                 hasGrid ? grid.Orientation + ", up to " + grid.Slots + " x " + grid.Columns + " x " + grid.Layers : "-",
                 grid.LostToShape.ToString(CultureInfo.InvariantCulture),
                 grid.InsideLength > 0f ? Cm(grid.InsideLength) + " x " + Cm(grid.InsideWidth) + " x " + Cm(grid.InsideHeight) + " cm" : "-",
                 round.ShortSize(),
                 round.ShortShell(),
-                (grid.Capacity * round.RoundMass).ToString("F0", CultureInfo.InvariantCulture) + " kg (added in flight)",
+                (grid.Remaining * round.RoundMass).ToString("F0", CultureInfo.InvariantCulture) + " kg (added in flight)",
             };
         }
 

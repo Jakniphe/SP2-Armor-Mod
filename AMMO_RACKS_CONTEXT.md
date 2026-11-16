@@ -28,6 +28,8 @@ Changed: `FragmentSpawner.cs`, `ShellFlight.cs`, `Net/NetSync.cs`, `PartTags.cs`
 - `[AMM g=<group> o=<order>]` on a fuselage: an ammo rack. `g` = the name of its Funky Trees variables (empty =
   "Ammo"; racks with the same `g` share them),
   `o` = empty order: a cannon empties its racks from the lowest up (none = after the numbered ones, then part id).
+  `f` = fullness, percent of the rounds loaded at spawn (none = 100): `RackGrid.Measure` takes the rest out from the
+  top (`LoadToFullness`), so `Capacity` is what the shape holds and `Remaining` what is loaded.
 - `[CAN ... r=<id>,<id>]`: the part ids of the racks the cannon draws from, picked in the designer. No `r` (or no
   id that is still a rack) = the game's Ammo Count. Several cannons can list the same rack.
 - `[VNT]` on a fuselage: a cook-off vent.
