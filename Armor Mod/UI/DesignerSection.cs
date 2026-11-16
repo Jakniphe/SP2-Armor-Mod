@@ -432,9 +432,15 @@ namespace ArmorFragments.UI
                 {
                     PartScript rackPart = part;
                     string prefix = AmmoRacks.VariablePrefix(AmmoRacks.GroupName(tags.AmmoRack.Group));
-                    Slider(builder, tags, "Empty order", "A cannon empties its racks from the lowest number up. 0 = after the numbered ones.",
-                        0f, 20f, 1f, tags.AmmoRack.Order ?? 0, "",
-                        v => tags.AmmoRack.Order = v < 0.5f ? (int?)null : Mathf.RoundToInt(v));
+                    builder.Toggle("No order",
+                        "On: cannons empty this rack by distance, their nearest unnumbered rack first. Off: give it an Empty order; " +
+                        "cannons empty numbered racks first, lowest number up, then the unnumbered ones.",
+                        !tags.AmmoRack.Order.HasValue,
+                        on => Switch(tags, () => tags.AmmoRack.Order = on ? (int?)null : 1));
+                    if (tags.AmmoRack.Order.HasValue)
+                        Slider(builder, tags, "Empty order", "Cannons empty numbered racks from the lowest number up, before any rack with no order. Racks with the same number go nearest first.",
+                            1f, 20f, 1f, tags.AmmoRack.Order.Value, "",
+                            v => tags.AmmoRack.Order = Mathf.RoundToInt(v));
                     Slider(builder, tags, "Fullness", "How full the rack starts: the share of its rounds loaded at spawn. The top ones are left out, as if already fired.",
                         0f, 100f, 5f, tags.AmmoRack.Fill ?? 100f, " %",
                         v => tags.AmmoRack.Fill = v >= 99.5f ? (float?)null : v);

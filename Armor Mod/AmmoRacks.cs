@@ -276,7 +276,16 @@ namespace ArmorFragments
                     if (byId.TryGetValue(id, out rack) && !feed.Racks.Contains(rack)) feed.Racks.Add(rack);
                 }
                 if (feed.Racks.Count == 0) continue;   // none of its racks is left: it keeps the game's Ammo Count
-                feed.Racks.Sort((a, b) => a.Order != b.Order ? a.Order.CompareTo(b.Order) : a.PartId.CompareTo(b.PartId));
+                // Numbered racks first, lowest up; then the ones with no order, nearest to the gun first (also between
+                // racks with the same number). Distances are taken where the parts are at spawn.
+                Vector3 gunAt = part.transform.position;
+                feed.Racks.Sort((a, b) =>
+                {
+                    if (a.Order != b.Order) return a.Order.CompareTo(b.Order);
+                    float da = a.Part != null ? (a.Part.transform.position - gunAt).sqrMagnitude : float.MaxValue;
+                    float db = b.Part != null ? (b.Part.transform.position - gunAt).sqrMagnitude : float.MaxValue;
+                    return da != db ? da.CompareTo(db) : a.PartId.CompareTo(b.PartId);
+                });
 
                 foreach (Rack rack in feed.Racks)
                 {
@@ -1357,8 +1366,8 @@ namespace ArmorFragments
             return tag != null && tag.Order.HasValue ? tag.Order.Value : int.MaxValue;
         }
 
-        // The racks a cannon draws from, in the order it empties them (o=, then part id). Ids in its list that
-        // are not racks (any more) are left out.
+        // The racks a cannon draws from, in the order it empties them (numbered ones first, lowest up; then the ones
+        // with no order, nearest first). Ids in its list that are not racks (any more) are left out.
         public static List<PartData> DesignCannonRacks(PartScript cannonPart)
         {
             List<PartData> racks = new List<PartData>();
@@ -1371,7 +1380,11 @@ namespace ArmorFragments
             racks.Sort((a, b) =>
             {
                 int orderA = OrderOf(a), orderB = OrderOf(b);
-                return orderA != orderB ? orderA.CompareTo(orderB) : a.Id.CompareTo(b.Id);
+                if (orderA != orderB) return orderA.CompareTo(orderB);
+                Vector3 gunAt = cannonPart.transform.position;
+                float da = (a.PartScript.transform.position - gunAt).sqrMagnitude;
+                float db = (b.PartScript.transform.position - gunAt).sqrMagnitude;
+                return da != db ? da.CompareTo(db) : a.Id.CompareTo(b.Id);
             });
             return racks;
         }

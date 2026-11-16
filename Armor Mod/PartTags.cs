@@ -162,7 +162,7 @@ namespace ArmorFragments
                     tags.AmmoRack = new AmmoRackTag
                     {
                         Group = ReadText(block.Groups[2].Value, "g"),
-                        Order = values.TryGetValue("o", out order) ? Mathf.RoundToInt(order) : (int?)null,
+                        Order = values.TryGetValue("o", out order) && order >= 0.5f ? Mathf.RoundToInt(order) : (int?)null,   // none or 0 = no order
                         Fill = Optional(values, "f"),
                     };
                 }

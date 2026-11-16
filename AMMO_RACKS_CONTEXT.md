@@ -27,7 +27,9 @@ Changed: `FragmentSpawner.cs`, `ShellFlight.cs`, `Net/NetSync.cs`, `PartTags.cs`
 ## Tags
 - `[AMM g=<group> o=<order>]` on a fuselage: an ammo rack. `g` = the name of its Funky Trees variables (empty =
   "Ammo"; racks with the same `g` share them),
-  `o` = empty order: a cannon empties its racks from the lowest up (none = after the numbered ones, then part id).
+  `o` = empty order, 1 and up (none or 0 = No order, the designer's default): a cannon empties its numbered racks
+  from the lowest up, then the unnumbered ones nearest first; equal numbers also go nearest first (distance from the
+  gun at spawn in flight, in the designer for the read-out).
   `f` = fullness, percent of the rounds loaded at spawn (none = 100): `RackGrid.Measure` takes the rest out from the
   top (`LoadToFullness`), so `Capacity` is what the shape holds and `Remaining` what is loaded.
 - `[CAN ... r=<id>,<id>]`: the part ids of the racks the cannon draws from, picked in the designer. No `r` (or no
@@ -183,6 +185,12 @@ Changed: `FragmentSpawner.cs`, `ShellFlight.cs`, `Net/NetSync.cs`, `PartTags.cs`
   same `[CAN]` settings, and each listed rack with symmetry partners becomes the one nearest to that partner gun (a
   rack without partners stays shared). `RackLinksSymmetryPatch` also runs `ArmorSymmetry.MatchRacks` on new
   symmetric copies.
+- Rack matching (`ArmorSymmetry.MapRacks`): a listed rack with symmetry copies becomes the copy nearest to the gun,
+  unless the gun lists more than one rack of that symmetric set (then all are kept). It runs only when an ammo rack
+  or a marked cannon is dropped (`RackLinksDropPatch`, `MovePartTool.EndPartMovement`) or connected
+  (`RackLinksConnectPatch`, `MovePartTool.ConnectPartToAttachPoint`, which the part connections tool also uses), via
+  `ArmorSymmetry.RematchAround`: a cannon (and its symmetry copies) matches its racks; a rack makes the cannons using
+  it or its copies match theirs. Never on load or undo.
 - `RackVisualizer`: ghost copies of rack meshes (still clickable), rounds as cylinders, up to 20,000 drawn,
   hidden for the screenshot dialog.
 - `AmmoRackXRay`: rounds of your own racks; burning = orange, exploded = empty.

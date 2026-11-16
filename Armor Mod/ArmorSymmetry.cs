@@ -119,11 +119,7 @@ namespace ArmorFragments
                         FillerPercent = tags.Cannon.FillerPercent,
                         Brittleness = tags.Cannon.Brittleness,
                     };
-                    foreach (int id in tags.Cannon.Racks)
-                    {
-                        int mapped = MatchingRack(assembly, id, partner.PartScript.transform.position);
-                        if (!cannon.Racks.Contains(mapped)) cannon.Racks.Add(mapped);
-                    }
+                    cannon.Racks.AddRange(MapRacks(assembly, tags.Cannon.Racks, partner.PartScript.transform.position));
                     theirs.Cannon = cannon;
                 }
 
@@ -135,7 +131,8 @@ namespace ArmorFragments
             return changed;
         }
 
-        // A new symmetric copy of a cannon: each of its racks with symmetry partners becomes the copy nearest to it.
+        // Each of a cannon's racks that has symmetry copies becomes the copy nearest to the cannon (left gun, left
+        // rack). A cannon listing several racks of one symmetric set keeps them all: it draws from each, nearest first.
         public static void MatchRacks(PartData cannonPart)
         {
             if (cannonPart == null || cannonPart.PartScript == null || cannonPart.PartScript.Aircraft == null) return;
@@ -144,14 +141,86 @@ namespace ArmorFragments
             Assembly assembly = cannonPart.PartScript.Aircraft.Aircraft != null ? cannonPart.PartScript.Aircraft.Aircraft.Assembly : null;
             if (assembly == null) return;
 
-            List<int> ids = new List<int>();
-            foreach (int id in cannon.Racks)
-            {
-                int mapped = MatchingRack(assembly, id, cannonPart.PartScript.transform.position);
-                if (!ids.Contains(mapped)) ids.Add(mapped);
-            }
+            List<int> ids = MapRacks(assembly, cannon.Racks, cannonPart.PartScript.transform.position);
             string name = TagCodec.WithCannonRacks(cannonPart.Name, ids);
             if (name != cannonPart.Name) Rename(cannonPart, name);
+        }
+
+        // A part dropped or connected in the designer: a marked cannon (and its symmetry copies) matches its racks; an
+        // ammo rack makes the cannons that use it or its copies match theirs. Any other part: nothing.
+        public static void RematchAround(PartData part)
+        {
+            if (part == null || part.PartScript == null || part.PartScript.Aircraft == null ||
+                part.PartScript.Aircraft.Aircraft == null) return;
+            PartTags tags = TagCodec.Parse(part.Name);
+            if (tags.Cannon != null)
+            {
+                MatchRacks(part);
+                if (part.SymmetryId != 0)
+                {
+                    List<PartData> copies = new List<PartData>();
+                    part.PartScript.Aircraft.Aircraft.Assembly.GetOtherSymmetricParts(part, copies);
+                    foreach (PartData copy in copies)
+                        if (copy != part) MatchRacks(copy);
+                }
+            }
+            else if (tags.AmmoRack != null && tags.Armor == null)
+            {
+                MatchCannonsOfRack(part);
+            }
+        }
+
+        // The cannons whose racks include this rack or one of its symmetry copies: their racks are matched again.
+        public static void MatchCannonsOfRack(PartData rackPart)
+        {
+            if (rackPart == null || rackPart.PartScript == null || rackPart.PartScript.Aircraft == null ||
+                rackPart.PartScript.Aircraft.Aircraft == null) return;
+            Assembly assembly = rackPart.PartScript.Aircraft.Aircraft.Assembly;
+            if (assembly == null) return;
+            List<PartData> set = new List<PartData>();
+            if (rackPart.SymmetryId != 0) assembly.GetOtherSymmetricParts(rackPart, set);
+            if (!set.Contains(rackPart)) set.Add(rackPart);
+
+            foreach (PartData data in assembly.Parts)
+            {
+                if (data == null) continue;
+                CannonTag cannon = TagCodec.Parse(data.Name).Cannon;
+                if (cannon == null) continue;
+                foreach (PartData rack in set)
+                {
+                    if (!cannon.Racks.Contains(rack.Id)) continue;
+                    MatchRacks(data);
+                    break;
+                }
+            }
+        }
+
+        // The racks for a cannon at 'near': a rack with symmetry copies becomes the copy nearest to it, unless the
+        // list holds more than one rack of that symmetric set (then they are all kept).
+        private static List<int> MapRacks(Assembly assembly, List<int> racks, Vector3 near)
+        {
+            Dictionary<uint, int> perSet = new Dictionary<uint, int>();   // symmetry id -> racks of that set listed
+            Dictionary<int, PartData> byId = new Dictionary<int, PartData>();
+            foreach (PartData data in assembly.Parts)
+                if (data != null && racks.Contains(data.Id)) byId[data.Id] = data;
+            foreach (int id in racks)
+            {
+                PartData rack;
+                if (!byId.TryGetValue(id, out rack) || rack.SymmetryId == 0) continue;
+                int count;
+                perSet.TryGetValue(rack.SymmetryId, out count);
+                perSet[rack.SymmetryId] = count + 1;
+            }
+
+            List<int> ids = new List<int>();
+            foreach (int id in racks)
+            {
+                PartData rack;
+                bool alone = byId.TryGetValue(id, out rack) && rack.SymmetryId != 0 && perSet[rack.SymmetryId] == 1;
+                int mapped = alone ? MatchingRack(assembly, id, near) : id;
+                if (!ids.Contains(mapped)) ids.Add(mapped);
+            }
+            return ids;
         }
 
         private static bool IsCannon(PartData part)
