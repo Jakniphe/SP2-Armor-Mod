@@ -161,22 +161,24 @@ namespace ArmorFragments
                 try { UI.ArmorPanel.AttachToExistingMenus(); }
                 catch (System.Exception e) { Log.LogWarning("Couldn't add the menu button to the open flight menu: " + e.Message); }
             }
-            GpuStatus.Tick();
-            PerfMonitor.Tick();
-            UI.DesignerSection.Tick();
-            XRayView.Tick();
-            VehicleXRay.Tick();
-            NetSync.Tick();
-            HostResolver.Tick();
-            ModuleOutputs.Tick();
-            AmmoRacks.Tick();
-            RackFireSync.Tick();
-            RackVisualizer.Tick();
-            FaceHighlight.Tick();
-            ArmorMass.Tick();
-            AmmoRackXRay.Tick();
-            ImpactCamera.Tick();
-            PlateDamageMaps.Tick();
+            PerfMonitor.Begin();
+            GpuStatus.Tick(); PerfMonitor.Lap("GpuStatus");
+            PerfMonitor.Tick(); PerfMonitor.Lap("PerfMonitor");
+            UI.DesignerSection.Tick(); PerfMonitor.Lap("DesignerSection");
+            XRayView.Tick(); PerfMonitor.Lap("XRayView");
+            VehicleXRay.Tick(); PerfMonitor.Lap("VehicleXRay");
+            NetSync.Tick(); PerfMonitor.Lap("NetSync");
+            HostResolver.Tick(); PerfMonitor.Lap("HostResolver");
+            ModuleOutputs.Tick(); PerfMonitor.Lap("ModuleOutputs");
+            AmmoRacks.Tick(); PerfMonitor.Lap("AmmoRacks");
+            RackFireSync.Tick(); PerfMonitor.Lap("RackFireSync");
+            RackVisualizer.Tick(); PerfMonitor.Lap("RackVisualizer");
+            FaceHighlight.Tick(); PerfMonitor.Lap("FaceHighlight");
+            ArmorMass.Tick(); PerfMonitor.Lap("ArmorMass");
+            AmmoRackXRay.Tick(); PerfMonitor.Lap("AmmoRackXRay");
+            ImpactCamera.Tick(); PerfMonitor.Lap("ImpactCamera");
+            PlateDamageMaps.Tick(); PerfMonitor.Lap("PlateDamageMaps");
+            PerfMonitor.End();
         }
 
         private void Awake()
