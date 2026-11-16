@@ -861,6 +861,7 @@ namespace ArmorFragments.UI
 
             string name = TagCodec.Compose(tags, part.Part.PartType.Name);
             bool armorBefore = part.Part.Name != null && (part.Part.Name.Contains("[ARM") || part.Part.Name.Contains("[HOL"));
+            bool cannonBefore = part.Part.Name != null && part.Part.Name.Contains("[CAN");
             part.Part.Name = name;
             foreach (PartModifierData modifier in part.Part.Modifiers)
                 modifier.OnPartNameChanged(name);
@@ -869,6 +870,10 @@ namespace ArmorFragments.UI
             // Parts linked to this one by symmetry get the same armor (mirrored ones with their sides swapped).
             bool armorRelated = armorBefore || tags.Armor != null || tags.Hole != null;
             int partners = armorRelated ? ArmorSymmetry.SyncPartners(part, tags) : 0;
+
+            // Cannons linked by symmetry get the same cannon settings and the matching racks.
+            bool cannonRelated = cannonBefore || tags.Cannon != null;
+            if (cannonRelated) partners += ArmorSymmetry.SyncCannonPartners(part, tags);
 
             // Make the game's own name field show the new name.
             applying = true;

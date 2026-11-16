@@ -170,6 +170,11 @@ namespace ArmorFragments
                     foreach (ValueTuple<PartData, IReadOnlyList<PartData>> group in symmetricPartGroups)
                         if (group.Item2 != null && i < group.Item2.Count) RackLinks.Remap(group.Item2[i], idMap);
                 }
+
+                // Racks made symmetric earlier: each copy of a cannon takes the copy of the rack nearest to it.
+                foreach (ValueTuple<PartData, IReadOnlyList<PartData>> group in symmetricPartGroups)
+                    if (group.Item2 != null)
+                        foreach (PartData copy in group.Item2) ArmorSymmetry.MatchRacks(copy);
             }
             catch (Exception e)
             {

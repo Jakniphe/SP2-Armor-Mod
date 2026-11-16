@@ -57,6 +57,7 @@ Ammo racks are fuselages that hold a cannon's ammunition. When hit through their
 0.9.2
 - Racks pack their rounds in whichever layout holds the most: lying along the fuselage, across it, upright, or on a 45-degree diagonal; in square or staggered rows (each row nested into the gaps of the one below); centered or shifted. The rounds still all point the same way. A rack never holds fewer rounds than before. The rack's panel shows the layout it picked.
 - New "Fullness" slider on racks (0 to 100%): how full the rack starts. The top rounds are left out, as if already fired, so a part-full rack has safe space at the top, weighs less and makes a smaller cook-off.
+- Symmetric guns share their settings: with symmetry on, changing a cannon (Cannon on/off, shell hardness, fuse, filler, brittleness, Add rack / Remove rack) changes its symmetry partners too. Each partner draws from the matching rack: when the racks are symmetric too, the left gun keeps the left rack and the right gun the right one; a single rack stays shared. Making a gun symmetric also gives each copy its nearest matching rack. A duplicated gun keeps the original's settings and racks.
 
 0.8.1
 - Cannons pick their own ammo racks with "Add rack" and "Remove rack". Cannons of different sizes each draw from their own racks, instead of every cannon sharing every rack.

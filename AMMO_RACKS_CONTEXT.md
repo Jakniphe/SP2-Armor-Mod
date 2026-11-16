@@ -179,6 +179,10 @@ Changed: `FragmentSpawner.cs`, `ShellFlight.cs`, `Net/NetSync.cs`, `PartTags.cs`
   (clone: copy i is part i of the selection), `SymmetryUtility.RemapSymmetricPartIDs` (symmetric copy i points at
   copy i of each rack). Ids outside the map are kept, as the game does. `Assembly.RemovePart` on the designer's
   craft takes the deleted id out of every cannon's list.
+- Symmetry: with the designer's symmetry on, `Commit` also calls `ArmorSymmetry.SyncCannonPartners`: partner cannons get the
+  same `[CAN]` settings, and each listed rack with symmetry partners becomes the one nearest to that partner gun (a
+  rack without partners stays shared). `RackLinksSymmetryPatch` also runs `ArmorSymmetry.MatchRacks` on new
+  symmetric copies.
 - `RackVisualizer`: ghost copies of rack meshes (still clickable), rounds as cylinders, up to 20,000 drawn,
   hidden for the screenshot dialog.
 - `AmmoRackXRay`: rounds of your own racks; burning = orange, exploded = empty.

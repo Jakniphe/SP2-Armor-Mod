@@ -87,6 +87,106 @@ namespace ArmorFragments
             return changed;
         }
 
+        // Gives the cannons linked to 'part' by symmetry the same cannon settings as 'tags' (shell hardness, fuse,
+        // filler, brittleness, the Cannon mark itself) and the matching racks: a rack with symmetry partners of its
+        // own becomes, for each partner gun, the copy of that rack nearest to it (left gun, left rack); a rack
+        // without partners stays shared. Returns how many were changed.
+        public static int SyncCannonPartners(PartScript part, PartTags tags)
+        {
+            if (part == null || part.Part == null || part.Part.SymmetryId == 0 || part.Aircraft == null ||
+                part.Aircraft.Aircraft == null || part.Aircraft.Aircraft.Assembly == null) return 0;
+            Designer designer = Designer.Instance;
+            if (designer == null || designer.Symmetry == null || designer.Symmetry.Mode == SymmetryMode.Disabled) return 0;
+
+            Assembly assembly = part.Aircraft.Aircraft.Assembly;
+            List<PartData> partners = new List<PartData>();
+            assembly.GetOtherSymmetricParts(part.Part, partners);
+            int changed = 0;
+            foreach (PartData partner in partners)
+            {
+                if (partner == null || partner.PartScript == null || partner == part.Part || !IsCannon(partner)) continue;
+                PartTags theirs = TagCodec.ParseCopy(partner.Name);
+                if (tags.Cannon == null)
+                {
+                    theirs.Cannon = null;
+                }
+                else
+                {
+                    CannonTag cannon = new CannonTag
+                    {
+                        ShellHardness = tags.Cannon.ShellHardness,
+                        Fuse = tags.Cannon.Fuse,
+                        FillerPercent = tags.Cannon.FillerPercent,
+                        Brittleness = tags.Cannon.Brittleness,
+                    };
+                    foreach (int id in tags.Cannon.Racks)
+                    {
+                        int mapped = MatchingRack(assembly, id, partner.PartScript.transform.position);
+                        if (!cannon.Racks.Contains(mapped)) cannon.Racks.Add(mapped);
+                    }
+                    theirs.Cannon = cannon;
+                }
+
+                string name = TagCodec.Compose(theirs, partner.PartType.Name);
+                if (name == partner.Name) continue;
+                Rename(partner, name);
+                changed++;
+            }
+            return changed;
+        }
+
+        // A new symmetric copy of a cannon: each of its racks with symmetry partners becomes the copy nearest to it.
+        public static void MatchRacks(PartData cannonPart)
+        {
+            if (cannonPart == null || cannonPart.PartScript == null || cannonPart.PartScript.Aircraft == null) return;
+            CannonTag cannon = TagCodec.Parse(cannonPart.Name).Cannon;
+            if (cannon == null || cannon.Racks.Count == 0) return;
+            Assembly assembly = cannonPart.PartScript.Aircraft.Aircraft != null ? cannonPart.PartScript.Aircraft.Aircraft.Assembly : null;
+            if (assembly == null) return;
+
+            List<int> ids = new List<int>();
+            foreach (int id in cannon.Racks)
+            {
+                int mapped = MatchingRack(assembly, id, cannonPart.PartScript.transform.position);
+                if (!ids.Contains(mapped)) ids.Add(mapped);
+            }
+            string name = TagCodec.WithCannonRacks(cannonPart.Name, ids);
+            if (name != cannonPart.Name) Rename(cannonPart, name);
+        }
+
+        private static bool IsCannon(PartData part)
+        {
+            foreach (var modifier in part.Modifiers)
+                if (modifier is Assets.Scripts.Craft.Parts.Modifiers.Weapons.CannonData) return true;
+            return false;
+        }
+
+        // The rack (by id) among 'rackId' and its symmetry partners nearest to 'near'.
+        private static int MatchingRack(Assembly assembly, int rackId, Vector3 near)
+        {
+            PartData rack = null;
+            foreach (PartData data in assembly.Parts)
+                if (data != null && data.Id == rackId) { rack = data; break; }
+            if (rack == null || rack.PartScript == null || rack.SymmetryId == 0) return rackId;
+
+            List<PartData> group = new List<PartData>();
+            assembly.GetOtherSymmetricParts(rack, group);
+            if (!group.Contains(rack)) group.Add(rack);
+            PartData best = rack;
+            float bestDistance = float.MaxValue;
+            foreach (PartData candidate in group)
+            {
+                if (candidate == null || candidate.PartScript == null) continue;
+                float distance = (candidate.PartScript.transform.position - near).sqrMagnitude;
+                if (distance < bestDistance)
+                {
+                    bestDistance = distance;
+                    best = candidate;
+                }
+            }
+            return best.Id;
+        }
+
         // Whether 'other' is a mirrored copy of 'part', from their fuselage shapes: the game negates a mirrored copy's
         // sideways offset. Null when that can't tell (no sideways offset, or not fuselages): the designer's symmetry
         // mode decides then.
