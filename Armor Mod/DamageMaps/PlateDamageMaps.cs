@@ -365,7 +365,7 @@ namespace ArmorFragments
             int quality = ArmorFragmentsPlugin.SimQuality.Value - 1;
             if (quality >= 0 && impacts.Length == 1 && SimBridge.Wants(impacts[0]))
             {
-                if (DamageWorker.PendingSims < ArmorFragmentsPlugin.SimMaxQueue.Value)
+                if (DamageWorker.PendingSims < QueueLimit())
                 {
                     job.SimQuality = quality;
                     job.AutoQuality = ArmorFragmentsPlugin.SimAutoQuality.Value;
@@ -376,7 +376,8 @@ namespace ArmorFragments
                 }
                 else
                 {
-                    ArmorFragmentsPlugin.Log.LogInfo("[SIMFX] " + DamageWorker.PendingSims + " simulations are waiting: this impact gets the quick marks");
+                    ArmorFragmentsPlugin.Log.LogInfo("[SIMFX] " + DamageWorker.PendingSims + " simulations are waiting (the limit is " + QueueLimit() +
+                                                     "): this impact gets the quick marks");
                 }
             }
             DamageWorker.Enqueue(job);
@@ -514,6 +515,16 @@ namespace ArmorFragments
             job.Geometry = true;
             job.GridMeters = ArmorFragmentsPlugin.DamageMapsGridMm.Value * 0.001f;
             job.MaxVertices = ArmorFragmentsPlugin.DamageMapsMaxKiloVertices.Value * 1000;
+        }
+
+        // How many simulations may wait their turn. One shot that goes through several plates asks for one simulation per plate, so a fixed
+        // small number sent the last plates of a chain to the quick marks. The setting is the least; while simulations are quick (the graphics
+        // card: tens of milliseconds) more may wait, as many as fit in about 0.8 s of work, up to 12. A slow machine keeps the setting.
+        private static int QueueLimit()
+        {
+            int least = ArmorFragmentsPlugin.SimMaxQueue.Value;
+            int typical = Math.Max(DamageWorker.LastSimMs, 20);
+            return Math.Max(least, Math.Min(12, 800 / typical));
         }
 
         private static readonly List<MeshData> HoldingMeshes = new List<MeshData>();

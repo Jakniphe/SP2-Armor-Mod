@@ -454,7 +454,7 @@ namespace ArmorFragments
                 "If a simulation takes most of its time limit, the next ones use a lower quality, and go back up when they are quick again.");
             SimMaxQueue = Config.Bind("DamageMaps", "SimMaxQueue", 3,
                 new ConfigDescription(
-                    "Simulations that may wait their turn. When that many are waiting, new impacts get the quick marks (a burst of shots does not pile up).",
+                    "The fewest simulations that may wait their turn. When that many are waiting, new impacts get the quick marks (a burst of shots does not pile up). While simulations are quick (a graphics card) more may wait, up to about 0.8 s of work or 12.",
                     new AcceptableValueRange<int>(1, 10)));
             SimShedLoad = Config.Bind("DamageMaps", "SimShedLoad", true,
                 "When the frame rate drops, the simulation uses fewer threads for a while (and takes them back when it recovers).");

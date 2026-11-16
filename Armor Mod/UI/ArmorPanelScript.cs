@@ -421,8 +421,8 @@ namespace ArmorFragments.UI
                 "Seconds a simulation may take; a slower one is given up and the quick marks are drawn instead.", 0.5f, " s");
             ToggleSetting(ArmorFragmentsPlugin.SimAutoQuality, "Lower the quality if it is slow",
                 "If a simulation takes most of its time limit the next ones use a lower quality, and go back up when they are quick.");
-            IntSetting(ArmorFragmentsPlugin.SimMaxQueue, "Simulations that may wait",
-                "When that many are waiting, new impacts get the quick marks.");
+            IntSetting(ArmorFragmentsPlugin.SimMaxQueue, "Simulations that may wait (at least)",
+                "When that many are waiting, new impacts get the quick marks. While simulations are quick (a graphics card) more may wait, up to about 0.8 s of work or 12.");
             ToggleSetting(ArmorFragmentsPlugin.SimShedLoad, "Give threads back when the FPS drops",
                 "While a simulation works and the frame rate drops, it uses fewer threads for a while.");
             Live("Simulation", () => PlateDamageMaps.SimStatus);
