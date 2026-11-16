@@ -491,6 +491,7 @@ namespace ArmorFragments.UI
         {
             if (liveBlocks.Count == 0 || container == null || part == null) return;
             if (Time.unscaledTime < nextLiveCheck) return;
+            if (RackGrid.DesignerDragging()) return;   // re-measured once the part is let go
             nextLiveCheck = Time.unscaledTime + LiveInterval;
 
             foreach (LiveBlock block in liveBlocks)

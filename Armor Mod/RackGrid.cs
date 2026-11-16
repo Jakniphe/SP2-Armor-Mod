@@ -78,6 +78,22 @@ namespace ArmorFragments
 
         // ---- Measuring ---------------------------------------------------------------
 
+        // Is a part being dragged in the designer? Racks aren't re-measured then (a fuselage may reshape live
+        // while something attached to it moves); they catch up once it is let go.
+        public static bool DesignerDragging()
+        {
+            try
+            {
+                Assets.Scripts.Design.Designer designer = Assets.Scripts.Design.Designer.Instance;
+                return designer != null && designer.Tools != null && designer.Tools.MovePartTool != null &&
+                       designer.Tools.MovePartTool.IsManipulatingPart;
+            }
+            catch (System.Exception)
+            {
+                return false;
+            }
+        }
+
         public static RackGrid Measure(PartScript part, AmmoRound round)
         {
             RackGrid grid = new RackGrid();
@@ -168,7 +184,7 @@ namespace ArmorFragments
             if (useMesh)
             {
                 Method = "mesh";
-                Layout best = Choose();
+                Layout best = Choose(part, fuselage);
                 if (Evaluate(best, -1) <= 0) return BaselineProblem();
             }
             else
@@ -367,9 +383,9 @@ namespace ArmorFragments
         private static readonly Dictionary<string, Layout> LayoutCache = new Dictionary<string, Layout>();
         private const int LayoutCacheLimit = 512;
 
-        private Layout Choose()
+        private Layout Choose(PartScript part, JFuselageData fuselage)
         {
-            string key = GeometryKey();
+            string key = GeometryKey(part, fuselage);
             Layout cached;
             if (LayoutCache.TryGetValue(key, out cached)) return cached;
 
@@ -442,22 +458,24 @@ namespace ArmorFragments
             return best;
         }
 
-        // The shape and the round, rounded to the millimeter: the same shape and round get the same layout.
-        private string GeometryKey()
+        // The shape and the round: the fuselage's own settings (its saved state: sections, offset, corners...), its
+        // part type, its mesh's triangle count (a carving part changes that) and the round's size. Moving or turning
+        // the part doesn't change the key, so dragging parts around never starts a new search.
+        private string GeometryKey(PartScript part, JFuselageData fuselage)
         {
-            Vector3 min = new Vector3(float.MaxValue, float.MaxValue, float.MaxValue);
-            Vector3 max = new Vector3(float.MinValue, float.MinValue, float.MinValue);
-            Vector3 sum = Vector3.zero;
-            for (int i = 0; i < localVertices.Count; i++)
+            string state;
+            try
             {
-                Vector3 v = localVertices[i];
-                min = Vector3.Min(min, v);
-                max = Vector3.Max(max, v);
-                if (i % 7 == 0) sum += v;
+                System.Xml.Linq.XElement xml = fuselage.GenerateStateXml();
+                state = xml != null ? xml.ToString(System.Xml.Linq.SaveOptions.DisableFormatting) : "";
+            }
+            catch (System.Exception)
+            {
+                state = "";
             }
             System.Text.StringBuilder key = new System.Text.StringBuilder();
-            key.Append(localVertices.Count).Append(Vector3Int.RoundToInt(min * 1000f)).Append(Vector3Int.RoundToInt(max * 1000f))
-               .Append(Vector3Int.RoundToInt(sum * 1000f)).Append(Vector3Int.RoundToInt(baseZ * 1000f))
+            key.Append(part.Part.PartType != null ? part.Part.PartType.Name : "").Append('|').Append(state)
+               .Append('|').Append(localVertices.Count / 3)
                .Append('|').Append(Mathf.RoundToInt(diameter * 10000f)).Append('/').Append(Mathf.RoundToInt(length * 10000f))
                .Append('/').Append(Mathf.RoundToInt(pitch * 10000f));
             return key.ToString();
