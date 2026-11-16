@@ -486,8 +486,8 @@ namespace ArmorFragments
                 {
                     double ms = data.Plate.ApplyGeometry(data);
                     if (data.Plate.GeometryApplied <= 3)
-                        ArmorFragmentsPlugin.Log.LogInfo("[GEOM] plate '" + data.Plate.Info.Part.Part.Name + "': " + data.Columns + " x " + data.Rows +
-                            " cells, " + data.Vertices.Length + " vertices, " + (data.Triangles.Length / 3) + " triangles; built in " +
+                        ArmorFragmentsPlugin.Log.LogInfo("[GEOM] plate '" + data.Plate.Info.Part.Part.Name + "': " + data.Cut + " triangles cut in " + data.Segments + " pieces a side, " +
+                            data.Vertices.Length + " vertices, " + (data.Triangles.Length / 3) + " triangles; built in " +
                             data.BuildMs.ToString("F1") + " ms (worker), put in the mesh in " + ms.ToString("F1") + " ms");
                 }
                 catch (Exception e)
