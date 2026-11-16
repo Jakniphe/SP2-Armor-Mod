@@ -102,15 +102,26 @@ namespace ArmorFragments
                 maps.Plates[info.Part] = new PlateVisual { Info = info, Cpu = cpu, Owner = maps };
             }
 
+            long atlasAt = System.Diagnostics.Stopwatch.GetTimestamp();
             maps.Normal = new Texture2D(size, size, TextureFormat.RGBA32, false, true) { wrapMode = TextureWrapMode.Clamp, name = "ArmorFragments damage normals" };
-            byte[] flat = new byte[size * size * 4];
-            FillPattern(flat, 128, 128, 255, 255);   // flat normals
-            maps.Normal.SetPixelData(flat, 0);
-            maps.Normal.Apply(false, false);
+            FillTexture(maps.Normal, 128, 128, 255, 255);   // flat normals
 
             ArmorFragmentsPlugin.Log.LogInfo("[DMAP] atlas " + size + "x" + size + " for " + infos.Count + " armor plate(s) of '" +
-                                             aircraft.name + "', " + density.ToString("F0") + " px/m");
+                                             aircraft.name + "', " + density.ToString("F0") + " px/m (the normal atlas took " +
+                                             PerfMonitor.Since(atlasAt).ToString("F1") + " ms)");
             return maps;
+        }
+
+        // Fills a whole texture with one color without making a second copy of it: one row is built and copied into the texture's own
+        // memory row by row (the old way allocated, filled and uploaded 16 MB arrays, which cost tens of milliseconds in one frame).
+        private static void FillTexture(Texture2D texture, byte r, byte g, byte b, byte a)
+        {
+            int width = texture.width, height = texture.height;
+            byte[] row = new byte[width * 4];
+            FillPattern(row, r, g, b, a);
+            Unity.Collections.NativeArray<byte> raw = texture.GetRawTextureData<byte>();
+            for (int y = 0; y < height; y++) Unity.Collections.NativeSliceExtensions.Slice(raw, y * width * 4, width * 4).CopyFrom(row);
+            texture.Apply(false, false);
         }
 
         // Fills an array with a repeating pattern, by copying what is already there (fast for big arrays).
@@ -172,10 +183,7 @@ namespace ArmorFragments
         {
             if (Alpha != null) return;
             Alpha = new Texture2D(AtlasSize, AtlasSize, TextureFormat.RGBA32, false, false) { wrapMode = TextureWrapMode.Clamp, name = "ArmorFragments damage holes" };
-            byte[] solid = new byte[AtlasSize * AtlasSize * 4];
-            FillPattern(solid, 255, 255, 255, 255);   // no holes
-            Alpha.SetPixelData(solid, 0);
-            Alpha.Apply(false, false);
+            FillTexture(Alpha, 255, 255, 255, 255);   // no holes
         }
 
         // The bump map: the green channel is the height, 0.5 = flat. Made when the relief setting asks for it.
@@ -183,10 +191,7 @@ namespace ArmorFragments
         {
             if (Height != null) return;
             Height = new Texture2D(AtlasSize, AtlasSize, TextureFormat.RGBA32, false, true) { wrapMode = TextureWrapMode.Clamp, name = "ArmorFragments damage heights" };
-            byte[] flat = new byte[AtlasSize * AtlasSize * 4];
-            FillPattern(flat, 128, 128, 128, 255);
-            Height.SetPixelData(flat, 0);
-            Height.Apply(false, false);
+            FillTexture(Height, 128, 128, 128, 255);
         }
 
         // The damage view: transparent everywhere until a plate is marked.
@@ -194,8 +199,7 @@ namespace ArmorFragments
         {
             if (DamageAtlas != null) return;
             DamageAtlas = new Texture2D(AtlasSize, AtlasSize, TextureFormat.RGBA32, false, false) { wrapMode = TextureWrapMode.Clamp, name = "ArmorFragments damage view" };
-            DamageAtlas.SetPixelData(new byte[AtlasSize * AtlasSize * 4], 0);
-            DamageAtlas.Apply(false, false);
+            FillTexture(DamageAtlas, 0, 0, 0, 0);
         }
 
         // How far the shader's parallax moves the surface for the largest height the bump map can say, in UV units (the shader
@@ -568,6 +572,7 @@ namespace ArmorFragments
             }
 
             Material clone = Owner.PartClone();
+            double cloneMs = setupWatch.Elapsed.TotalMilliseconds;
             if (clone == null)
             {
                 Failed = true;
@@ -586,13 +591,16 @@ namespace ArmorFragments
             WriteUv(mesh);
             mesh.RecalculateTangents();
             wroteMesh = true;
+            double meshMs = setupWatch.Elapsed.TotalMilliseconds;
 
             SetMaterial(clone);
             map.ExcludeFromMeshCombine = true;
             Applied = true;
             double setupMs = setupWatch.Elapsed.TotalMilliseconds;
             if (setupMs > 8.0)
-                ArmorFragmentsPlugin.Log.LogInfo("[PERF] first use of plate '" + Info.Part.Part.Name + "' took " + setupMs.ToString("F1") + " ms (" + mesh.vertexCount + " vertices)");
+                ArmorFragmentsPlugin.Log.LogInfo("[PERF] first use of plate '" + Info.Part.Part.Name + "' took " + setupMs.ToString("F1") + " ms (" + mesh.vertexCount +
+                    " vertices): the vehicle's material " + cloneMs.ToString("F1") + " ms, the mesh " + (meshMs - cloneMs).ToString("F1") + " ms, setting the material " +
+                    (setupMs - meshMs).ToString("F1") + " ms");
             return true;
         }
 
