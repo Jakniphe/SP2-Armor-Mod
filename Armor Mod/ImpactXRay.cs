@@ -64,6 +64,11 @@ namespace ArmorFragments
         private readonly Dictionary<PartScript, Entry> byPart = new Dictionary<PartScript, Entry>();
         private readonly List<Entry> withEvents = new List<Entry>();
         private readonly List<GameObject> ghostObjects = new List<GameObject>();
+
+        public int GhostCount
+        {
+            get { return ghostObjects.Count; }
+        }
         private readonly List<RimGhost> rims = new List<RimGhost>();
 
         private Transform reference;   // what the holder follows (the vehicle's main cockpit)

@@ -55,6 +55,7 @@ namespace ArmorFragments
         private enum XState { Off, Waiting, FadeOut, FadeIn, Shown }
         private static ImpactXRay xray;
         private static DamageOverlay overlay;   // the damage view over the plates (a setting), or null
+        private static int slowTicksLogged;      // how many slow frames of the camera have been logged (not to fill the log)
         private static XState xstate;
         private static float xstateStart;
         private static float waitStart = -1f;   // when the shell reached the impact and the X-ray started waiting to switch
@@ -134,10 +135,14 @@ namespace ArmorFragments
             firstSegment = FragmentSpawner.ShellLeadIn;
             followDone = !ArmorFragmentsPlugin.DrawRays.Value;   // no ray drawn, nothing to follow
 
+            slowTicksLogged = 0;
+            long perfStart = System.Diagnostics.Stopwatch.GetTimestamp();
             int mask = LayersOf(aircraft) | (1 << RayLayer);
+            double layersMs = PerfMonitor.Since(perfStart);
             CreateTexture(ArmorFragmentsPlugin.ImpactCameraResolution.Value);
             CreateCamera(mask);
             CreatePanel();
+            double cameraMs = PerfMonitor.Since(perfStart) - layersMs;
 
             // The X-ray ghosts are made a few at a time over the next frames; the damage the parts have
             // right now is noted here, before this impact's own damage is applied.
@@ -154,11 +159,16 @@ namespace ArmorFragments
                     HideFromMainCamera(candidate.GhostLayer);
                 }
             }
+            double xrayMs = PerfMonitor.Since(perfStart) - layersMs - cameraMs;
 
             active = true;
             UpdateDamageView();
             UpdatePose();
             camera.enabled = true;
+            double startMs = PerfMonitor.Since(perfStart);
+            if (startMs > 30.0)
+                ArmorFragmentsPlugin.Log.LogInfo("[PERF] opening the impact camera took " + startMs.ToString("F0") + " ms in one frame: which layers to draw " +
+                    layersMs.ToString("F0") + " ms, camera/texture/window " + cameraMs.ToString("F0") + " ms, the X-ray's setup " + xrayMs.ToString("F0") + " ms");
 
             ArmorFragmentsPlugin.Log.LogInfo(
                 "Impact camera on: '" + hit.Part.Name + "', " +
@@ -506,12 +516,23 @@ namespace ArmorFragments
                 return;
             }
 
+            long perfStart = System.Diagnostics.Stopwatch.GetTimestamp();
             ApplySettings();
             EnsureReference();
             UpdateFollow();
+            double beforeXRay = PerfMonitor.Since(perfStart);
             UpdateXRay();
+            double afterXRay = PerfMonitor.Since(perfStart);
             UpdateDamageView();
             UpdatePose();
+            double tickMs = PerfMonitor.Since(perfStart);
+            if (tickMs > 60.0 && slowTicksLogged < 6)
+            {
+                slowTicksLogged++;
+                ArmorFragmentsPlugin.Log.LogInfo("[PERF] an impact camera frame took " + tickMs.ToString("F0") + " ms: settings and follow " + beforeXRay.ToString("F0") +
+                    " ms, the X-ray (" + (xray != null ? xray.GhostCount + " ghosts, " + (xray.BuildDone ? "built" : "building") : "off") + ") " +
+                    (afterXRay - beforeXRay).ToString("F0") + " ms, the rest " + (tickMs - afterXRay).ToString("F0") + " ms");
+            }
 
             // Hidden together with the rest of the flight UI; the camera rests while nobody sees it.
             bool show = FlightSceneScript.Instance.FlightUI == null || FlightSceneScript.Instance.FlightUI.Visible;
@@ -670,6 +691,8 @@ namespace ArmorFragments
         public static void Stop()
         {
             if (active) ArmorFragmentsPlugin.Log.LogInfo("Impact camera off");
+            long perfStart = System.Diagnostics.Stopwatch.GetTimestamp();
+            int ghosts = xray != null ? xray.GhostCount : 0;
             active = false;
             targetAircraft = null;
             reference = null;
@@ -680,12 +703,17 @@ namespace ArmorFragments
                 xray = null;
             }
             xstate = XState.Off;
+            double xrayMs = PerfMonitor.Since(perfStart);
             if (overlay != null)
             {
                 overlay.Dispose();
                 overlay = null;
             }
             RestoreMainCamera();
+            double closeMs = PerfMonitor.Since(perfStart);
+            if (closeMs > 30.0)
+                ArmorFragmentsPlugin.Log.LogInfo("[PERF] closing the impact camera took " + closeMs.ToString("F0") + " ms in one frame (taking down " + ghosts +
+                    " X-ray ghosts: " + xrayMs.ToString("F0") + " ms)");
 
             if (cameraObject != null) Object.Destroy(cameraObject);
             if (panel != null) Object.Destroy(panel);

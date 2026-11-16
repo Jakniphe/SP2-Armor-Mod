@@ -59,6 +59,12 @@ namespace ArmorFragments
         private static int updates;
         private static float nextUpdateReport = 30f;
 
+        // Milliseconds since a Stopwatch.GetTimestamp() value (for timing one section where it happens, outside the Update laps).
+        public static double Since(long timestamp)
+        {
+            return (Stopwatch.GetTimestamp() - timestamp) * 1000.0 / Stopwatch.Frequency;
+        }
+
         public static void Begin()
         {
             beginAt = lapAt = Stopwatch.GetTimestamp();
