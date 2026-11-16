@@ -388,6 +388,16 @@ namespace ArmorFragments.UI
                 "Cell size of the real geometry, in millimeters. Smaller = finer, more vertices.", 1f, " mm");
             IntSetting(ArmorFragmentsPlugin.DamageMapsMaxKiloVertices, "Geometry vertex limit",
                 "Most vertices, in thousands, one plate's real geometry may have. A bigger plate gets a coarser grid.");
+            FloatSetting(ArmorFragmentsPlugin.GeometryStartPixels, "Geometry from (pixels)",
+                "Below this many pixels of error the maps are used. The error is the biggest push x tan(view angle) x pixels per meter.", 0.1f, " px");
+            FloatSetting(ArmorFragmentsPlugin.GeometryFullPixels, "Full geometry at (pixels)",
+                "From this many pixels the plate shows its full geometry; in between the maps and the geometry are mixed.", 0.1f, " px");
+            FloatSetting(ArmorFragmentsPlugin.GeometryAngleStart, "Geometry from angle",
+                "Degrees from the plate's normal (0 = head-on, 90 = grazing). Seen at less than this, the maps are always enough.", 1f, " deg");
+            FloatSetting(ArmorFragmentsPlugin.GeometryAngleFull, "Full geometry at angle",
+                "From this angle the geometry may be shown in full (if the pixel error says so too).", 1f, " deg");
+            FloatSetting(ArmorFragmentsPlugin.GeometryBlendSeconds, "Transition time",
+                "Seconds the change between the maps and the geometry takes.", 0.05f, " s");
             ToggleSetting(ArmorFragmentsPlugin.DamageMapsHoleBothSides, "Holes: draw both sides",
                 "Shows the inside of the plate through a hole.");
             FloatSetting(ArmorFragmentsPlugin.DamageMapsDensity, "Detail",

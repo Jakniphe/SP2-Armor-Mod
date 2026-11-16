@@ -400,34 +400,95 @@ namespace ArmorFragments
             return Source.Ok;
         }
 
-        // Puts a rewritten mesh into the game's own mesh object (so nothing that refers to it is disturbed). The normal map and the
-        // parallax are switched off for this renderer: the geometry carries the relief now. Returns the milliseconds it took.
-        public double ApplyGeometry(MeshData data)
+        // The rewritten mesh as last put in, with its flat and its pushed vertices, so the blend between the two can change without a
+        // new build: 0 = the mesh is flat and the maps (normal / bump) show the relief, 1 = the geometry shows it and the maps are off.
+        private MeshData geometry;
+        private Vector3[] blendVertices, blendNormals;
+        public float Blend;
+        public float BlendTime;          // when the blend last changed (unscaled time)
+
+        public bool HasGeometry
+        {
+            get { return geometry != null; }
+        }
+
+        // The biggest push of the geometry in the mesh, meters (how much a view could see of it).
+        public float MaxHeight
+        {
+            get { return geometry != null ? geometry.MaxHeight : 0f; }
+        }
+
+        // Puts a rewritten mesh into the game's own mesh object (so nothing that refers to it is disturbed), at the given blend.
+        // Returns the milliseconds it took.
+        public double ApplyGeometry(MeshData data, float blend)
         {
             Mesh mesh = Info.Mesh;
             if (mesh == null || Owner.Disposed || !Applied || Source == null || !Source.Ok) return 0;
             System.Diagnostics.Stopwatch watch = System.Diagnostics.Stopwatch.StartNew();
 
             if (saved == null) saved = Save(mesh);
+            geometry = data;
+            blendVertices = (Vector3[])data.BaseVertices.Clone();
+            blendNormals = (Vector3[])data.BaseNormals.Clone();
+            Blend = Mathf.Clamp01(blend);
+            MixMoved();
+
             mesh.Clear();
             mesh.indexFormat = data.Vertices.Length > 65000 ? IndexFormat.UInt32 : IndexFormat.UInt16;
-            mesh.SetVertices(data.Vertices);
-            mesh.SetNormals(data.Normals);
+            mesh.SetVertices(blendVertices);
+            mesh.SetNormals(blendNormals);
             mesh.SetUVs(0, data.Uv0);
             if (data.Uv1 != null) SetUv1(mesh, data.Uv1, Source.Uv1Dimension);
             mesh.SetTriangles(data.Triangles, 0, true);
             mesh.RecalculateTangents();
-
-            Renderer renderer = Info.Map.Renderer;
-            if (renderer != null)
-            {
-                MaterialPropertyBlock block = new MaterialPropertyBlock();
-                block.SetFloat("_BumpScale", 0f);
-                block.SetFloat("_Parallax", 0f);
-                renderer.SetPropertyBlock(block);
-            }
+            ApplyMapStrength();
             GeometryApplied++;
             return watch.Elapsed.TotalMilliseconds;
+        }
+
+        // The vertices the push moves are set between their flat place and their pushed one.
+        private void MixMoved()
+        {
+            int[] moved = geometry.Moved;
+            for (int k = 0; k < moved.Length; k++)
+            {
+                int i = moved[k];
+                blendVertices[i] = Vector3.Lerp(geometry.BaseVertices[i], geometry.Vertices[i], Blend);
+                blendNormals[i] = Vector3.Lerp(geometry.BaseNormals[i], geometry.Normals[i], Blend).normalized;
+            }
+        }
+
+        // The transition: moves the geometry's blend (and, the other way, the maps' strength). Cheap: only the moved vertices are
+        // recomputed, and the arrays go back into the mesh as they are.
+        public void SetBlend(float blend, float now)
+        {
+            Mesh mesh = Info.Mesh;
+            if (geometry == null || mesh == null || Owner.Disposed) return;
+
+            Blend = Mathf.Clamp01(blend);
+            BlendTime = now;
+            MixMoved();
+            mesh.SetVertices(blendVertices);
+            mesh.SetNormals(blendNormals);
+            if (Blend < 0.01f || Blend > 0.99f) mesh.RecalculateBounds();
+            ApplyMapStrength();
+        }
+
+        // The normal map and the parallax fade out as the geometry fades in (a property block: the vehicle's material is shared).
+        private void ApplyMapStrength()
+        {
+            Renderer renderer = Info.Map.Renderer;
+            if (renderer == null) return;
+            if (Blend <= 0.001f)
+            {
+                renderer.SetPropertyBlock(null);
+                return;
+            }
+            float keep = 1f - Blend;
+            MaterialPropertyBlock block = new MaterialPropertyBlock();
+            block.SetFloat("_BumpScale", ArmorFragmentsPlugin.DamageMapsNormalStrength.Value * keep);
+            block.SetFloat("_Parallax", Owner.ParallaxAmplitude * keep);
+            renderer.SetPropertyBlock(block);
         }
 
         // The mesh as the game made it (and then as the maps left it: with the normal map's UV0), so it can be put back.
@@ -467,6 +528,10 @@ namespace ArmorFragments
         // The game's own geometry back (the maps keep working on it).
         public void RestoreGeometry()
         {
+            geometry = null;
+            blendVertices = null;
+            blendNormals = null;
+            Blend = 0f;
             if (saved == null) return;
             SavedMesh copy = saved;
             saved = null;

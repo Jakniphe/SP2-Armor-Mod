@@ -446,6 +446,7 @@ namespace ArmorFragments
             TickSettings();
             TickGeometrySettings();
             TickMeshes();
+            GeometryView.Tick(Vehicles.Values);
             TickTest();
         }
 
@@ -484,10 +485,11 @@ namespace ArmorFragments
                 HoldingMeshes.RemoveAt(i);
                 try
                 {
-                    double ms = data.Plate.ApplyGeometry(data);
+                    double ms = data.Plate.ApplyGeometry(data, GeometryView.Need(data.Plate, data.MaxHeight));
                     if (data.Plate.GeometryApplied <= 3)
-                        ArmorFragmentsPlugin.Log.LogInfo("[GEOM] plate '" + data.Plate.Info.Part.Part.Name + "': " + data.Cut + " triangles cut in " + data.Segments + " pieces a side, " +
-                            data.Vertices.Length + " vertices, " + (data.Triangles.Length / 3) + " triangles; built in " +
+                        ArmorFragmentsPlugin.Log.LogInfo("[GEOM] plate '" + data.Plate.Info.Part.Part.Name + "': big-face triangles " + data.Before + " -> " + data.After +
+                            " around the damage, " + data.Vertices.Length + " vertices, " + (data.Triangles.Length / 3) + " triangles, up to " +
+                            (data.MaxHeight * 1000f).ToString("F0") + " mm of push; built in " +
                             data.BuildMs.ToString("F1") + " ms (worker), put in the mesh in " + ms.ToString("F1") + " ms");
                 }
                 catch (Exception e)

@@ -53,6 +53,9 @@ namespace ArmorFragments
         internal static ConfigEntry<bool> DamageMapsGeometry;        // local, experimental: marked flat plates are rewritten as real geometry
         internal static ConfigEntry<float> DamageMapsGridMm;         // local: that geometry's cell size
         internal static ConfigEntry<int> DamageMapsMaxKiloVertices;  // local: the most vertices one plate's geometry may have (thousands)
+        internal static ConfigEntry<float> GeometryStartPixels, GeometryFullPixels;   // local: the transition from maps to geometry, in pixels of error
+        internal static ConfigEntry<float> GeometryAngleStart, GeometryAngleFull;     // local: ... and in degrees of view angle
+        internal static ConfigEntry<float> GeometryBlendSeconds;                      // local: ... and how fast it moves
         internal static ConfigEntry<int> ImpactCameraGhostLayer;
 
         // Shot simulation and X-ray view.
@@ -401,6 +404,23 @@ namespace ArmorFragments
             DamageMapsMaxKiloVertices = Config.Bind("DamageMaps", "MaxKiloVertices", 120,
                 new ConfigDescription("Most vertices (in thousands) one plate's real geometry may have; a bigger plate gets a coarser grid.",
                     new AcceptableValueRange<int>(10, 500)));
+            GeometryStartPixels = Config.Bind("DamageMaps", "GeometryStartPixels", 1f,
+                new ConfigDescription(
+                    "Real geometry fades in with how much the maps would get wrong on screen: the biggest push x tan(view angle) x pixels " +
+                    "per meter. Below this many pixels only the maps (normal / bump) are used.",
+                    new AcceptableValueRange<float>(0.1f, 20f)));
+            GeometryFullPixels = Config.Bind("DamageMaps", "GeometryFullPixels", 3f,
+                new ConfigDescription("From this many pixels of error the plate shows its full geometry (and the maps are off); in between they are mixed.",
+                    new AcceptableValueRange<float>(0.2f, 40f)));
+            GeometryAngleStart = Config.Bind("DamageMaps", "GeometryAngleStart", 65f,
+                new ConfigDescription("Degrees between the view and the plate's normal (0 = head-on, 90 = grazing) below which the maps are always enough.",
+                    new AcceptableValueRange<float>(0f, 89f)));
+            GeometryAngleFull = Config.Bind("DamageMaps", "GeometryAngleFull", 78f,
+                new ConfigDescription("From this angle the geometry may be shown in full (if the pixel error says so too).",
+                    new AcceptableValueRange<float>(1f, 90f)));
+            GeometryBlendSeconds = Config.Bind("DamageMaps", "GeometryBlendSeconds", 0.35f,
+                new ConfigDescription("Seconds the transition between the maps and the geometry takes, from one end to the other.",
+                    new AcceptableValueRange<float>(0.05f, 3f)));
             DamageMapsHoleBothSides = Config.Bind("DamageMaps", "HoleBothSides", true,
                 "A plate with a hole is drawn on both sides (shows the inside of the plate through the hole). Off = back faces are not drawn.");
             SimQuality = Config.Bind("DamageMaps", "SimQuality", 2,

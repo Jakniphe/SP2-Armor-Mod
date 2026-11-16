@@ -76,6 +76,12 @@ namespace ArmorFragments
             get { return active; }
         }
 
+        // The impact camera while it is open (null otherwise): the real geometry of the plates also follows what it sees.
+        public static Camera ActiveCamera
+        {
+            get { return active ? camera : null; }
+        }
+
         // ---- Starting --------------------------------------------------------------
 
         // A shell hit 'hit' at 'point', flying along 'direction'. 'shooter' is the aircraft that fired it.
