@@ -36,7 +36,7 @@ namespace ArmorFragments
         {
             Ring[next++ & (Size - 1)] = new Frame { Timestamp = Stopwatch.GetTimestamp(), Seconds = Time.unscaledDeltaTime };
 
-            if (Time.unscaledTime >= nextSceneReport)
+            if (ArmorFragmentsPlugin.PerfSceneReport.Value && Time.unscaledTime >= nextSceneReport)
             {
                 nextSceneReport = Time.unscaledTime + 15f;
                 try { SceneReport(); }

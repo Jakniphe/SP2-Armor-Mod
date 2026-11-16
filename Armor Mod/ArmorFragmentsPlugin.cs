@@ -48,6 +48,7 @@ namespace ArmorFragments
         internal static ConfigEntry<float> ImpactCameraFov;
         internal static ConfigEntry<bool> ImpactCameraShadows;
         internal static ConfigEntry<bool> ImpactCameraXRay;
+        internal static ConfigEntry<bool> PerfSceneReport;          // local: every 15 s, a [PERF] line with the frame time and what is in the scene
         internal static ConfigEntry<bool> ImpactCameraDamageView;   // local: the damage map drawn over the plates in the impact camera
         internal static ConfigEntry<int> DamageMapsRelief;           // local: 0 normal map, 1 bump (height) map, 2 both
         internal static ConfigEntry<bool> UseGpu;                    // local: the impact simulation on the graphics card (OpenCL), the CPU if it cannot
@@ -212,6 +213,9 @@ namespace ArmorFragments
                 new ConfigDescription(
                     "When a real shell stops in a part that is not armor, a ballistic ray carries on this far (m) looking for armor.",
                     new AcceptableValueRange<float>(1f, 1000f)));
+            PerfSceneReport = Config.Bind("Debug", "PerfSceneReport", false,
+                "If true, every 15 s a [PERF] line in the log gives the frame time next to how many renderers, particle systems, decals... " +
+                "are in the scene (to find out what slows the game down). Counting them costs about 10 ms each time, so it is off.");
             DrawRays = Config.Bind("Debug", "DrawRays", true,
                 "If true, draws each fragment ray in the world (red = hit a part, yellow = hit nothing).");
             HideRaysOutsideViews = Config.Bind("Debug", "HideRaysOutsideViews", true,

@@ -426,6 +426,11 @@ namespace ArmorFragments
             ShedLoad();
             PerfMonitor.Lap("DMAP messages");
 
+            // The atlases a hit vehicle will need are made one a frame, not all in the frame of its first impact.
+            foreach (VehicleMaps vehicle in Vehicles.Values)
+                if (vehicle.WarmUp()) break;
+            PerfMonitor.Lap("DMAP atlases");
+
             // The fragment marks go to the worker. A plate's first mark makes its setup (its mesh gets the atlas UVs and tangents, which can
             // take milliseconds on a big mesh), so a burst that reaches dozens of plates at once would be one very long frame: at most
             // MaxSetupsPerFrame plates are set up a frame, and the marks of the others wait for the next frames.

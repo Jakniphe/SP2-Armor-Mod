@@ -30,6 +30,8 @@ namespace ArmorFragments
         public Material Clone;       // the game's part material with the normal atlas
         public float LastUsed;
         public bool Disposed;
+        public bool Touched;            // a plate of this vehicle has been used: the atlases it will need are made, one a frame (WarmUp)
+        private bool heightPending;     // the relief setting wants the bump map and it is not made yet
         public readonly Dictionary<PartScript, PlateVisual> Plates = new Dictionary<PartScript, PlateVisual>();
 
         private const int SentinelSize = 8;   // a flat corner of the atlas, for vertices that belong to no face (the sides)
@@ -173,6 +175,7 @@ namespace ArmorFragments
             if (Disposed || !Plates.TryGetValue(part, out plate) || plate.Failed) return null;
             LastUsed = Time.time;
             if (!plate.Applied && !plate.TryApply()) return null;
+            Touched = true;
             return plate;
         }
 
@@ -192,6 +195,26 @@ namespace ArmorFragments
             if (Height != null) return;
             Height = new Texture2D(AtlasSize, AtlasSize, TextureFormat.RGBA32, false, true) { wrapMode = TextureWrapMode.Clamp, name = "ArmorFragments damage heights" };
             FillTexture(Height, 128, 128, 128, 255);
+            if (heightPending)
+            {
+                heightPending = false;
+                RefreshRelief();   // the materials that were set up without it take it now
+            }
+        }
+
+        // Makes ONE atlas that is wanted and not there yet (each is 16 MB and costs ~15 ms to make, so they are spread over frames instead of
+        // all landing in the frame of the first impact). Called every frame; true = it made one (the caller makes no more this frame).
+        public bool WarmUp()
+        {
+            if (Disposed || !Touched) return false;
+            long started = System.Diagnostics.Stopwatch.GetTimestamp();
+            string what = null;
+            if (heightPending && Height == null) { EnsureHeight(); what = "bump map"; }
+            else if (Alpha == null && !ArmorFragmentsPlugin.DamageMapsGeometry.Value) { EnsureAlpha(); what = "hole map"; }
+            else if (DamageAtlas == null && ArmorFragmentsPlugin.ImpactCameraDamageView.Value) { EnsureDamage(); what = "damage view"; }
+            if (what == null) return false;
+            ArmorFragmentsPlugin.Log.LogInfo("[PERF] made the " + what + " atlas of '" + Aircraft.name + "' in its own frame: " + PerfMonitor.Since(started).ToString("F1") + " ms");
+            return true;
         }
 
         // The damage view: transparent everywhere until a plate is marked.
@@ -220,7 +243,11 @@ namespace ArmorFragments
             material.SetFloat("_BumpScale", ArmorFragmentsPlugin.DamageMapsNormalStrength.Value);
             SetKeyword(material, "_NORMALMAP", normal);
 
-            if (bump) EnsureHeight();
+            if (bump && Height == null)
+            {
+                heightPending = true;   // made in a frame of its own (WarmUp); the materials get it then
+                bump = false;
+            }
             material.SetTexture("_ParallaxMap", bump ? Height : null);
             material.SetFloat("_Parallax", ParallaxAmplitude);
             SetKeyword(material, "_PARALLAXMAP", bump);
@@ -430,12 +457,15 @@ namespace ArmorFragments
             if (mesh == null || Owner.Disposed || !Applied || Source == null || !Source.Ok) return 0;
             System.Diagnostics.Stopwatch watch = System.Diagnostics.Stopwatch.StartNew();
 
+            bool firstTime = saved == null;
             if (saved == null) saved = Save(mesh);
+            double savedMs = watch.Elapsed.TotalMilliseconds;
             geometry = data;
             blendVertices = (Vector3[])data.BaseVertices.Clone();
             blendNormals = (Vector3[])data.BaseNormals.Clone();
             Blend = Mathf.Clamp01(blend);
             MixMoved();
+            double mixedMs = watch.Elapsed.TotalMilliseconds;
 
             mesh.Clear();
             mesh.indexFormat = data.Vertices.Length > 65000 ? IndexFormat.UInt32 : IndexFormat.UInt16;
@@ -444,10 +474,17 @@ namespace ArmorFragments
             mesh.SetUVs(0, data.Uv0);
             if (data.Uv1 != null) SetUv1(mesh, data.Uv1, Source.Uv1Dimension);
             mesh.SetTriangles(data.Triangles, 0, true);
+            double setMs = watch.Elapsed.TotalMilliseconds;
             mesh.RecalculateTangents();
+            double tangentsMs = watch.Elapsed.TotalMilliseconds;
             ApplyMapStrength();
             GeometryApplied++;
-            return watch.Elapsed.TotalMilliseconds;
+            double total = watch.Elapsed.TotalMilliseconds;
+            if (total > 20.0)
+                ArmorFragmentsPlugin.Log.LogInfo("[PERF] putting a plate's new mesh in took " + total.ToString("F1") + " ms (" + data.Vertices.Length + " vertices" +
+                    (firstTime ? ", the first time" : "") + "): saving the old mesh " + savedMs.ToString("F1") + ", mixing " + (mixedMs - savedMs).ToString("F1") +
+                    ", setting it " + (setMs - mixedMs).ToString("F1") + ", tangents " + (tangentsMs - setMs).ToString("F1") + ", the rest " + (total - tangentsMs).ToString("F1") + " ms");
+            return total;
         }
 
         // The vertices the push moves are set between their flat place and their pushed one.
