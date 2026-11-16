@@ -105,6 +105,27 @@ namespace ArmorFragments.UI
             part = null;
         }
 
+        // The plugin is being unloaded: our section leaves the designer's properties panel. (A copy of the plugin loaded after
+        // this one attaches its own the next time the designer builds that panel.)
+        public static void Shutdown()
+        {
+            Widget section = container;
+            container = null;
+            panel = null;
+            part = null;
+            builtForName = null;
+            applying = false;
+            rebuildPending = false;
+            builtExplosive = false;
+            builtCannonRows = false;
+            builtIsCutter = false;
+            builtCutArmor = null;
+            SelectedFace = AllFaces;
+            liveBlocks.Clear();
+
+            if (section != null) section.Destroy();
+        }
+
         public static void OnPartSelected(PartPropertiesPanelScript properties, PartScript selected)
         {
             if (properties != panel) return;

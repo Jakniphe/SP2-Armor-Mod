@@ -44,6 +44,19 @@ namespace ArmorFragments.UI
             UpdateButtonColor();
         }
 
+        // The plugin is being unloaded: the panel is closed and the button leaves the flight menu.
+        public static void Shutdown()
+        {
+            ButtonWidget button = menuButton;
+            menuButton = null;   // so that closing the panel does not try to paint the button
+
+            ArmorPanelScript open = panel;
+            panel = null;
+            if (open != null && !open.IsClosed) open.Close();
+
+            if (button != null) button.Destroy();
+        }
+
         public static void Toggle()
         {
             if (IsOpen)

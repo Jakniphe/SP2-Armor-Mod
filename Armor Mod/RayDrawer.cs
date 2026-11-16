@@ -197,6 +197,32 @@ namespace ArmorFragments
             PersistentBubbles.Clear();
         }
 
+        // The plugin is being unloaded: every ray and bubble of THIS copy of the code goes (a copy loaded later has its own, of other
+        // types, so only these are found), and so do the materials.
+        public static void Shutdown()
+        {
+            ClearPersistent();
+            foreach (TracerAnimation tracer in Object.FindObjectsByType<TracerAnimation>(FindObjectsInactive.Include, FindObjectsSortMode.None))
+                Object.Destroy(tracer.gameObject);
+            foreach (BubbleAnimation bubble in Object.FindObjectsByType<BubbleAnimation>(FindObjectsInactive.Include, FindObjectsSortMode.None))
+                Object.Destroy(bubble.gameObject);
+
+            InitialTracer = null;
+            Anchor = null;
+            FallbackAnchor = null;
+
+            if (lineMaterial != null) Object.Destroy(lineMaterial);
+            lineMaterial = null;
+            for (int i = 0; i < BubbleMaterials.Length; i++)
+            {
+                if (BubbleMaterials[i] != null) Object.Destroy(BubbleMaterials[i]);
+                BubbleMaterials[i] = null;
+            }
+            shaderUsed = null;
+            initialized = false;
+            available = false;
+        }
+
         // A small colored ball that shrinks away. The "Landed" kind does not shrink: it stays,
         // a little smaller, until ClearPersistent is called.
         public static void SpawnBubble(Vector3 position, RayKind kind, Transform anchor = null)
