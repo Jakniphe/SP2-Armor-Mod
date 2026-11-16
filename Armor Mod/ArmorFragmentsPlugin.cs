@@ -50,6 +50,7 @@ namespace ArmorFragments
         internal static ConfigEntry<bool> ImpactCameraXRay;
         internal static ConfigEntry<bool> ImpactCameraDamageView;   // local: the damage map drawn over the plates in the impact camera
         internal static ConfigEntry<int> DamageMapsRelief;           // local: 0 normal map, 1 bump (height) map, 2 both
+        internal static ConfigEntry<bool> UseGpu;                    // local: the impact simulation on the graphics card (OpenCL), the CPU if it cannot
         internal static ConfigEntry<bool> DamageMapsGeometry;        // local, experimental: marked flat plates are rewritten as real geometry
         internal static ConfigEntry<float> DamageMapsGridMm;         // local: that geometry's cell size
         internal static ConfigEntry<int> DamageMapsMaxKiloVertices;  // local: the most vertices one plate's geometry may have (thousands)
@@ -153,11 +154,14 @@ namespace ArmorFragments
             if (attachMenuAt > 0f && UnityEngine.Time.unscaledTime >= attachMenuAt)
             {
                 attachMenuAt = -1f;
+                try { GpuStatus.Start(); }
+                catch (System.Exception e) { Log.LogWarning("Couldn't start the graphics card check: " + e.Message); }
                 try { Lifecycle.RemoveLeftoverGhosts(); }
                 catch (System.Exception e) { Log.LogWarning("Couldn't remove leftover X-ray ghosts: " + e.Message); }
                 try { UI.ArmorPanel.AttachToExistingMenus(); }
                 catch (System.Exception e) { Log.LogWarning("Couldn't add the menu button to the open flight menu: " + e.Message); }
             }
+            GpuStatus.Tick();
             UI.DesignerSection.Tick();
             XRayView.Tick();
             VehicleXRay.Tick();
@@ -393,6 +397,9 @@ namespace ArmorFragments
                     "How a mark's relief is shown on the plate: 0 = the normal map (as before), 1 = the bump (height) map, which the " +
                     "shader's parallax reads and which moves the surface itself, 2 = both together.",
                     new AcceptableValueRange<int>(0, 2)));
+            UseGpu = Config.Bind("DamageMaps", "UseGpu", true,
+                "Run the impact simulation on the graphics card through OpenCL when the computer has it (it comes with the graphics driver). " +
+                "If it is missing or fails, the CPU does the work, as before. (This is the player's wish: the game itself never depends on it.)");
             DamageMapsGeometry = Config.Bind("DamageMaps", "RealGeometry", false,
                 "EXPERIMENTAL. A flat rectangular armor plate that has been marked is rewritten as real geometry: a fine grid pushed in or " +
                 "out by the damage, and a hole is cells that are not there. Keeps the plate's own paint, texture and decals (a hole " +

@@ -410,6 +410,9 @@ namespace ArmorFragments.UI
                 new[] { "Normal map", "Bump map", "Normal + bump" });
             IntSetting(ArmorFragmentsPlugin.DamageMapsMaxVehicles, "Vehicles at once",
                 "Vehicles with maps at the same time. The one hit longest ago gives its maps back.");
+            ToggleSetting(ArmorFragmentsPlugin.UseGpu, "Use the graphics card (OpenCL)",
+                "The impact simulation runs on the graphics card when the computer has OpenCL, and on the CPU if not. Takes effect the next time the game or the plugin loads.");
+            Live("Graphics card", () => GpuStatus.Text);
             IntSetting(ArmorFragmentsPlugin.SimQuality, "Simulation quality",
                 "0 = off (the quick marks), 1 = low (40x40), 2 = medium (64x64), 3 = high (96x96). A shell's impact is worked out by a small physics simulation of the plate, in the background; the mark appears when it is ready.");
             IntSetting(ArmorFragmentsPlugin.SimThreads, "Simulation threads",
