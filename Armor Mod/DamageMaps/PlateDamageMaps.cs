@@ -59,6 +59,10 @@ namespace ArmorFragments
             get { return ArmorFragmentsPlugin.DamageMapsEnabled.Value; }
         }
 
+        // A mark goes on the two big faces of a plate (the map has a tile for each): a hit whose surface normal is
+        // less aligned than this with the plate's thickness axis (the side of a block, an edge) leaves no mark.
+        private const float BigFaceCos = 0.5f;
+
         public static bool Weakens
         {
             get { return ArmorFragmentsPlugin.DamageMapsWeakenArmor.Value; }
@@ -147,7 +151,9 @@ namespace ArmorFragments
             if (!States.TryGetValue(part, out state) || state.Holes.Count == 0) return false;
 
             PlateGeometry g = state.Info.Geometry;
-            bool front = Vector3.Dot(g.N, part.transform.InverseTransformDirection(worldNormal)) > 0f;
+            float facing = Vector3.Dot(g.N, part.transform.InverseTransformDirection(worldNormal).normalized);
+            if (Mathf.Abs(facing) < BigFaceCos) return false;   // an edge or a side of a block: no map there
+            bool front = facing > 0f;
             Vector2 at = g.ToPlane(part.transform.InverseTransformPoint(worldPoint));
             foreach (Hole hole in state.Holes)
             {
@@ -161,13 +167,27 @@ namespace ArmorFragments
         // The plate as it is at this point: thinner where it is dented. Returns the same tag if nothing changed.
         public static ArmorTag Weakened(PartScript part, ArmorTag tag, Vector3 worldPoint)
         {
-            if (States.Count == 0 || !Weakens) return tag;
+            float factor = ThicknessFactor(part, tag.Thickness, worldPoint);
+            if (factor > 0.999f) return tag;
+            return new ArmorTag { Thickness = tag.Thickness * factor, Hardness = tag.Hardness, Brittleness = tag.Brittleness };
+        }
+
+        // The same for a plain thickness (a face of a per-face block): the thickness left, in mm.
+        public static float WeakenedMm(PartScript part, float thicknessMm, Vector3 worldPoint)
+        {
+            return thicknessMm * ThicknessFactor(part, thicknessMm, worldPoint);
+        }
+
+        // 1 = untouched, down to 0.4 where the plate is dented.
+        private static float ThicknessFactor(PartScript part, float thicknessMm, Vector3 worldPoint)
+        {
+            if (States.Count == 0 || !Weakens) return 1f;
             PlateState state;
-            if (!States.TryGetValue(part, out state) || state.Dents.Count == 0) return tag;
+            if (!States.TryGetValue(part, out state) || state.Dents.Count == 0) return 1f;
 
             PlateGeometry g = state.Info.Geometry;
             Vector2 at = g.ToPlane(part.transform.InverseTransformPoint(worldPoint));
-            float thickness = Mathf.Max(tag.Thickness * 0.001f, 0.001f);
+            float thickness = Mathf.Max(thicknessMm * 0.001f, 0.001f);
             float lost = 0f;
             foreach (Dent dent in state.Dents)
             {
@@ -177,9 +197,7 @@ namespace ArmorFragments
                 float bowl = 1f - rho * rho;
                 lost += dent.D * bowl * bowl;
             }
-            float factor = Mathf.Clamp(1f - lost / thickness, 0.4f, 1f);
-            if (factor > 0.999f) return tag;
-            return new ArmorTag { Thickness = tag.Thickness * factor, Hardness = tag.Hardness, Brittleness = tag.Brittleness };
+            return Mathf.Clamp(1f - lost / thickness, 0.4f, 1f);
         }
 
         // ---- What the model tells ------------------------------------------------------------------
@@ -202,6 +220,7 @@ namespace ArmorFragments
 
             PlateGeometry g = info.Geometry;
             Vector3 normalLocal = part.transform.InverseTransformDirection(normalFacing).normalized;
+            if (Mathf.Abs(Vector3.Dot(g.N, normalLocal)) < BigFaceCos) return;   // an edge or a side of a block: it has no map
             Vector3 directionLocal = part.transform.InverseTransformDirection(direction).normalized;
             Vector2 at = g.ToPlane(part.transform.InverseTransformPoint(point));
             Vector2 along = g.DirectionToPlane(directionLocal);
@@ -252,6 +271,7 @@ namespace ArmorFragments
 
             PlateGeometry g = info.Geometry;
             Vector3 normalLocal = part.transform.InverseTransformDirection(normalFacing).normalized;
+            if (Mathf.Abs(Vector3.Dot(g.N, normalLocal)) < BigFaceCos) return;   // an edge or a side of a block: it has no map
             Vector2 at = g.ToPlane(part.transform.InverseTransformPoint(point));
             buffer.Delay = Mathf.Min(buffer.Delay, delay);
             buffer.Impacts.Add(new PlateImpact

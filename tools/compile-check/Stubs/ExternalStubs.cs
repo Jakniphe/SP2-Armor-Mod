@@ -104,3 +104,13 @@ namespace FishNet.Serializing
         public static PooledReader Retrieve(System.ArraySegment<byte> bytes, FishNet.Managing.NetworkManager manager) { return null; }
     }
 }
+
+// TextMeshPro: the game's DraggableInputField derives from TMP_InputField. Only what the mod uses.
+namespace TMPro
+{
+    public class TMP_InputField : UnityEngine.MonoBehaviour
+    {
+        public UnityEngine.Events.UnityEvent<string> onSelect = new UnityEngine.Events.UnityEvent<string>();
+        public UnityEngine.Events.UnityEvent<string> onEndEdit = new UnityEngine.Events.UnityEvent<string>();
+    }
+}

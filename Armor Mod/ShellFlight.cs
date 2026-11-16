@@ -21,7 +21,8 @@ namespace ArmorFragments
         // enteredPart:  a part the ray starts inside (a real shell's first contact): it pays energy there. If the
         //               cannon has no [CAN] tag the game's own impact damage was applied to it, so the ray adds
         //               none; a tagged cannon has the game's damage switched off, so the ray's is all it gets
-        // ignorePart:   a part to leave out altogether (the plate just gone through)
+        // ignorePart:   a part to leave out altogether (the whole-block plate just gone through)
+        // resolvedPlate: a per-face block whose face was just worked out at 'from' (its other faces still count)
         // startDelay:   seconds after the impact at which this ray starts moving
         // leadIn:       meters of flight drawn before 'from' (the shell arriving); 0 for none
         // nextPlate:    the number the next armor met would have in the chain of plates
@@ -31,12 +32,12 @@ namespace ArmorFragments
         public static void Continue(Vector3 from, Vector3 direction, ShellInfo shell, CannonTag cannon,
                                     PartScript enteredPart, PartScript ignorePart, float startDelay, float leadIn,
                                     RayKind startMarker, bool applyDamage, bool simulated, int nextPlate,
-                                    bool continuation, int bounces = 0)
+                                    bool continuation, int bounces = 0, PartScript resolvedPlate = null)
         {
             string tag = simulated ? "[SIM] " : "";
             float range = ArmorFragmentsPlugin.BallisticRayRange.Value;
 
-            BallisticRay.Result ray = BallisticRay.Trace(from, direction, range, enteredPart, shell, ignorePart);
+            BallisticRay.Result ray = BallisticRay.Trace(from, direction, range, enteredPart, shell, ignorePart, resolvedPlate);
 
             // An explosive shell may burst on the way (the fuse counts from the first touch, or is already
             // running if the shell has just come out of a plate).
@@ -96,7 +97,7 @@ namespace ArmorFragments
 
             ArmorFragmentsPlugin.Log.LogInfo(
                 tag + origin + "; its ballistic ray passed through " + ray.PassedThrough + " parts (damage " +
-                damage.ToString("F1") + ") and met armor '" + ray.Part.Part.Name + "' at " +
+                damage.ToString("F1") + ") and met armor '" + ray.Part.Part.Name + "'" + FaceText(ray) + " at " +
                 ray.Hit.distance.ToString("F1") + " m with " + EnergyModel.Kilojoules(ray.Energy) +
                 " of " + EnergyModel.Kilojoules(shell.Energy));
 
@@ -108,6 +109,14 @@ namespace ArmorFragments
             // The fragments of that armor leave when this ray reaches it.
             FragmentSpawner.Spawn(ray.Part, ray.Armor, cannon, atArmor, ray.Hit.point, direction,
                 ray.Hit.normal, angle, applyDamage, simulated, startDelay + duration, nextPlate, bounces);
+        }
+
+        // " (Back face, 30 mm, from inside)" for a per-face block's plate; "" for whole-block armor.
+        public static string FaceText(BallisticRay.Result ray)
+        {
+            if (ray.Face < 0) return "";
+            return " (" + ArmorFaces.Names[ray.Face] + " face, " + ray.Armor.Thickness.ToString("0.#") + " mm" +
+                   (ray.FromInside ? ", from inside" : "") + ")";
         }
     }
 }

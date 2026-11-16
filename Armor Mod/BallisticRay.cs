@@ -27,8 +27,10 @@ namespace ArmorFragments
         public struct Result
         {
             public PartScript Part;          // the armor part that stopped the ray (null if none)
-            public ArmorTag Armor;           // its tag
-            public RaycastHit Hit;           // where the ray met it
+            public ArmorTag Armor;           // its tag (for a per-face block: the plate of the face met)
+            public RaycastHit Hit;           // where the ray met it (normal: the surface's)
+            public int Face;                 // per-face block: the face met (-1 for whole-block armor)
+            public bool FromInside;          // per-face block: the face was met from inside the block
             public int PassedThrough;        // non-armor parts it flew through
             public string StoppedBy;         // what ended the ray if it was not armor
             public bool HasFirstPoint;
@@ -46,6 +48,8 @@ namespace ArmorFragments
                 Part = null;
                 Armor = null;
                 Hit = default(RaycastHit);
+                Face = -1;
+                FromInside = false;
                 PassedThrough = 0;
                 StoppedBy = null;
                 HasFirstPoint = false;
@@ -61,12 +65,16 @@ namespace ArmorFragments
         }
 
         // The shell as a ray: it flies through every part that is NOT armor, paying energy in each (the
-        // same law the fragments follow), and stops at the first armor part, at anything that is not a
+        // same law the fragments follow), and stops at the first armor it meets, at anything that is not a
         // part (the ground, for example), or when its energy runs out.
-        //   enteredPart: the part a real shell has just stopped in (its ray starts inside it)
-        //   ignorePart:  a part to leave out altogether (the plate a shell has just gone through)
+        // Armor is a whole-block armor part where the ray gets into it, or an armored face of a per-face block,
+        // where the ray gets in or out of the block. Open faces and the inside of a per-face block are empty space.
+        //   enteredPart:   the part a real shell has just stopped in (its ray starts inside it)
+        //   ignorePart:    a part to leave out altogether (the whole-block plate a shell has just gone through)
+        //   resolvedPlate: a per-face block whose face was just worked out at the origin (that face is not met again)
         public static Result Trace(Vector3 origin, Vector3 direction, float maxDistance,
-                                   PartScript enteredPart, ShellInfo shell, PartScript ignorePart = null)
+                                   PartScript enteredPart, ShellInfo shell, PartScript ignorePart = null,
+                                   PartScript resolvedPlate = null)
         {
             Result result = new Result(true);
             PartPhysics.BeginShot();
@@ -83,52 +91,53 @@ namespace ArmorFragments
                     return Finish(result, energy);
             }
 
-            int mask = -1 & ~LayerMask.GetMask("WorldSpaceUI");
-            RaycastHit[] hits = Physics.RaycastAll(
-                origin, direction, maxDistance, mask, QueryTriggerInteraction.Ignore);
-            Array.Sort(hits, (x, y) => x.distance.CompareTo(y.distance));
+            List<RayEvent> events = RayEvents.Gather(origin, direction, maxDistance, ignorePart, resolvedPlate,
+                                                     new List<RayEvent>());
 
-            HashSet<PartScript> done = new HashSet<PartScript>();
-
-            foreach (RaycastHit candidate in hits)
+            foreach (RayEvent e in events)
             {
-                Collider collider = candidate.collider;
-                if (collider.GetComponentInParent<CannonProjectileScript>() != null) continue;
-
-                PartScript part = collider.GetComponentInParent<PartScript>();
+                PartScript part = e.Part;
                 if (part != null && part == enteredPart) continue;
-                if (part != null && part == ignorePart) continue;
-                if (part != null && done.Contains(part)) continue;   // another collider of a part already crossed
+                if (e.Open) continue;   // an open face of a per-face block: nothing there
 
                 if (!result.HasFirstPoint)
                 {
                     result.HasFirstPoint = true;
-                    result.FirstPoint = candidate.point;
+                    result.FirstPoint = e.Point;
                 }
 
                 if (part == null)
                 {
-                    result.StoppedBy = "'" + collider.name + "' at " +
-                                       candidate.distance.ToString("F0") + " m (not a part)";
+                    result.StoppedBy = "'" + (e.Collider != null ? e.Collider.name : "?") + "' at " +
+                                       e.Distance.ToString("F0") + " m (not a part)";
                     result.HitObstacle = true;
-                    result.ObstaclePoint = candidate.point;
-                    result.ObstacleDistance = candidate.distance;
+                    result.ObstaclePoint = e.Point;
+                    result.ObstacleDistance = Mathf.Max(e.Distance, 0f);
                     break;
                 }
 
-                ArmorTag armor = TagCodec.Parse(part.Part.Name).Armor;
-                if (armor != null)
+                if (e.Face)
+                {
+                    // An armored face of a per-face block: its plate.
+                    result.Part = part;
+                    result.Armor = e.Armor.Plate(e.Mm);
+                    result.Hit = e.AsHit();
+                    result.Face = e.FaceIndex;
+                    result.FromInside = e.Leaving;
+                    break;
+                }
+
+                if (e.Armor != null)
                 {
                     result.Part = part;
-                    result.Armor = armor;
-                    result.Hit = candidate;
+                    result.Armor = e.Armor;
+                    result.Hit = e.AsHit();
                     break;
                 }
 
                 // No [ARM] tag: the ray goes through, leaving energy behind.
-                done.Add(part);
                 if (Cross(ref result, ref energy, floor, mass, areaM2, part, origin, direction,
-                          maxDistance, candidate.distance))
+                          maxDistance, Mathf.Max(e.Distance, 0f)))
                     break;
             }
 

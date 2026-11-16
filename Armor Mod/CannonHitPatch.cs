@@ -1,4 +1,5 @@
 ﻿using System.Collections.Generic;
+using System.Reflection;
 using Assets.Scripts.Craft.Parts;
 using Assets.Scripts.Craft.Parts.Modifiers;
 using Assets.Scripts.Craft.Parts.Modifiers.Weapons;
@@ -96,6 +97,32 @@ namespace ArmorFragments
                 FragmentSpawner.Attacker = __instance.Owner != null && __instance.Owner.NetworkAircraft != null
                     ? __instance.Owner.NetworkAircraft.PlayerId : (int?)null;
 
+                // A per-face block: the face the shell touched decides. An armored face is a plate like any other;
+                // an open one is nothing, and the shell flies on into the block (no burst, no stop, its fuse not
+                // started) to meet whatever is inside and the block's other faces.
+                if (armor != null && armor.PerFace)
+                {
+                    Vector3 outward = Vector3.Dot(contact.normal, direction) > 0f ? -contact.normal : contact.normal;
+                    int face = ArmorFaces.Classify(part, contact.point, outward);
+                    float mm = face >= 0 ? armor.Faces[face] : 0f;
+                    bool hole = mm > 0f && !ArmorSurface.SurfaceAt(part, contact.point, direction);
+                    if (hole) mm = 0f;
+                    if (mm <= 0f)
+                    {
+                        ArmorFragmentsPlugin.Log.LogInfo("It touched " + (hole ? "a hole carved in the " : "an open face (") +
+                            (face >= 0 ? ArmorFaces.Names[face] : "inner wall") + (hole ? " face" : ")") +
+                            ": the shell flies on into the block");
+                        ShellFlight.Continue(contact.point, direction, shell, cannon, null, null, 0f,
+                                             FragmentSpawner.ShellLeadIn, RayKind.None,
+                                             ArmorFragmentsPlugin.ApplyDamage.Value, false, 1, false, 0, part);
+                        __state = true;
+                        return;
+                    }
+                    ArmorFragmentsPlugin.Log.LogInfo("It hit the " + ArmorFaces.Names[face] + " face (" +
+                                                     mm.ToString("0.#") + " mm)");
+                    armor = armor.Plate(mm);
+                }
+
                 if (armor == null)
                 {
                     if (shell.Kind == AmmoKind.HE)
@@ -136,12 +163,23 @@ namespace ArmorFragments
             }
         }
 
-        // After the game has handled the collision (damage, explosion if it is an explosive shell):
-        // a shell that is still alive and was resolved by our model is stopped dead and retired by the
-        // game's own end-of-life path (the self-destruct timer), so it cannot bounce on.
+        // After the game has handled the collision: a shell that is still alive and was resolved by our model is
+        // stopped dead and retired the way the game ends a solid shell's life (dead, switched off, its Died event
+        // raised), so it can't bounce on. Never by the self-destruct timer: an explosive shell's end of life is the
+        // game's own explosion, whose blast would hit the vehicle again after the model has resolved the shot.
         private static void Postfix(CannonProjectileScript __instance, bool __state)
         {
-            if (!__state || __instance == null || __instance.IsDead || __instance.HasExploded) return;
+            if (__state) Retire(__instance);
+        }
+
+        private static readonly PropertyInfo IsDeadProperty =
+            AccessTools.Property(typeof(CannonProjectileScript), "IsDead");
+        private static readonly FieldInfo DiedField =
+            AccessTools.Field(typeof(CannonProjectileScript), "Died");
+
+        internal static void Retire(CannonProjectileScript __instance)
+        {
+            if (__instance == null || __instance.IsDead || __instance.HasExploded) return;
 
             Rigidbody body = __instance.Rigidbody;
             if (body != null)
@@ -149,7 +187,19 @@ namespace ArmorFragments
                 body.linearVelocity = Vector3.zero;
                 body.angularVelocity = Vector3.zero;
             }
-            __instance.SelfDestructTimer = 0f;
+
+            if (IsDeadProperty == null || IsDeadProperty.GetSetMethod(true) == null)
+            {
+                // Can't end it as a solid shell: never let an explosive one reach its self-destruct explosion.
+                __instance.SelfDestructTimer = float.MaxValue;
+                __instance.gameObject.SetActive(false);
+                return;
+            }
+            IsDeadProperty.SetValue(__instance, true, null);
+            __instance.gameObject.SetActive(false);
+            CannonProjectileScript.ProjectileDestroyedHandler died =
+                DiedField != null ? DiedField.GetValue(__instance) as CannonProjectileScript.ProjectileDestroyedHandler : null;
+            if (died != null) died(__instance);
         }
 
         // The game keeps every mass at 1/100 of its real value (the designer divides by 0.01 to show
