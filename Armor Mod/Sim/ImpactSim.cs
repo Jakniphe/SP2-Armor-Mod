@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 
 namespace ArmorFragments.Sim
 {
@@ -94,6 +95,9 @@ namespace ArmorFragments.Sim
         private float yieldStrain, breakStrain, ductility, plasticRate;
         private float particleRadius;
         private float deepestTip;      // the lowest the shell's tip has been
+        private float plateBrittle;    // 0..1, the plate's brittleness (what the cracks are grown with)
+        private int simSeed;
+        private bool isRicochet;
         private bool backOpen;         // the shell's tip has reached the back of the plate: only then may the back layer tear
         private float breakReach2;     // links only break close to the shell (squared); far away the plate bends but does not tear
         private float[] baseTop, baseBottom;
@@ -154,6 +158,15 @@ namespace ArmorFragments.Sim
         // gets a wider patch: 7 up to 40 degrees, 11 at 80 (the cells are then a little coarser, which the ultra qualities make up for).
         public static float PatchCalibers = 7f;
 
+        // Radial cracks (see GrowCracks): how many a fully brittle plate gets (+ 1), the plastic stretch, as a share of what the plate can
+        // take before it tears, that a crack needs to run through a place (for a plate with no brittleness; the brittle ones need less by
+        // CrackSoft), and the chance, per step of a crack, that it branches.
+        public static bool GrowCracksOn = true;
+        public static float CrackCount = 7f;
+        public static float CrackThreshold = 0.06f;
+        public static float CrackSoft = 0.35f;
+        public static float CrackBranch = 0.045f;
+
         public static float PatchSize(float caliberM, float angleDeg)
         {
             float r = Math.Max(caliberM * 0.5f, 0.002f);
@@ -189,6 +202,9 @@ namespace ArmorFragments.Sim
 
             float hardness = Math.Max(input.PlateHardness, 10f) / 100f;
             float brittle = Math.Min(Math.Max(input.PlateBrittleness, 0f), 1f);
+            plateBrittle = brittle;
+            simSeed = input.Seed;
+            isRicochet = input.Ricochet;
             yieldStrain = 0.02f * MathF.Sqrt(hardness);
             float give = Math.Min(Math.Max(1f / MathF.Sqrt(hardness), 0.6f), 1.3f);   // a harder plate gives a little less
             breakStrain = (1.2f + (0.12f - 1.2f) * brittle) * give;   // how much a link can be stretched at once
@@ -397,16 +413,18 @@ namespace ArmorFragments.Sim
             int gpuBroken = 0;
             if (gpu != null) gpu.End(px, py, pz, out gpuBroken);   // the particles come back to be read as they are now
             int[] gpuCracks = null;
+            float[] gpuStretch = null;
             if (gpu != null)
             {
                 gpuCracks = new int[2 * n * n];
-                gpu.ReadCracks(n, k, gpuCracks);
+                gpuStretch = new float[2 * n * n];
+                gpu.ReadCracks(n, k, gpuCracks, gpuStretch);
             }
 
             double loopMs = watch.Elapsed.TotalMilliseconds;
             ImpactSimResult result = Sample(exited || (energy > 0 && !stopped && az < 0f && exited), input.EnergyScale);
             double sampleMs = watch.Elapsed.TotalMilliseconds - loopMs;
-            FillCracks(result, gpuCracks);
+            FillCracks(result, gpuCracks, gpuStretch);
             result.EnergyLeft = (float)Math.Max(energy / energy0, 0.0);
             result.Particles = count;
             result.Steps = steps;
@@ -756,9 +774,10 @@ namespace ArmorFragments.Sim
 
         // How torn each column's front and back surface is: the links across the plate that have broken, out of 8, three or more being a
         // full crack. From the card's counts, or (on the CPU) from the links themselves.
-        private void FillCracks(ImpactSimResult result, int[] gpuCounts)
+        private void FillCracks(ImpactSimResult result, int[] gpuCounts, float[] gpuStretch)
         {
             float[] front = new float[n * n], back = new float[n * n];
+            float[] stretchFront = new float[n * n], stretchBack = new float[n * n];
             for (int cell = 0; cell < n * n; cell++)
             {
                 int brokenFront = 0, brokenBack = 0;
@@ -766,6 +785,8 @@ namespace ArmorFragments.Sim
                 {
                     brokenFront = gpuCounts[cell];
                     brokenBack = gpuCounts[n * n + cell];
+                    stretchFront[cell] = gpuStretch[cell];
+                    stretchBack[cell] = gpuStretch[n * n + cell];
                 }
                 else
                 {
@@ -773,15 +794,112 @@ namespace ArmorFragments.Sim
                     for (int o = 0; o < Links; o++)
                     {
                         if (Oz[o] != 0) continue;
-                        if (rest[top * Links + o] < 0f) brokenFront++;
-                        if (rest[bottom * Links + o] < 0f) brokenBack++;
+                        float rt = rest[top * Links + o], rb = rest[bottom * Links + o];
+                        if (rt < 0f) brokenFront++; else if (rt > 0f) stretchFront[cell] = Math.Max(stretchFront[cell], rt / rest0[top * Links + o] - 1f);
+                        if (rb < 0f) brokenBack++; else if (rb > 0f) stretchBack[cell] = Math.Max(stretchBack[cell], rb / rest0[bottom * Links + o] - 1f);
                     }
                 }
                 front[cell] = Math.Min(1f, brokenFront / 3f);
                 back[cell] = Math.Min(1f, brokenBack / 3f);
             }
+            if (GrowCracksOn && !isRicochet)
+            {
+                GrowCracks(front, stretchFront, result.Solid, 1);
+                GrowCracks(back, stretchBack, result.Solid, 2);
+            }
             result.CrackFront = front;
             result.CrackBack = back;
+        }
+
+        // Radial cracks, grown from the edge of the broken region (the hole, or the crater's torn floor) outward, and only through metal that
+        // has been lengthened by flowing enough (the stretch map: what each link has taken, rest / rest0 - 1, against what the plate can take
+        // before it tears: 'ductility'). Why they are grown this way: torn links alone only ever make a disc (the stretch of the links
+        // around a hole is the same all around it and stops at the yield strain, so no rule on a neighbour's torn links or on the strain
+        // makes a line; measured). A brittle plate gets more of them and they run through less stretched metal, so farther; a ductile one
+        // gets one or none (it stretches and the lips turn up instead). Each crack wanders a little and may branch. The directions and
+        // the wandering come from the shot's seed, the same for the same shot.
+        private void GrowCracks(float[] crack, float[] stretch, float[] solid, int face)
+        {
+            double sumX = 0, sumY = 0;
+            int count = 0;
+            bool[] inside = new bool[n * n];
+            for (int j = 1; j < n - 1; j++)
+            {
+                for (int i = 1; i < n - 1; i++)
+                {
+                    int cell = j * n + i;
+                    if (solid[cell] < 0.5f || crack[cell] > 0.3f) { inside[cell] = true; sumX += i; sumY += j; count++; }
+                }
+            }
+            if (count < 6) return;
+            float centerX = (float)(sumX / count), centerY = (float)(sumY / count);
+
+            uint state = unchecked((uint)(simSeed * 747796405 + face * 2891336453u + 12345u));
+            Func<float> random = () =>
+            {
+                state ^= state << 13; state ^= state >> 17; state ^= state << 5;
+                return (state & 0xFFFFFF) / 16777216f;
+            };
+
+            float needed = CrackThreshold + CrackSoft * (1f - plateBrittle);   // the share of its ductility the metal must have flowed through
+            int cracks = (int)Math.Round(1f + CrackCount * plateBrittle * plateBrittle);
+            float first = random() * 2f * (float)Math.PI;
+            Stack<float[]> walks = new Stack<float[]>();   // x, y, angle, steps left, depth, how hard the metal is for this one to tear (x needed)
+            for (int a = 0; a < cracks; a++)
+            {
+                float angle = first + (a + (random() - 0.5f) * 0.7f) * 2f * (float)Math.PI / cracks;
+                // out from the middle to the edge of the broken region
+                float x = centerX, y = centerY;
+                int guard = 0;
+                while (guard++ < n * 2)
+                {
+                    int ci = (int)Math.Round(x), cj = (int)Math.Round(y);
+                    if (ci < 1 || cj < 1 || ci > n - 2 || cj > n - 2) break;
+                    if (!inside[cj * n + ci]) break;
+                    x += (float)Math.Cos(angle) * 0.5f;
+                    y += (float)Math.Sin(angle) * 0.5f;
+                }
+                walks.Push(new[] { x, y, angle, n * 0.6f, 0f, 0.7f + 0.8f * random() });   // each crack has its own luck: they stop at different places
+            }
+
+            int budget = 4000;
+            while (walks.Count > 0 && budget > 0)
+            {
+                float[] w = walks.Pop();
+                float wx = w[0], wy = w[1], wa = w[2], left = w[3];
+                int depth = (int)w[4];
+                float hardness = w[5];
+                while (left > 0f && budget-- > 0)
+                {
+                    int ci = (int)Math.Round(wx), cj = (int)Math.Round(wy);
+                    if (ci < 1 || cj < 1 || ci > n - 2 || cj > n - 2) break;
+                    float share = stretch[cj * n + ci] / Math.Max(ductility, 1e-4f);
+                    if (share < needed * hardness) break;   // the metal here has not flowed enough to tear: the crack stops
+                    float strength = Math.Min(1f, 0.5f + share);
+
+                    // the point, spread over the four columns around it
+                    int fi = (int)Math.Floor(wx), fj = (int)Math.Floor(wy);
+                    float tx = wx - fi, ty = wy - fj;
+                    for (int dj = 0; dj <= 1; dj++)
+                    {
+                        for (int di = 0; di <= 1; di++)
+                        {
+                            int ii = fi + di, jj = fj + dj;
+                            if (ii < 1 || jj < 1 || ii > n - 2 || jj > n - 2) continue;
+                            float weight = (di == 0 ? 1f - tx : tx) * (dj == 0 ? 1f - ty : ty);
+                            int cell = jj * n + ii;
+                            crack[cell] = Math.Max(crack[cell], Math.Min(1f, strength * (0.35f + 1.3f * weight)));
+                        }
+                    }
+
+                    wa += (random() - 0.5f) * 0.35f;
+                    if (depth < 2 && random() < CrackBranch)
+                        walks.Push(new[] { wx, wy, wa + (random() < 0.5f ? -1f : 1f) * (0.45f + 0.3f * random()), left * 0.55f, depth + 1f, hardness * 1.2f });
+                    wx += (float)Math.Cos(wa) * 0.7f;
+                    wy += (float)Math.Sin(wa) * 0.7f;
+                    left -= 1f;
+                }
+            }
         }
 
         // The change of the front and back surfaces, per column, and the columns where nothing is left (the hole).

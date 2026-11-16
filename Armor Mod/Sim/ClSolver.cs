@@ -393,7 +393,7 @@ __kernel void shell_step(__global float* S, __global const int* counter, __globa
 
 // The cracks on the two surfaces: for each column, how many of the 8 links across the plate (not through it) have torn, in the front layer
 // (face 0, the top one) and in the back layer (face 1, the bottom one).
-__kernel void crack_map(__global const float* rest, __global int* cracks, int n, int k, int count)
+__kernel void crack_map(__global const float* rest, __global const float* rest0, __global int* cracks, __global float* stretch, int n, int k, int count)
 {
     int gid = get_global_id(0);
     if (gid >= 2 * n * n) return;
@@ -402,12 +402,16 @@ __kernel void crack_map(__global const float* rest, __global int* cracks, int n,
     int l = face == 0 ? k - 1 : 0;
     int idx = l * n * n + cell;
     int broken = 0;
+    float worst = 0.0f;   // the most any of its links has been lengthened by flowing (rest / rest0 - 1): the damage it has taken
     for (int o = 0; o < LINKS; o++)
     {
         if (OZ[o] != 0) continue;
-        if (rest[o * count + idx] < 0.0f) broken++;
+        float r = rest[o * count + idx];
+        if (r < 0.0f) broken++;
+        else if (r > 0.0f) worst = fmax(worst, r / rest0[o * count + idx] - 1.0f);
     }
     cracks[gid] = broken;
+    stretch[gid] = worst;
 }
 
 __kernel void count_broken(__global const float* rest, __global int* counter, int total)
@@ -523,7 +527,7 @@ __kernel void relax_fused(__global const float4* qin, __global float4* qout, __g
         // True = the shell's logic runs on the card too (the whole simulation is queued in chunks, with a wait only after each chunk).
         // False = the old way: the CPU runs the shell and the card is waited for twice a step (kept to compare the two).
         public bool DeviceShell = true;
-        private IntPtr bP, bV, bQ, bO, bRest, bRest0, bFixed, bCharged, bCounter, bParams, bMoving, bCracks;
+        private IntPtr bP, bV, bQ, bO, bRest, bRest0, bFixed, bCharged, bCounter, bParams, bMoving, bCracks, bStretch;
         private int capacity;
         private int n, k, count;
         private float[] zeros4;
@@ -856,18 +860,22 @@ __kernel void relax_fused(__global const float4* qin, __global float4* qout, __g
 
         // How many of the 8 across-the-plate links have torn at each column's front layer (dest[0 .. n*n)) and back layer (dest[n*n .. 2*n*n)).
         // Call after the simulation, with the same columns and layers it had.
-        public void ReadCracks(int columns, int layers, int[] dest)
+        // 'stretch' gets, for the same columns and faces, the most any surface link has been lengthened by plastic flow.
+        public void ReadCracks(int columns, int layers, int[] dest, float[] stretch)
         {
             int cells = columns * columns;
             if (2 * cells > crackCapacity)
             {
-                Release(ref bCracks);
+                Release(ref bCracks); Release(ref bStretch);
                 crackCapacity = 2 * cells;
                 bCracks = Buffer(4L * crackCapacity);
+                bStretch = Buffer(4L * crackCapacity);
             }
-            Arg(kCrack, 0, bRest); Arg(kCrack, 1, bCracks); Arg(kCrack, 2, columns); Arg(kCrack, 3, layers); Arg(kCrack, 4, columns * columns * layers);
+            Arg(kCrack, 0, bRest); Arg(kCrack, 1, bRest0); Arg(kCrack, 2, bCracks); Arg(kCrack, 3, bStretch);
+            Arg(kCrack, 4, columns); Arg(kCrack, 5, layers); Arg(kCrack, 6, columns * columns * layers);
             Run(kCrack, 2 * cells);
             Check(ClNative.clEnqueueReadBuffer(queue, bCracks, 1, UIntPtr.Zero, (UIntPtr)(4L * 2 * cells), dest, 0, null, IntPtr.Zero), "read the cracks");
+            Check(ClNative.clEnqueueReadBuffer(queue, bStretch, 1, UIntPtr.Zero, (UIntPtr)(4L * 2 * cells), stretch, 0, null, IntPtr.Zero), "read the stretch");
         }
 
         // The simulation is over: the particles' places come back, and the number of links that tore.
@@ -898,7 +906,7 @@ __kernel void relax_fused(__global const float4* qin, __global float4* qout, __g
             try
             {
                 Release(ref bP); Release(ref bV); Release(ref bQ); Release(ref bQ2); Release(ref bO); Release(ref bRest); Release(ref bRest0);
-                Release(ref bFixed); Release(ref bCharged); Release(ref bCounter); Release(ref bParams); Release(ref bMoving); Release(ref bCracks);
+                Release(ref bFixed); Release(ref bCharged); Release(ref bCounter); Release(ref bParams); Release(ref bMoving); Release(ref bCracks); Release(ref bStretch);
                 foreach (IntPtr kernel in new[] { kInit, kPredict, kPush, kTear, kRelax, kFlow, kFinish, kBroken, kShell, kFused, kCrack })
                     if (kernel != IntPtr.Zero) ClNative.clReleaseKernel(kernel);
                 kInit = kPredict = kPush = kTear = kRelax = kFlow = kFinish = kBroken = kShell = kFused = kCrack = IntPtr.Zero;
