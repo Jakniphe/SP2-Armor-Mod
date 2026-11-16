@@ -97,12 +97,34 @@ namespace ArmorFragments.UI
         // Called once when the designer's properties panel is created.
         public static void Attach(PartPropertiesPanelScript properties)
         {
+            if (container != null && panel != null) container.Destroy();   // the game built the panel again: one section only
             panel = properties;
             Widget itemsParent = properties.Widget.FindWidget("items-parent");
             container = properties.Widget.Context.LoadWidgetFromXml(LayoutPath, itemsParent);
             container.SetIndex(1);   // right after the common properties (name, mass, id)
             container.Visible = false;
             part = null;
+        }
+
+        // After a hot reload the designer's panel already exists (the game builds it once), so the patch on its creation never runs for
+        // this copy of the plugin: add the section to the panel that is already there.
+        public static void AttachToExisting()
+        {
+            foreach (PartPropertiesPanelScript properties in UnityEngine.Object.FindObjectsByType<PartPropertiesPanelScript>(
+                         FindObjectsInactive.Include, FindObjectsSortMode.None))
+            {
+                try
+                {
+                    if (properties == null || properties == panel) continue;
+                    if (properties.Widget == null || properties.Widget.FindWidget("items-parent") == null) continue;   // not built yet
+                    Attach(properties);
+                    ArmorFragmentsPlugin.Log.LogInfo("Designer section added to the properties panel that was already open.");
+                }
+                catch (Exception e)
+                {
+                    ArmorFragmentsPlugin.Log.LogWarning("Couldn't add the designer section to an existing panel: " + e.Message);
+                }
+            }
         }
 
         // The plugin is being unloaded: our section leaves the designer's properties panel. (A copy of the plugin loaded after

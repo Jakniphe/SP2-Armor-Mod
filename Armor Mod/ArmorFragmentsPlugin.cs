@@ -160,6 +160,8 @@ namespace ArmorFragments
                 catch (System.Exception e) { Log.LogWarning("Couldn't remove leftover X-ray ghosts: " + e.Message); }
                 try { UI.ArmorPanel.AttachToExistingMenus(); }
                 catch (System.Exception e) { Log.LogWarning("Couldn't add the menu button to the open flight menu: " + e.Message); }
+                try { UI.DesignerSection.AttachToExisting(); }
+                catch (System.Exception e) { Log.LogWarning("Couldn't add the designer section to the open panel: " + e.Message); }
             }
             PerfMonitor.Begin();
             GpuStatus.Tick(); PerfMonitor.Lap("GpuStatus");
