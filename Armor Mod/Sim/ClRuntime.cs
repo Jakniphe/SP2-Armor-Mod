@@ -29,6 +29,9 @@ namespace ArmorFragments.Sim
         [DllImport(Lib)] public static extern int clEnqueueNDRangeKernel(IntPtr queue, IntPtr kernel, uint dim, UIntPtr[] offset, UIntPtr[] global, UIntPtr[] local, uint nWait, IntPtr[] wait, IntPtr evt);
         [DllImport(Lib)] public static extern int clEnqueueWriteBuffer(IntPtr queue, IntPtr buffer, uint blocking, UIntPtr offset, UIntPtr size, float[] data, uint nWait, IntPtr[] wait, IntPtr evt);
         [DllImport(Lib)] public static extern int clEnqueueReadBuffer(IntPtr queue, IntPtr buffer, uint blocking, UIntPtr offset, UIntPtr size, float[] data, uint nWait, IntPtr[] wait, IntPtr evt);
+        [DllImport(Lib)] public static extern int clEnqueueWriteBuffer(IntPtr queue, IntPtr buffer, uint blocking, UIntPtr offset, UIntPtr size, byte[] data, uint nWait, IntPtr[] wait, IntPtr evt);
+        [DllImport(Lib)] public static extern int clEnqueueWriteBuffer(IntPtr queue, IntPtr buffer, uint blocking, UIntPtr offset, UIntPtr size, int[] data, uint nWait, IntPtr[] wait, IntPtr evt);
+        [DllImport(Lib)] public static extern int clEnqueueReadBuffer(IntPtr queue, IntPtr buffer, uint blocking, UIntPtr offset, UIntPtr size, int[] data, uint nWait, IntPtr[] wait, IntPtr evt);
         [DllImport(Lib)] public static extern int clFinish(IntPtr queue);
         [DllImport(Lib)] public static extern int clReleaseMemObject(IntPtr mem);
         [DllImport(Lib)] public static extern int clReleaseKernel(IntPtr kernel);

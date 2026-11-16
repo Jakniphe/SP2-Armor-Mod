@@ -94,9 +94,22 @@ namespace ArmorFragments.Sim
         private float[] baseTop, baseBottom;
         private int[] baseCover;
 
+        // The graphics card, when it does the particles' work (the shell's logic stays here either way).
+        private ClSolver gpu;
+        private int gpuCharged;
+        private readonly float[] gpuParams = new float[ClSolver.ParamCount];
+
         public static ImpactSimResult Run(ImpactSimInput input, SimPool pool)
         {
+            return Run(input, pool, null);
+        }
+
+        // With a solver the particles are worked out on the graphics card; without one, on the pool's threads. Any failure of the card
+        // is an exception (the caller goes back to the CPU).
+        public static ImpactSimResult Run(ImpactSimInput input, SimPool pool, ClSolver gpu)
+        {
             ImpactSim sim = new ImpactSim();
+            sim.gpu = gpu;
             return sim.Execute(input, pool);
         }
 
@@ -178,6 +191,8 @@ namespace ArmorFragments.Sim
             breakReach2 = (3f * radius) * (3f * radius);
             float keptSpeedFactor = MathF.Sqrt(Math.Min(Math.Max(input.KeptEnergy, 0.02f), 1f));
 
+            if (gpu != null) gpu.Begin(px, py, pz, ox, oy, oz, fixedFlag, n, k);
+
             bool shellActive = true;
             bool stopped = false;
             bool exited = false;
@@ -249,53 +264,89 @@ namespace ArmorFragments.Sim
                 bool hasShell = shellActive;
                 float damp = shellActive ? 0.995f : 0.85f;
 
-                // ---- Predict, and push the particles out of the shell's way ------------------
-                int chunks = (count + 2047) / 2048;
-                if (chunkCharged == null || chunkCharged.Length < chunks) chunkCharged = new float[chunks];
-                Array.Clear(chunkCharged, 0, chunkCharged.Length);
-                float dtLocal = dt;
-                pool.For(count, 2048, (s, e, c) => PredictAndPush(s, e, c, dtLocal, hasShell));
-
-                // ---- Tearing: the links the push has stretched past what the metal can take ------
-                pool.For(count, 2048, (s, e, c) => Tear(s, e));
-
-                // ---- Links ---------------------------------------------------------------------
-                for (int it = 0; it < iterations; it++)
+                float chargedNow = 0f;
+                if (gpu != null)
                 {
-                    for (int color = 0; color < 8; color++)
+                    // ---- The same work, on the graphics card ---------------------------------------
+                    FillParams(dt, damp, hasShell);
+                    int cumulative = gpu.Step(gpuParams, hasShell, iterations);
+                    chargedNow = cumulative - gpuCharged;
+                    gpuCharged = cumulative;
+                }
+                else
+                {
+                    // ---- Predict, and push the particles out of the shell's way ------------------
+                    int chunks = (count + 2047) / 2048;
+                    if (chunkCharged == null || chunkCharged.Length < chunks) chunkCharged = new float[chunks];
+                    Array.Clear(chunkCharged, 0, chunkCharged.Length);
+                    float dtLocal = dt;
+                    pool.For(count, 2048, (s, e, c) => PredictAndPush(s, e, c, dtLocal, hasShell));
+
+                    // ---- Tearing: the links the push has stretched past what the metal can take ------
+                    pool.For(count, 2048, (s, e, c) => Tear(s, e));
+
+                    // ---- Links ---------------------------------------------------------------------
+                    for (int it = 0; it < iterations; it++)
                     {
-                        int[] list = colors[color];
-                        pool.For(list.Length, 1024, (s, e, c) => Relax(list, s, e));
+                        for (int color = 0; color < 8; color++)
+                        {
+                            int[] list = colors[color];
+                            pool.For(list.Length, 1024, (s, e, c) => Relax(list, s, e));
+                        }
                     }
-                }
-                if (hasShell) pool.For(count, 2048, (s, e, c) => Push(s, e, c));
+                    if (hasShell) pool.For(count, 2048, (s, e, c) => Push(s, e, c));
 
-                // ---- Plastic flow, then the new velocities ---------------------------------------
-                pool.For(count, 2048, (s, e, c) => Flow(s, e));
-                float dampLocal = damp;
-                pool.For(count, 2048, (s, e, c) => Finish(s, e, dtLocal, dampLocal));
+                    // ---- Plastic flow, then the new velocities ---------------------------------------
+                    pool.For(count, 2048, (s, e, c) => Flow(s, e));
+                    float dampLocal = damp;
+                    pool.For(count, 2048, (s, e, c) => Finish(s, e, dtLocal, dampLocal));
 
-                if (shellActive)
-                {
-                    float charged = 0f;
-                    for (int c = 0; c < chunks; c++) charged += chunkCharged[c];
-                    energy -= charged * costPerParticle;
+                    for (int c = 0; c < chunks; c++) chargedNow += chunkCharged[c];
                 }
+
+                if (shellActive) energy -= chargedNow * costPerParticle;
                 steps++;
             }
+
+            int gpuBroken = 0;
+            if (gpu != null) gpu.End(px, py, pz, out gpuBroken);   // the particles come back to be read as they are now
 
             ImpactSimResult result = Sample(exited || (energy > 0 && !stopped && az < 0f && exited), input.EnergyScale);
             result.EnergyLeft = (float)Math.Max(energy / energy0, 0.0);
             result.Particles = count;
             result.Steps = steps;
             int chargedCount = 0;
-            for (int c = 0; c < count; c++) if (charged[c] != 0) chargedCount++;
-            result.Charged = chargedCount;
             int brokenLinks = 0;
-            for (int slot = 0; slot < rest.Length; slot++) if (rest[slot] < 0f) brokenLinks++;
-            result.Broken = brokenLinks / 2;
+            if (gpu != null)
+            {
+                chargedCount = gpuCharged;
+                result.Broken = gpuBroken;
+            }
+            else
+            {
+                for (int c = 0; c < count; c++) if (charged[c] != 0) chargedCount++;
+                for (int slot = 0; slot < rest.Length; slot++) if (rest[slot] < 0f) brokenLinks++;
+                result.Broken = brokenLinks / 2;
+            }
+            result.Charged = chargedCount;
             result.Ms = watch.Elapsed.TotalMilliseconds;
             return result;
+        }
+
+        // The shell's state and the material's numbers, for the graphics card's kernels (a step's worth).
+        private void FillParams(float dt, float damp, bool hasShell)
+        {
+            float[] g = gpuParams;
+            g[ClSolver.PCx] = cx; g[ClSolver.PCy] = cy; g[ClSolver.PCz] = cz;
+            g[ClSolver.PAx] = ax; g[ClSolver.PAy] = ay; g[ClSolver.PAz] = az;
+            g[ClSolver.PTipS] = tipS;
+            g[ClSolver.PTx0] = tx0; g[ClSolver.PTy0] = ty0; g[ClSolver.PTz0] = tz0;
+            g[ClSolver.PAx0] = ax0; g[ClSolver.PAy0] = ay0; g[ClSolver.PAz0] = az0;
+            g[ClSolver.PRadius] = radius; g[ClSolver.PBody] = bodyLength; g[ClSolver.PParticle] = particleRadius;
+            g[ClSolver.PH] = h; g[ClSolver.PDt] = dt; g[ClSolver.PDamp] = damp;
+            g[ClSolver.PHasShell] = hasShell ? 1f : 0f; g[ClSolver.PBackOpen] = backOpen ? 1f : 0f;
+            g[ClSolver.PBreak] = breakStrain; g[ClSolver.PYield] = yieldStrain; g[ClSolver.PRate] = plasticRate;
+            g[ClSolver.PDuctility] = ductility; g[ClSolver.PReach2] = breakReach2;
         }
 
         // ---- Setup --------------------------------------------------------------------------------

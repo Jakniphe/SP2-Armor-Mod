@@ -735,6 +735,7 @@ namespace ArmorFragments
             public bool Height;
             public bool Damage;
             public bool Everything;
+            public bool UseGpu;                // the player's wish (the card is used only if it was found and passed its test)
 
             // Real geometry (experimental): after the last queued job for the plate the worker also rewrites its mesh.
             public bool Geometry;
@@ -756,6 +757,13 @@ namespace ArmorFragments
         public static volatile int LastSimMs;
         public static volatile int LastSimQuality = -1;
         public static volatile int LastSimThreads;
+        public static volatile bool LastSimGpu;     // the last simulation ran on the graphics card
+
+        // True once the worker thread has been made (then only it may touch the graphics card's solver).
+        public static bool HasThread
+        {
+            get { return thread != null; }
+        }
         public static volatile int SimsDone;
         public static volatile int Fallbacks;
         public static volatile int TunedQuality = 2;   // the best quality the time limit lets the simulation use now
@@ -843,6 +851,18 @@ namespace ArmorFragments
 
         private static void Run()
         {
+            try
+            {
+                Work();
+            }
+            finally
+            {
+                GpuStatus.ReleaseSolver();   // this thread is the only one that used the card: it lets it go
+            }
+        }
+
+        private static void Work()
+        {
             foreach (Job job in Jobs.GetConsumingEnumerable())
             {
                 if (stopping)
@@ -898,25 +918,54 @@ namespace ArmorFragments
             try
             {
                 int quality = job.AutoQuality ? Math.Min(job.SimQuality, TunedQuality) : job.SimQuality;
-                SimPool simPool = EnsurePool(job.Threads);
+                SimPool simPool = null;   // the CPU's threads are only made if the CPU has to do the work
                 ImpactSimInput input = SimBridge.InputFor(impact, quality, job.TimeLimitMs, job.ResistanceJPerM3);
                 input.Cancelled = StopRequested;
 
                 // The quality is the finest grid the simulation may use. A thick plate or a big shell on a fine grid would run past the
-                // time limit (and give nothing), so the grid is the finest one whose predicted time fits the budget.
+                // time limit (and give nothing), so the grid is the finest one whose predicted time fits the budget. The graphics card is
+                // used when the player wants it and it was found and tested; if it fails at any point the CPU takes over for good.
+                ClSolver gpu = job.UseGpu ? GpuStatus.Solver : null;
                 string grid;
-                input.Columns = ChooseColumns(impact, input, quality, out grid);
-                ImpactSimResult result = ImpactSim.Run(input, simPool);
+                ImpactSimResult result = null;
+                if (gpu != null)
+                {
+                    try
+                    {
+                        input.Columns = ChooseColumns(impact, input, quality, true, out grid);
+                        result = ImpactSim.Run(input, simPool, gpu);
+                    }
+                    catch (Exception e)
+                    {
+                        GpuStatus.Fail(e.GetType().Name + ": " + e.Message);
+                        Messages.Enqueue("[GPU] the graphics card failed, the CPU does the impact simulation from now on: " + e.Message);
+                        gpu = null;
+                        result = null;
+                    }
+                }
+                if (result == null)
+                {
+                    simPool = EnsurePool(job.Threads);
+                    input.Columns = ChooseColumns(impact, input, quality, false, out grid);
+                    result = ImpactSim.Run(input, simPool);
+                }
+                else
+                {
+                    grid = GridNote;
+                }
                 if (stopping) return false;   // cut short by Shutdown: not a slow run, nothing to tune or report
-                LearnCost(impact, input, result);
+                bool onGpu = gpu != null;
+                LearnCost(impact, input, result, onGpu);
 
                 LastSimMs = (int)result.Ms;
                 LastSimQuality = quality;
-                LastSimThreads = Math.Min(simPool.Workers, simPool.MaxWorkers) + 1;
+                LastSimGpu = onGpu;
+                LastSimThreads = onGpu ? 0 : Math.Min(simPool.Workers, simPool.MaxWorkers) + 1;
                 Tune(job, result);
 
                 string what = "[SIMFX] " + impact.Kind + ", quality " + new[] { "low", "medium", "high" }[quality] + grid + ", " + result.Particles +
-                              " particles, " + result.Steps + " steps, " + result.Ms.ToString("F0") + " ms on " + LastSimThreads + " thread(s)";
+                              " particles, " + result.Steps + " steps, " + result.Ms.ToString("F0") + " ms on " +
+                              (onGpu ? "the graphics card" : LastSimThreads + " thread(s)");
                 if (result.TimedOut)
                 {
                     Fallbacks++;
@@ -954,6 +1003,8 @@ namespace ArmorFragments
         private const double BudgetShare = 0.45;                // of the time limit: a mark that comes later than this is too late to matter
         private static readonly int[] Ladder = { 96, 80, 64, 56, 48, 40, 32 };
         private static readonly double[] CostPerUnit = { 2.0e-3, 1.4e-3, 2.1e-3 };   // ms per (columns^3 x layers): ricochet, blocked, penetrated
+        private static readonly double[] CostPerUnitGpu = { 4.0e-5, 4.0e-5, 4.0e-5 };    // the same on the graphics card (measured: about 3e-5)
+        private static string GridNote = "";
 
         private static int CostClass(DamageKind kind)
         {
@@ -966,14 +1017,15 @@ namespace ArmorFragments
         }
 
         // The finest grid (not above the quality's own) whose predicted time fits the budget; the coarsest one if none does.
-        private static int ChooseColumns(PlateImpact impact, ImpactSimInput input, int quality, out string note)
+        private static int ChooseColumns(PlateImpact impact, ImpactSimInput input, int quality, bool gpu, out string note)
         {
             int wanted = ImpactSim.ColumnsOfQuality(quality);
             note = "";
+            GridNote = "";
             if (input.TimeLimitMs <= 0) return wanted;   // no limit: nothing to fit
 
             double budget = input.TimeLimitMs * BudgetShare;
-            double cost = CostPerUnit[CostClass(impact.Kind)];
+            double cost = (gpu ? CostPerUnitGpu : CostPerUnit)[CostClass(impact.Kind)];
             int chosen = Ladder[Ladder.Length - 1];
             foreach (int columns in Ladder)
             {
@@ -984,16 +1036,18 @@ namespace ArmorFragments
             if (chosen < wanted)
                 note = " (a " + chosen + "x" + chosen + " grid: " + wanted + "x" + wanted + " would take about " +
                        (Units(input, wanted) * cost / 1000.0).ToString("F1") + " s)";
+            GridNote = note;
             return chosen;
         }
 
         // What the run really cost, per unit. A run that was stopped by the time limit only says it cost AT LEAST this much.
-        private static void LearnCost(PlateImpact impact, ImpactSimInput input, ImpactSimResult result)
+        private static void LearnCost(PlateImpact impact, ImpactSimInput input, ImpactSimResult result, bool gpu)
         {
             int index = CostClass(impact.Kind);
             double observed = result.Ms / Math.Max(Units(input, input.Columns), 1.0);
-            double known = CostPerUnit[index];
-            CostPerUnit[index] = result.TimedOut ? Math.Max(known, observed * 1.2) : Math.Max(0.5 * known + 0.5 * observed, 2e-4);
+            double[] table = gpu ? CostPerUnitGpu : CostPerUnit;
+            double known = table[index];
+            table[index] = result.TimedOut ? Math.Max(known, observed * 1.2) : Math.Max(0.5 * known + 0.5 * observed, gpu ? 5e-6 : 2e-4);
         }
 
         // The simulation gives itself the best quality the time limit allows: a run that took most of the limit lowers it,

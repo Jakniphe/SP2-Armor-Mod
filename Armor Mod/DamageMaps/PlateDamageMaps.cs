@@ -79,7 +79,7 @@ namespace ArmorFragments
                 string last = DamageWorker.LastSimQuality < 0
                     ? "no simulation yet"
                     : "last " + DamageWorker.LastSimMs + " ms, " + new[] { "low", "medium", "high" }[DamageWorker.LastSimQuality] +
-                      ", " + DamageWorker.LastSimThreads + " thread(s)";
+                      ", " + (DamageWorker.LastSimGpu ? "graphics card" : DamageWorker.LastSimThreads + " thread(s)");
                 return last + "; " + DamageWorker.SimsDone + " done, " + DamageWorker.Fallbacks + " fell back, waiting " +
                        DamageWorker.PendingSims + ", best quality now " + new[] { "low", "medium", "high" }[DamageWorker.TunedQuality] +
                        ", threads in use up to " + DamageWorker.WorkersNow;
@@ -353,6 +353,7 @@ namespace ArmorFragments
                     job.TimeLimitMs = Mathf.RoundToInt(ArmorFragmentsPlugin.SimTimeLimit.Value * 1000f);
                     job.ResistanceJPerM3 = ArmorFragmentsPlugin.ArmorResistance.Value * 1e7f;   // J per mm per cm2 -> J per m3
                     job.Threads = ArmorFragmentsPlugin.SimThreads.Value;
+                    job.UseGpu = ArmorFragmentsPlugin.UseGpu.Value;
                 }
                 else
                 {
