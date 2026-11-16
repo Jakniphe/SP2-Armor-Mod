@@ -100,6 +100,11 @@ namespace ArmorFragments.Sim
         private int gpuCharged;
         private readonly float[] gpuParams = new float[ClSolver.ParamCount];
 
+        // On the card, the plate is allowed to stop settling as soon as no particle moves faster than SettleCalm x the shell's speed (after at
+        // least a few steps), instead of always taking all 24. (A switch only so a test can compare the two.)
+        public static bool EarlySettle = true;
+        public static float SettleCalm = 0.02f;
+
         public static ImpactSimResult Run(ImpactSimInput input, SimPool pool)
         {
             return Run(input, pool, null);
@@ -213,6 +218,7 @@ namespace ArmorFragments.Sim
                 state[ClSolver.PDepthLimit] = depthLimit; state[ClSolver.PSkimLength] = skimLength;
                 state[ClSolver.PRicochet] = input.Ricochet ? 1f : 0f; state[ClSolver.PKept] = input.KeptEnergy;
                 state[ClSolver.PDu] = du; state[ClSolver.PDv] = dv;
+                state[ClSolver.PEps] = EarlySettle ? SettleCalm * speed0 : 0f; state[ClSolver.PMinSettle] = 4f;
                 state[ClSolver.PEnergy] = (float)energy0; state[ClSolver.PShellActive] = 1f; state[ClSolver.PDeepest] = deepestTip;
                 gpu.WriteParams(state);
 

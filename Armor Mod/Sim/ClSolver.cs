@@ -17,9 +17,9 @@ namespace ArmorFragments.Sim
         // The shell's own numbers, for the kernel that runs the shell on the card (the first group does not change during a simulation, the
         // second is the shell's state, which that kernel updates every step).
         public const int PMass = 26, PSpeed0 = 27, PEnergy0 = 28, PCost = 29, PThickness = 30, PHz = 31, PDepthLimit = 32, PSkimLength = 33,
-                         PRicochet = 34, PKept = 35, PDu = 36, PDv = 37;
+                         PRicochet = 34, PKept = 35, PDu = 36, PDv = 37, PEps = 38, PMinSettle = 39;
         public const int PEnergy = 40, PShellActive = 41, PStopped = 42, PExited = 43, PBounced = 44, PSkimming = 45, PSkimLeft = 46,
-                         PDeepest = 47, PSteps = 48, PSettle = 49, PStoppedSteps = 50, PShellSteps = 51, PLastCount = 52, PDone = 53;
+                         PDeepest = 47, PSteps = 48, PSettle = 49, PStoppedSteps = 50, PShellSteps = 51, PLastCount = 52, PDone = 53, PMoving = 54;
         public const int PCx = 0, PCy = 1, PCz = 2, PAx = 3, PAy = 4, PAz = 5, PTipS = 6, PTx0 = 7, PTy0 = 8, PTz0 = 9, PAx0 = 10, PAy0 = 11,
                          PAz0 = 12, PRadius = 13, PBody = 14, PParticle = 15, PH = 16, PDt = 17, PDamp = 18, PHasShell = 19, PBackOpen = 20,
                          PBreak = 21, PYield = 22, PRate = 23, PDuctility = 24, PReach2 = 25;
@@ -68,6 +68,8 @@ __constant int OZ[18] = {0,0,0,0,1,-1,0,0,0,0,1,-1,1,-1,1,-1,1,-1};
 #define P_KEPT 35
 #define P_DU 36
 #define P_DV 37
+#define P_EPS 38
+#define P_MINSETTLE 39
 #define P_ENERGY 40
 #define P_SHELLACTIVE 41
 #define P_STOPPED 42
@@ -82,6 +84,7 @@ __constant int OZ[18] = {0,0,0,0,1,-1,0,0,0,0,1,-1,1,-1,1,-1,1,-1};
 #define P_SHELLSTEPS 51
 #define P_LASTCOUNT 52
 #define P_DONE 53
+#define P_MOVING 54
 
 #define MAX_ACTIVE 600.0f
 #define SETTLE_STEPS 24.0f
@@ -261,7 +264,7 @@ __kernel void flow(__global const float4* q, __global float* rest, __global cons
     }
 }
 
-__kernel void finish(__global float4* p, __global float4* v, __global const float4* q, __global const uchar* fixedFlag, __constant float* P, int count)
+__kernel void finish(__global float4* p, __global float4* v, __global const float4* q, __global const uchar* fixedFlag, __constant float* P, int count, __global int* moving)
 {
     int idx = get_global_id(0);
     if (idx >= count) return;
@@ -270,18 +273,25 @@ __kernel void finish(__global float4* p, __global float4* v, __global const floa
     float inverse = 1.0f / P[P_DT];
     float damp = P[P_DAMP];
     float3 pos = p[idx].xyz, now = q[idx].xyz;
-    v[idx] = (float4)((now - pos) * inverse * damp, 0.0f);
+    float3 velocity = (now - pos) * inverse * damp;
+    v[idx] = (float4)(velocity, 0.0f);
     p[idx] = (float4)(now, 0.0f);
+    if (P[P_EPS] > 0.0f && dot(velocity, velocity) > P[P_EPS] * P[P_EPS]) atomic_inc(moving);
 }
 
 // The shell's logic, one step of it, by a single work-item (the same steps the CPU takes in ImpactSim.Execute, in the same order): the cost
 // of the particles it swept through in the last step comes off its energy, it moves, ricochets, stops or leaves; or, with the shell gone,
 // the plate is left to settle for a number of steps and then the whole simulation is done (every other kernel then does nothing). With
 // this, the card can be given many steps at once and nobody has to wait for it in between.
-__kernel void shell_step(__global float* S, __global const int* counter)
+__kernel void shell_step(__global float* S, __global const int* counter, __global int* moving)
 {
     if (get_global_id(0) != 0) return;
     if (S[P_DONE] > 0.5f) return;
+
+    // How many particles were still moving faster than the calm speed at the end of the last step (and start counting again).
+    float movingBefore = (float)moving[0];
+    moving[0] = 0;
+    S[P_MOVING] = movingBefore;
 
     float total = (float)counter[0];
     if (S[P_HASSHELL] > 0.5f) S[P_ENERGY] -= (total - S[P_LASTCOUNT]) * S[P_COST];
@@ -359,7 +369,8 @@ __kernel void shell_step(__global float* S, __global const int* counter)
     {
         float settle = S[P_SETTLE] + 1.0f;
         S[P_SETTLE] = settle;
-        if (settle > SETTLE_STEPS) { S[P_DONE] = 1.0f; S[P_HASSHELL] = 0.0f; return; }
+        int calm = S[P_EPS] > 0.0f && settle > S[P_MINSETTLE] && movingBefore < 0.5f;
+        if (settle > SETTLE_STEPS || calm) { S[P_DONE] = 1.0f; S[P_HASSHELL] = 0.0f; return; }
     }
 
     S[P_SHELLACTIVE] = active ? 1.0f : 0.0f;
@@ -383,7 +394,7 @@ __kernel void count_broken(__global const float* rest, __global int* counter, in
         // True = the shell's logic runs on the card too (the whole simulation is queued in chunks, with a wait only after each chunk).
         // False = the old way: the CPU runs the shell and the card is waited for twice a step (kept to compare the two).
         public bool DeviceShell = true;
-        private IntPtr bP, bV, bQ, bO, bRest, bRest0, bFixed, bCharged, bCounter, bParams;
+        private IntPtr bP, bV, bQ, bO, bRest, bRest0, bFixed, bCharged, bCounter, bParams, bMoving;
         private int capacity;
         private int n, k, count;
         private float[] zeros4;
@@ -472,6 +483,7 @@ __kernel void count_broken(__global const float* rest, __global int* counter, in
             kRelax = Kernel("relax"); kFlow = Kernel("flow"); kFinish = Kernel("finish"); kBroken = Kernel("count_broken"); kShell = Kernel("shell_step");
             bParams = Buffer(ParamCount * 4);
             bCounter = Buffer(4);
+            bMoving = Buffer(4);
         }
 
         private IntPtr Kernel(string name)
@@ -564,6 +576,7 @@ __kernel void count_broken(__global const float* rest, __global int* counter, in
             Check(ClNative.clEnqueueWriteBuffer(queue, bCharged, 1, UIntPtr.Zero, (UIntPtr)count, new byte[count], 0, null, IntPtr.Zero), "clear charged flags");
             counterValue[0] = 0;
             Check(ClNative.clEnqueueWriteBuffer(queue, bCounter, 1, UIntPtr.Zero, (UIntPtr)4, counterValue, 0, null, IntPtr.Zero), "clear the counter");
+            Check(ClNative.clEnqueueWriteBuffer(queue, bMoving, 1, UIntPtr.Zero, (UIntPtr)4, counterValue, 0, null, IntPtr.Zero), "clear the moving counter");
 
             // Kernel arguments (the buffers and the sizes stay the same for the whole simulation; only the relax color changes).
             Arg(kInit, 0, bP); Arg(kInit, 1, bRest); Arg(kInit, 2, bRest0); Arg(kInit, 3, n); Arg(kInit, 4, k); Arg(kInit, 5, count);
@@ -572,9 +585,9 @@ __kernel void count_broken(__global const float* rest, __global int* counter, in
             Arg(kPush, 0, bQ); Arg(kPush, 1, bFixed); Arg(kPush, 2, bParams); Arg(kPush, 3, count);
             Arg(kTear, 0, bQ); Arg(kTear, 1, bRest); Arg(kTear, 2, bParams); Arg(kTear, 3, n); Arg(kTear, 4, k); Arg(kTear, 5, count);
             Arg(kRelax, 0, bQ); Arg(kRelax, 1, bRest); Arg(kRelax, 2, bFixed); Arg(kRelax, 3, n); Arg(kRelax, 4, k); Arg(kRelax, 6, bParams);
-            Arg(kShell, 0, bParams); Arg(kShell, 1, bCounter);
+            Arg(kShell, 0, bParams); Arg(kShell, 1, bCounter); Arg(kShell, 2, bMoving);
             Arg(kFlow, 0, bQ); Arg(kFlow, 1, bRest); Arg(kFlow, 2, bRest0); Arg(kFlow, 3, bParams); Arg(kFlow, 4, n); Arg(kFlow, 5, k); Arg(kFlow, 6, count);
-            Arg(kFinish, 0, bP); Arg(kFinish, 1, bV); Arg(kFinish, 2, bQ); Arg(kFinish, 3, bFixed); Arg(kFinish, 4, bParams); Arg(kFinish, 5, count);
+            Arg(kFinish, 0, bP); Arg(kFinish, 1, bV); Arg(kFinish, 2, bQ); Arg(kFinish, 3, bFixed); Arg(kFinish, 4, bParams); Arg(kFinish, 5, count); Arg(kFinish, 6, bMoving);
 
             Run(kInit, count);
             TicksBegin = System.Diagnostics.Stopwatch.GetTimestamp() - beganAt;
@@ -680,7 +693,7 @@ __kernel void count_broken(__global const float* rest, __global int* counter, in
             try
             {
                 Release(ref bP); Release(ref bV); Release(ref bQ); Release(ref bO); Release(ref bRest); Release(ref bRest0);
-                Release(ref bFixed); Release(ref bCharged); Release(ref bCounter); Release(ref bParams);
+                Release(ref bFixed); Release(ref bCharged); Release(ref bCounter); Release(ref bParams); Release(ref bMoving);
                 foreach (IntPtr kernel in new[] { kInit, kPredict, kPush, kTear, kRelax, kFlow, kFinish, kBroken, kShell })
                     if (kernel != IntPtr.Zero) ClNative.clReleaseKernel(kernel);
                 kInit = kPredict = kPush = kTear = kRelax = kFlow = kFinish = kBroken = kShell = IntPtr.Zero;
