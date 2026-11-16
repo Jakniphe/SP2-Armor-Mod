@@ -25,6 +25,7 @@ namespace ArmorFragments.Sim
         [DllImport(Lib)] public static extern IntPtr clCreateBuffer(IntPtr ctx, ulong flags, UIntPtr size, IntPtr host, out int err);
         [DllImport(Lib)] public static extern int clSetKernelArg(IntPtr kernel, uint index, UIntPtr size, ref IntPtr value);
         [DllImport(Lib)] public static extern int clSetKernelArg(IntPtr kernel, uint index, UIntPtr size, ref int value);
+        [DllImport(Lib)] public static extern int clSetKernelArg(IntPtr kernel, uint index, UIntPtr size, IntPtr nullValue);   // a __local argument: only its size
         [DllImport(Lib)] public static extern int clSetKernelArg(IntPtr kernel, uint index, UIntPtr size, ref float value);
         [DllImport(Lib)] public static extern int clEnqueueNDRangeKernel(IntPtr queue, IntPtr kernel, uint dim, UIntPtr[] offset, UIntPtr[] global, UIntPtr[] local, uint nWait, IntPtr[] wait, IntPtr evt);
         [DllImport(Lib)] public static extern int clEnqueueWriteBuffer(IntPtr queue, IntPtr buffer, uint blocking, UIntPtr offset, UIntPtr size, float[] data, uint nWait, IntPtr[] wait, IntPtr evt);

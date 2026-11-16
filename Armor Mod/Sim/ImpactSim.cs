@@ -103,6 +103,7 @@ namespace ArmorFragments.Sim
         // On the card, the plate is allowed to stop settling as soon as no particle moves faster than SettleCalm x the shell's speed (after at
         // least a few steps), instead of always taking all 24. (A switch only so a test can compare the two.)
         public static bool EarlySettle = true;
+        public static int IterationsOverride = 0;   // a test can ask for another number of relaxation iterations a step (0 = the normal one)
         public static float SettleCalm = 0.02f;
 
         public static ImpactSimResult Run(ImpactSimInput input, SimPool pool)
@@ -189,7 +190,7 @@ namespace ArmorFragments.Sim
             double costPerParticle = input.ResistanceJPerM3 * cellVolume;
 
             float dt = 0.4f * h / speed0;
-            int iterations = input.Quality <= 0 ? 4 : 5;
+            int iterations = IterationsOverride > 0 ? IterationsOverride : (input.Quality <= 0 ? 4 : 5);
             float depthLimit = Math.Min(0.45f * radius, 0.5f * t);
             bool bounced = false, skimming = false;
             float skimLeft = 0f;

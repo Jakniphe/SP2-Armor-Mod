@@ -388,7 +388,106 @@ __kernel void count_broken(__global const float* rest, __global int* counter, in
 }
 ";
 
+        // ONE launch does all of a step's relaxation: each work-group takes a TILE x TILE patch of columns (with a one-column halo around it)
+        // and every layer of them into local memory, and does all the iterations and all 8 colors there, with a barrier between colors. The
+        // old way was iterations x 8 launches a step, each a handful of thousands of threads, which cost more in launching than in working.
+        // The result is the same as the old one for every particle whose neighbors are inside the patch; the halo's neighbors are not moved
+        // during the launch (they are read as they were when it started, from a copy: 'qin', and the result goes to another: 'qout', so the
+        // answer does not depend on which work-group runs first), so the particles at a patch's edge relax against slightly old neighbors.
+        // The next step reads everything again. It is checked against the old way before it is used.
+        private const string FusedSource = @"
+#define LINKS 18
+#define TILE 8
+#define HALO 1
+#define SIDE (TILE + 2 * HALO)
+#define MAXK 14
+#define P_DONE 53
+__constant int OX[18] = {1,-1,0,0,0,0,1,1,-1,-1,1,1,-1,-1,0,0,0,0};
+__constant int OY[18] = {0,0,1,-1,0,0,1,-1,1,-1,0,0,0,0,1,1,-1,-1};
+__constant int OZ[18] = {0,0,0,0,1,-1,0,0,0,0,1,-1,1,-1,1,-1,1,-1};
+
+__kernel void relax_fused(__global const float4* qin, __global float4* qout, __global const float* rest, int n, int k,
+                          __constant float* P, int iterations, int groupsX, __local float4* tile)
+{
+    if (P[P_DONE] > 0.5f) return;   // the same for the whole group: nobody is left waiting at a barrier
+
+    int count = n * n * k;
+    int tid = get_local_id(0);
+    int group = get_group_id(0);
+    int i0 = (group % groupsX) * TILE, j0 = (group / groupsX) * TILE;
+
+    // The patch and its halo, every layer. A local index is (layer * SIDE + row) * SIDE + column, the halo being the first and last ones.
+    for (int e = tid; e < SIDE * SIDE * k; e += TILE * TILE)
+    {
+        int hx = e % SIDE, hy = (e / SIDE) % SIDE, l = e / (SIDE * SIDE);
+        int i = i0 + hx - HALO, j = j0 + hy - HALO;
+        float4 v = (float4)(0.0f, 0.0f, 0.0f, 0.0f);
+        if (i >= 0 && j >= 0 && i < n && j < n) v = qin[(l * n + j) * n + i];
+        tile[e] = v;
+    }
+    barrier(CLK_LOCAL_MEM_FENCE);
+
+    for (int it = 0; it < iterations; it++)
+    {
+        for (int color = 0; color < 8; color++)
+        {
+            int cx = color & 1, cy = (color >> 1) & 1, cz = (color >> 2) & 1;
+            int layers = (k - cz + 1) / 2;
+            int total = (TILE / 2) * (TILE / 2) * layers;
+            for (int a = tid; a < total; a += TILE * TILE)
+            {
+                int ax = a % (TILE / 2), ay = (a / (TILE / 2)) % (TILE / 2), al = a / ((TILE / 2) * (TILE / 2));
+                int lx = 2 * ax + cx, ly = 2 * ay + cy, l = cz + 2 * al;
+                int i = i0 + lx, j = j0 + ly;
+                if (i >= n || j >= n) continue;
+                if (i == 0 || j == 0 || i == n - 1 || j == n - 1) continue;   // the patch's border is held fixed
+
+                int idx = (l * n + j) * n + i;
+                int mine = (l * SIDE + ly + HALO) * SIDE + lx + HALO;
+                float3 me = tile[mine].xyz;
+                float3 sum = (float3)(0.0f, 0.0f, 0.0f);
+                int used = 0;
+                for (int o = 0; o < LINKS; o++)
+                {
+                    float r = rest[o * count + idx];
+                    if (r <= 0.0f) continue;
+                    int other = ((l + OZ[o]) * SIDE + ly + HALO + OY[o]) * SIDE + lx + HALO + OX[o];
+                    float3 dv = tile[other].xyz - me;
+                    float len = length(dv);
+                    if (len < 1e-9f) continue;
+                    sum += dv * ((len - r) / len);
+                    used++;
+                }
+                if (used > 0) tile[mine] = (float4)(me + sum * (1.0f / used), 0.0f);
+            }
+            barrier(CLK_LOCAL_MEM_FENCE);
+        }
+    }
+
+    for (int e = tid; e < TILE * TILE * k; e += TILE * TILE)
+    {
+        int lx = e % TILE, ly = (e / TILE) % TILE, l = e / (TILE * TILE);
+        int i = i0 + lx, j = j0 + ly;
+        if (i < n && j < n) qout[(l * n + j) * n + i] = tile[(l * SIDE + ly + HALO) * SIDE + lx + HALO];
+    }
+}
+";
+
         private IntPtr context, queue, program, device;
+        private IntPtr programFused, kFused, bQ2;
+
+        // The fused relaxation is EXPERIMENTAL and off: checked against the 8-colors way on the RX 7600 it was 1.3-1.9 x faster on thin plates
+        // but slower on thick ones (more layers = more local memory a group, fewer groups at once), and it changes the result (more links
+        // tear at the patches' edges: 0.1-0.6 mm of difference in the dents, a few hole cells the other way), where the 8-colors way matches
+        // the CPU to 0.002 mm. A test switches it on with AllowFused before the solver is made.
+        public static bool AllowFused = false;
+        public bool Fused = true;
+        public bool FusedReady;
+        public string FusedNote = "";
+        public int LocalMemBytes;
+        private const int FusedTile = 8, FusedMaxLayers = 14;
+        private bool fusedNow;          // used by the simulation in progress
+        private int groupsX, groupsY;
         private IntPtr kInit, kPredict, kPush, kTear, kRelax, kFlow, kFinish, kBroken, kShell;
 
         // True = the shell's logic runs on the card too (the whole simulation is queued in chunks, with a wait only after each chunk).
@@ -484,6 +583,39 @@ __kernel void count_broken(__global const float* rest, __global int* counter, in
             bParams = Buffer(ParamCount * 4);
             bCounter = Buffer(4);
             bMoving = Buffer(4);
+
+            // The fused relaxation is an extra: if the card cannot build it, the simulation goes on with the 8-colors-a-launch way.
+            if (!AllowFused)
+            {
+                FusedNote = "the fused relaxation is off";
+            }
+            else try
+            {
+                LocalMemBytes = (int)ClNative.DeviceNumber(device, 0x1023);   // CL_DEVICE_LOCAL_MEM_SIZE
+                int needed = (FusedTile + 2) * (FusedTile + 2) * FusedMaxLayers * 16;
+                if (LocalMemBytes < needed) throw new InvalidOperationException("local memory is " + LocalMemBytes + " bytes, " + needed + " are needed");
+                System.Diagnostics.Stopwatch fusedBuild = System.Diagnostics.Stopwatch.StartNew();
+                int fusedError;
+                programFused = ClNative.clCreateProgramWithSource(context, 1, new[] { FusedSource }, null, out fusedError);
+                Check(fusedError, "clCreateProgramWithSource (fused)");
+                int fusedStatus = ClNative.clBuildProgram(programFused, 1, new[] { device }, "", IntPtr.Zero, IntPtr.Zero);
+                if (fusedStatus != 0)
+                {
+                    byte[] log = new byte[8192];
+                    UIntPtr size;
+                    ClNative.clGetProgramBuildInfo(programFused, device, 0x1183, (UIntPtr)log.Length, log, out size);
+                    throw new InvalidOperationException("did not compile (" + fusedStatus + "): " + ClNative.Text(log, size).Trim());
+                }
+                kFused = ClNative.clCreateKernel(programFused, "relax_fused", out fusedError);
+                Check(fusedError, "clCreateKernel relax_fused");
+                BuildMs += fusedBuild.Elapsed.TotalMilliseconds;
+                FusedReady = true;
+            }
+            catch (Exception e)
+            {
+                FusedReady = false;
+                FusedNote = "the fused relaxation is not used: " + e.Message;
+            }
         }
 
         private IntPtr Kernel(string name)
@@ -513,11 +645,11 @@ __kernel void count_broken(__global const float* rest, __global int* counter, in
         private void Reserve(int particles)
         {
             if (particles <= capacity) return;
-            Release(ref bP); Release(ref bV); Release(ref bQ); Release(ref bO); Release(ref bRest); Release(ref bRest0); Release(ref bFixed); Release(ref bCharged);
+            Release(ref bP); Release(ref bV); Release(ref bQ); Release(ref bQ2); Release(ref bO); Release(ref bRest); Release(ref bRest0); Release(ref bFixed); Release(ref bCharged);
             // The biggest simulation the grids allow is 96 x 96 x 14 = 129,024 particles: the first run (the check at the start) makes room for
             // that, so that a bigger impact later never has to make the card allocate new buffers in the middle of a shot (it took ~200 ms).
             capacity = Math.Max(particles, 132000);
-            bP = Buffer(16L * capacity); bV = Buffer(16L * capacity); bQ = Buffer(16L * capacity); bO = Buffer(16L * capacity);
+            bP = Buffer(16L * capacity); bV = Buffer(16L * capacity); bQ = Buffer(16L * capacity); bQ2 = Buffer(16L * capacity); bO = Buffer(16L * capacity);
             bRest = Buffer(4L * 18 * capacity); bRest0 = Buffer(4L * 18 * capacity);
             bFixed = Buffer(capacity); bCharged = Buffer(capacity);
             zeros4 = new float[4 * capacity];
@@ -570,6 +702,8 @@ __kernel void count_broken(__global const float* rest, __global int* counter, in
             UIntPtr bytes4 = (UIntPtr)(16L * count);
             Check(ClNative.clEnqueueWriteBuffer(queue, bP, 1, UIntPtr.Zero, bytes4, position, 0, null, IntPtr.Zero), "upload positions");
             Check(ClNative.clEnqueueWriteBuffer(queue, bQ, 1, UIntPtr.Zero, bytes4, position, 0, null, IntPtr.Zero), "upload predicted positions");
+            if (FusedReady && Fused && DeviceShell)
+                Check(ClNative.clEnqueueWriteBuffer(queue, bQ2, 1, UIntPtr.Zero, bytes4, position, 0, null, IntPtr.Zero), "upload the second predicted positions");
             Check(ClNative.clEnqueueWriteBuffer(queue, bO, 1, UIntPtr.Zero, bytes4, original, 0, null, IntPtr.Zero), "upload original positions");
             Check(ClNative.clEnqueueWriteBuffer(queue, bV, 1, UIntPtr.Zero, bytes4, zeros4, 0, null, IntPtr.Zero), "clear velocities");
             Check(ClNative.clEnqueueWriteBuffer(queue, bFixed, 1, UIntPtr.Zero, (UIntPtr)count, fixedFlag, 0, null, IntPtr.Zero), "upload fixed flags");
@@ -582,12 +716,24 @@ __kernel void count_broken(__global const float* rest, __global int* counter, in
             Arg(kInit, 0, bP); Arg(kInit, 1, bRest); Arg(kInit, 2, bRest0); Arg(kInit, 3, n); Arg(kInit, 4, k); Arg(kInit, 5, count);
             Arg(kPredict, 0, bP); Arg(kPredict, 1, bV); Arg(kPredict, 2, bQ); Arg(kPredict, 3, bO); Arg(kPredict, 4, bFixed);
             Arg(kPredict, 5, bCharged); Arg(kPredict, 6, bCounter); Arg(kPredict, 7, bParams); Arg(kPredict, 8, count);
-            Arg(kPush, 0, bQ); Arg(kPush, 1, bFixed); Arg(kPush, 2, bParams); Arg(kPush, 3, count);
+            // With the fused relaxation the particles come out of it in a second buffer, and what follows (push, flow, finish) works on that.
+            fusedNow = Fused && FusedReady && DeviceShell && k <= FusedMaxLayers;
+            IntPtr after = fusedNow ? bQ2 : bQ;
+            if (fusedNow)
+            {
+                groupsX = (n + FusedTile - 1) / FusedTile;
+                groupsY = groupsX;
+                Arg(kFused, 0, bQ); Arg(kFused, 1, bQ2); Arg(kFused, 2, bRest); Arg(kFused, 3, n); Arg(kFused, 4, k); Arg(kFused, 5, bParams);
+                Arg(kFused, 7, groupsX);
+                // The tile's local memory is only as big as this simulation's layers need, so that more work-groups fit on a compute unit.
+                Check(ClNative.clSetKernelArg(kFused, 8, (UIntPtr)((FusedTile + 2) * (FusedTile + 2) * k * 16), IntPtr.Zero), "the fused relaxation's local memory");
+            }
+            Arg(kPush, 0, after); Arg(kPush, 1, bFixed); Arg(kPush, 2, bParams); Arg(kPush, 3, count);
             Arg(kTear, 0, bQ); Arg(kTear, 1, bRest); Arg(kTear, 2, bParams); Arg(kTear, 3, n); Arg(kTear, 4, k); Arg(kTear, 5, count);
             Arg(kRelax, 0, bQ); Arg(kRelax, 1, bRest); Arg(kRelax, 2, bFixed); Arg(kRelax, 3, n); Arg(kRelax, 4, k); Arg(kRelax, 6, bParams);
             Arg(kShell, 0, bParams); Arg(kShell, 1, bCounter); Arg(kShell, 2, bMoving);
-            Arg(kFlow, 0, bQ); Arg(kFlow, 1, bRest); Arg(kFlow, 2, bRest0); Arg(kFlow, 3, bParams); Arg(kFlow, 4, n); Arg(kFlow, 5, k); Arg(kFlow, 6, count);
-            Arg(kFinish, 0, bP); Arg(kFinish, 1, bV); Arg(kFinish, 2, bQ); Arg(kFinish, 3, bFixed); Arg(kFinish, 4, bParams); Arg(kFinish, 5, count); Arg(kFinish, 6, bMoving);
+            Arg(kFlow, 0, after); Arg(kFlow, 1, bRest); Arg(kFlow, 2, bRest0); Arg(kFlow, 3, bParams); Arg(kFlow, 4, n); Arg(kFlow, 5, k); Arg(kFlow, 6, count);
+            Arg(kFinish, 0, bP); Arg(kFinish, 1, bV); Arg(kFinish, 2, after); Arg(kFinish, 3, bFixed); Arg(kFinish, 4, bParams); Arg(kFinish, 5, count); Arg(kFinish, 6, bMoving);
 
             Run(kInit, count);
             TicksBegin = System.Diagnostics.Stopwatch.GetTimestamp() - beganAt;
@@ -638,18 +784,28 @@ __kernel void count_broken(__global const float* rest, __global int* counter, in
         public bool RunSteps(int steps, int iterations, float[] state)
         {
             long t0 = System.Diagnostics.Stopwatch.GetTimestamp();
+            if (fusedNow) Arg(kFused, 6, iterations);
+            UIntPtr[] fusedItems = { (UIntPtr)(groupsX * groupsY * FusedTile * FusedTile) };
+            UIntPtr[] fusedLocal = { (UIntPtr)(FusedTile * FusedTile) };
             for (int step = 0; step < steps; step++)
             {
                 Run(kShell, 1);
                 Run(kPredict, count);
                 Run(kTear, count);
-                for (int iteration = 0; iteration < iterations; iteration++)
+                if (fusedNow)
                 {
-                    for (int color = 0; color < 8; color++)
+                    Check(ClNative.clEnqueueNDRangeKernel(queue, kFused, 1, null, fusedItems, fusedLocal, 0, null, IntPtr.Zero), "the fused relaxation");
+                }
+                else
+                {
+                    for (int iteration = 0; iteration < iterations; iteration++)
                     {
-                        Arg(kRelax, 5, color);
-                        int cx = color & 1, cy = (color >> 1) & 1, cz = (color >> 2) & 1;
-                        Run(kRelax, ((n - cx + 1) / 2) * ((n - cy + 1) / 2) * ((k - cz + 1) / 2));
+                        for (int color = 0; color < 8; color++)
+                        {
+                            Arg(kRelax, 5, color);
+                            int cx = color & 1, cy = (color >> 1) & 1, cz = (color >> 2) & 1;
+                            Run(kRelax, ((n - cx + 1) / 2) * ((n - cy + 1) / 2) * ((k - cz + 1) / 2));
+                        }
                     }
                 }
                 Run(kPush, count);
@@ -692,11 +848,11 @@ __kernel void count_broken(__global const float* rest, __global int* counter, in
         {
             try
             {
-                Release(ref bP); Release(ref bV); Release(ref bQ); Release(ref bO); Release(ref bRest); Release(ref bRest0);
+                Release(ref bP); Release(ref bV); Release(ref bQ); Release(ref bQ2); Release(ref bO); Release(ref bRest); Release(ref bRest0);
                 Release(ref bFixed); Release(ref bCharged); Release(ref bCounter); Release(ref bParams); Release(ref bMoving);
-                foreach (IntPtr kernel in new[] { kInit, kPredict, kPush, kTear, kRelax, kFlow, kFinish, kBroken, kShell })
+                foreach (IntPtr kernel in new[] { kInit, kPredict, kPush, kTear, kRelax, kFlow, kFinish, kBroken, kShell, kFused })
                     if (kernel != IntPtr.Zero) ClNative.clReleaseKernel(kernel);
-                kInit = kPredict = kPush = kTear = kRelax = kFlow = kFinish = kBroken = kShell = IntPtr.Zero;
+                kInit = kPredict = kPush = kTear = kRelax = kFlow = kFinish = kBroken = kShell = kFused = IntPtr.Zero;
                 if (program != IntPtr.Zero) ClNative.clReleaseProgram(program);
                 if (queue != IntPtr.Zero) ClNative.clReleaseCommandQueue(queue);
                 if (context != IntPtr.Zero) ClNative.clReleaseContext(context);
