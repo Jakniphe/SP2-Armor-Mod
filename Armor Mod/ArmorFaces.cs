@@ -24,10 +24,10 @@ namespace ArmorFragments
     // A face is found from the block's real shape (the game's front, rear and, on a curved block, middle sections,
     // its offset and taper), so a
     // sloped, tapered or cut block still gets the face the player sees:
-    //  - the side a point is on is the one its position leans toward in the block's section at that depth
-    //    (on a rounded section: the quarter around the top, bottom, left or right);
-    //  - a surface whose normal is closer to an end's than to that side wall's is the end (a cut end stays the end
-    //    up to 45 degrees of slope);
+    //  - each face has an outward direction at every depth (the side walls tilted by the taper and trapezium, the
+    //    ends along the block), and a surface belongs to the face it points closest to: a cut or slice surface is
+    //    one face across its whole width, a cut end stays the end up to 45 degrees of slope, and a rounded
+    //    section splits where its surface turns past 45 degrees;
     //  - a section with a trapezium of 1 is a triangle: its slanted walls are left and right, the base is top or
     //    bottom, and the edge that shrank to a point has no area;
     //  - a cone narrows to a point: its surface is the four sides all the way to the tip, and it has a front only
@@ -40,9 +40,10 @@ namespace ArmorFragments
     {
         public const int Count = 6;
         public const int Inner = -1;   // an inner wall of a hollow fuselage
+        public const int HoleWall = Count;   // the wall of a hole carved into the block by a cutter with hole wall armor ([HOL])
 
         public static readonly string[] Keys = { "fr", "bk", "lt", "rt", "tp", "bm" };
-        public static readonly string[] Names = { "Front", "Back", "Left", "Right", "Top", "Bottom" };
+        public static readonly string[] Names = { "Front", "Back", "Left", "Right", "Top", "Bottom", "Hole wall" };
 
         // The block's shape in its own frame.
         public struct Shape
@@ -186,7 +187,6 @@ namespace ArmorFragments
             float dx = p.x - center.x;
             float dy = p.y - center.y;
             float v = dy / half.y;
-            float u = dx / Mathf.Max(half.x * (1f + Mathf.Clamp(v, -1f, 1f) * trapezium), 0.0001f);
 
             // A hollow fuselage's inner wall faces the block's axis.
             if (shape.Hollow)
@@ -198,31 +198,38 @@ namespace ArmorFragments
                     return Inner;
             }
 
-            // The side wall the point leans toward, and that wall's normal (tilted by the block's taper and, for the
-            // left and right walls, leaning in with the trapezium; at a trapezium of 1 they meet as a triangle).
-            int side;
-            Vector3 wall;
-            if (Mathf.Abs(u) >= Mathf.Abs(v))
-            {
-                bool plusX = u > 0f;
-                float s = plusX ? 1f : -1f;
-                float widthAtHeight = 1f + Mathf.Clamp(v, -1f, 1f) * trapezium;
-                float slope = ((shape.FrontCenter.x - shape.BackCenter.x) + s * halfSlope.x * widthAtHeight) / length;
-                wall = new Vector3(s, -half.x * trapezium / half.y, -s * slope);
-                side = (plusX == (forward > 0f)) ? (int)BlockFace.Right : (int)BlockFace.Left;
-            }
-            else
-            {
-                bool plusY = v > 0f;
-                float s = plusY ? 1f : -1f;
-                float slope = ((shape.FrontCenter.y - shape.BackCenter.y) + s * halfSlope.y) / length;
-                wall = new Vector3(0f, s, -s * slope);
-                side = plusY ? (int)BlockFace.Top : (int)BlockFace.Bottom;
-            }
+            // Each face's outward direction at this depth: the four side walls tilted by the block's taper (and the
+            // left and right walls leaning in with the trapezium; at a trapezium of 1 they meet as a triangle), and
+            // the two ends. The surface belongs to the face it points closest to, so a slice or cut surface is one
+            // face across its whole width, wherever it lies in the block.
+            float widthAtHeight = 1f + Mathf.Clamp(v, -1f, 1f) * trapezium;
+            float lean = -half.x * trapezium / half.y;
 
-            Vector3 end = new Vector3(0f, 0f, n.z >= 0f ? 1f : -1f);
-            if (Vector3.Dot(n, wall.normalized) >= Vector3.Dot(n, end)) return side;
-            return (n.z >= 0f) == (forward > 0f) ? (int)BlockFace.Front : (int)BlockFace.Back;
+            int best = -1;
+            float bestDot = float.NegativeInfinity;
+            for (int s = -1; s <= 1; s += 2)
+            {
+                float slopeX = ((shape.FrontCenter.x - shape.BackCenter.x) + s * halfSlope.x * widthAtHeight) / length;
+                Vector3 xWall = new Vector3(s, lean, -s * slopeX).normalized;
+                int xFace = ((s > 0) == (forward > 0f)) ? (int)BlockFace.Right : (int)BlockFace.Left;
+                Closer(Vector3.Dot(n, xWall), xFace, ref best, ref bestDot);
+
+                float slopeY = ((shape.FrontCenter.y - shape.BackCenter.y) + s * halfSlope.y) / length;
+                Vector3 yWall = new Vector3(0f, s, -s * slopeY).normalized;
+                Closer(Vector3.Dot(n, yWall), s > 0 ? (int)BlockFace.Top : (int)BlockFace.Bottom, ref best, ref bestDot);
+            }
+            Closer(n.z * forward, (int)BlockFace.Front, ref best, ref bestDot);
+            Closer(-n.z * forward, (int)BlockFace.Back, ref best, ref bestDot);
+            return best;
+        }
+
+        private static void Closer(float dot, int face, ref int best, ref float bestDot)
+        {
+            if (dot > bestDot)
+            {
+                bestDot = dot;
+                best = face;
+            }
         }
 
         // No fuselage data: the frame's axis closest to the normal (+z front, +y top, +x right).
@@ -303,22 +310,28 @@ namespace ArmorFragments
                 }
 
                 if (current.Entered)
-                    Add(into, shape, armor, current.Enter, current.EnterPoint, current.EnterNormal, false);
+                    Add(into, part, shape, armor, dir, current.Enter, current.EnterPoint, current.EnterNormal, false);
                 if (current.Leave <= maxDistance)
-                    Add(into, shape, armor, current.Leave, current.LeavePoint, current.LeaveNormal, true);
+                    Add(into, part, shape, armor, dir, current.Leave, current.LeavePoint, current.LeaveNormal, true);
                 if (i < Spans.Count) current = Spans[i];
             }
+
+            // Armored walls of holes carved into the block ([HOL] on the cutter): plates the line crosses inside it.
+            ArmorSurface.WallBoundaries(part, origin, dir, maxDistance, into);
         }
 
-        private static void Add(List<Boundary> into, Shape shape, ArmorTag armor, float distance, Vector3 point,
-                                Vector3 normal, bool leaving)
+        // An armored face is open where the line goes through a hole carved into the block (ArmorSurface).
+        private static void Add(List<Boundary> into, PartScript part, Shape shape, ArmorTag armor, Vector3 dir,
+                                float distance, Vector3 point, Vector3 normal, bool leaving)
         {
             int face = Classify(shape, point, normal);
             if (face == Inner) return;
+            float mm = armor.Faces != null && face < armor.Faces.Length ? armor.Faces[face] : 0f;
+            if (mm > 0f && !ArmorSurface.SurfaceAt(part, point, dir)) mm = 0f;
             into.Add(new Boundary
             {
                 Distance = distance, Point = point, Normal = normal, Leaving = leaving,
-                Face = face, Mm = armor.Faces != null && face < armor.Faces.Length ? armor.Faces[face] : 0f,
+                Face = face, Mm = mm,
             });
         }
     }

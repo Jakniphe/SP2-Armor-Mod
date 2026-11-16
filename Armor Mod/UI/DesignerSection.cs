@@ -5,6 +5,7 @@ using System.Linq;
 using System.Reflection;
 using Assets.Scripts.Craft.Parts;
 using Assets.Scripts.Craft.Parts.Modifiers;
+using Assets.Scripts.Craft.Parts.Modifiers.CarverParts;
 using Assets.Scripts.Craft.Parts.Modifiers.Powertrain;
 using Assets.Scripts.Craft.Parts.Modifiers.Propulsion.Jet;
 using Assets.Scripts.Craft.Parts.Modifiers.Propulsion.Propeller;
@@ -62,7 +63,11 @@ namespace ArmorFragments.UI
         // once); shown on the block by FaceHighlight.
         public const int AllFaces = ArmorFaces.Count;
         public static int SelectedFace = AllFaces;
-        private static PartScript faceModePart;           // the block SelectedFace was chosen for
+
+        // A selected hole cutter: the armored blocks it cuts (the hole wall armor option shows while there are any).
+        private static bool builtIsCutter;
+        private static List<PartScript> builtCutArmor;
+        private static float nextCutterPoll;
 
         // The selected part while its armor is edited per face (null otherwise).
         public static PartScript PerFacePart
@@ -122,6 +127,7 @@ namespace ArmorFragments.UI
             if (!rebuildPending)
             {
                 PollProjectileType();
+                PollCutter();
                 return;
             }
             rebuildPending = false;
@@ -162,6 +168,42 @@ namespace ArmorFragments.UI
                 builtCannonRows = false;   // do not try again until the rows are rebuilt
                 ArmorFragmentsPlugin.Log.LogWarning("Couldn't read the cannon's Projectile Type: " + e.Message);
             }
+        }
+
+        // A hole cutter can be moved into or out of armor while selected: the hole wall armor option comes and goes.
+        private static void PollCutter()
+        {
+            if (!builtIsCutter || part == null || container == null) return;
+            if (Time.unscaledTime < nextCutterPoll) return;
+            nextCutterPoll = Time.unscaledTime + 0.5f;
+            try
+            {
+                List<PartScript> now = ArmoredBlocksCut(part);
+                int before = builtCutArmor != null ? builtCutArmor.Count : 0;
+                if (now.Count != before) rebuildPending = true;
+            }
+            catch (Exception e)
+            {
+                builtIsCutter = false;   // do not try again until the rows are rebuilt
+                ArmorFragmentsPlugin.Log.LogWarning("Couldn't read what the hole cutter cuts: " + e.Message);
+            }
+        }
+
+        // The armor blocks the selected hole cutter cuts into.
+        private static List<PartScript> ArmoredBlocksCut(PartScript cutterPart)
+        {
+            List<PartScript> blocks = new List<PartScript>();
+            MeshModifierBaseScript cutter = cutterPart != null ? cutterPart.GetComponentInChildren<MeshModifierBaseScript>() : null;
+            if (cutter == null || cutterPart.Aircraft == null || cutterPart.Aircraft.Aircraft == null) return blocks;
+
+            List<int> ids = cutter.GetPartIDs();
+            if (ids == null || ids.Count == 0) return blocks;
+            foreach (PartData data in cutterPart.Aircraft.Aircraft.Assembly.Parts)
+            {
+                if (data == null || data.PartScript == null || !ids.Contains(data.Id)) continue;
+                if (TagCodec.Parse(data.Name).Armor != null) blocks.Add(data.PartScript);
+            }
+            return blocks;
         }
 
         // The game's 'Projectile Type' setting of the selected cannon.
@@ -211,7 +253,13 @@ namespace ArmorFragments.UI
             // can be taken off.
             bool canVent = canArmor || tags.Vent != null;
 
-            if (!canArmor && !canCannon && !canModule && !canVent)
+            // A hole cutter that cuts into armor can armor its holes' walls (a cutter already marked keeps its toggle,
+            // so the mark can be taken off); one that cuts no armor shows nothing.
+            builtIsCutter = Has<MeshModifierBaseData>();
+            builtCutArmor = builtIsCutter ? ArmoredBlocksCut(part) : null;
+            bool canHole = builtIsCutter && ((builtCutArmor != null && builtCutArmor.Count > 0) || tags.Hole != null);
+
+            if (!canArmor && !canCannon && !canModule && !canVent && !canHole)
             {
                 container.Visible = false;
                 return;
@@ -252,15 +300,32 @@ namespace ArmorFragments.UI
                     }
 
                     FaceRows(builder, tags);
-                    string[] weightLabels = new string[ArmorFaces.Count + 1];
+                    bool holeRow = ArmorSurface.IsCarved(part);   // a row for armored hole walls on a carved block
+                    string[] weightLabels = new string[ArmorFaces.Count + 1 + (holeRow ? 1 : 0)];
                     weightLabels[0] = "Armor weight";
                     for (int i = 0; i < ArmorFaces.Count; i++) weightLabels[i + 1] = "  " + ArmorFaces.Names[i];
-                    Live(builder, weightLabels, () => string.Join("|", ArmorWeightTexts()), ArmorWeightTexts);
+                    if (holeRow) weightLabels[ArmorFaces.Count + 1] = "  Hole walls";
+                    Live(builder, weightLabels, () => string.Join("|", ArmorWeightTexts(holeRow)), () => ArmorWeightTexts(holeRow));
                     Slider(builder, tags, "Hardness", "How hard the armor is compared with the shell: harder armor deflects shells at lower angles. 100% = reference.",
                         10f, 300f, 5f, tags.Armor.Hardness, " %", v => tags.Armor.Hardness = v);
                     Slider(builder, tags, "Brittleness", "How easily the plate shatters into fragments. (Not used yet: energy model.)",
                         0f, 100f, 5f, tags.Armor.Brittleness, " %", v => tags.Armor.Brittleness = v);
                 }
+            }
+
+            if (canHole)
+            {
+                builder.Toggle("Hole wall armor",
+                    "The walls of the holes this cutter carves into armor blocks become plates of their own: a shell or " +
+                    "fragment flying through the hole meets them, and they add to the block's armor weight. " +
+                    "Off: the holes are open, with bare walls.",
+                    tags.Hole != null,
+                    on => Switch(tags, () => tags.Hole = on ? new HoleTag() : null));
+                if (tags.Hole != null)
+                    Slider(builder, tags, "Wall thickness", "Thickness of the hole walls' plates.",
+                        1f, 500f, 1f, tags.Hole.Thickness, " mm", v => tags.Hole.Thickness = v);
+                builder.Text("Cuts into armor", builtCutArmor != null && builtCutArmor.Count > 0
+                    ? builtCutArmor.Count + " block" + (builtCutArmor.Count == 1 ? "" : "s") : "none");
             }
 
             if (canCannon)
@@ -666,12 +731,8 @@ namespace ArmorFragments.UI
                 if (faces[i] != faces[0]) same = false;
             }
 
-            // A newly selected block opens per face only if its faces differ.
-            if (part != faceModePart)
-            {
-                faceModePart = part;
-                SelectedFace = same ? AllFaces : 0;
-            }
+            // "Per face" stays as the player left it from block to block (a duplicate opens as its original was being
+            // edited); a block whose faces differ always opens per face, since one Thickness can't show them.
             if (!same && SelectedFace == AllFaces) SelectedFace = 0;
             int picked = SelectedFace >= 0 && SelectedFace <= AllFaces ? SelectedFace : AllFaces;
 
@@ -716,9 +777,9 @@ namespace ArmorFragments.UI
         }
 
         // Armor weight, then one row per face: the steel of the armored faces (area on the block x thickness).
-        private static string[] ArmorWeightTexts()
+        private static string[] ArmorWeightTexts(bool holeRow)
         {
-            string[] texts = new string[ArmorFaces.Count + 1];
+            string[] texts = new string[ArmorFaces.Count + 1 + (holeRow ? 1 : 0)];
             float kg;
             float[] faceKg;
             float[] faceArea;
@@ -732,6 +793,11 @@ namespace ArmorFragments.UI
             texts[0] = Kg(kg);
             for (int i = 0; i < ArmorFaces.Count; i++)
                 texts[i + 1] = faceKg[i] > 0f ? Kg(faceKg[i]) : "open";
+            if (holeRow)
+            {
+                float wallKg = ArmorMass.HoleWallKg(part.Part);
+                texts[ArmorFaces.Count + 1] = wallKg > 0f ? Kg(wallKg) : "open";
+            }
             return texts;
         }
 
@@ -789,11 +855,15 @@ namespace ArmorFragments.UI
             if (part == null) return;
 
             string name = TagCodec.Compose(tags, part.Part.PartType.Name);
-            bool armorBefore = part.Part.Name != null && part.Part.Name.Contains("[ARM");
+            bool armorBefore = part.Part.Name != null && (part.Part.Name.Contains("[ARM") || part.Part.Name.Contains("[HOL"));
             part.Part.Name = name;
             foreach (PartModifierData modifier in part.Part.Modifiers)
                 modifier.OnPartNameChanged(name);
             builtForName = name;
+
+            // Parts linked to this one by symmetry get the same armor (mirrored ones with their sides swapped).
+            bool armorRelated = armorBefore || tags.Armor != null || tags.Hole != null;
+            int partners = armorRelated ? ArmorSymmetry.SyncPartners(part, tags) : 0;
 
             // Make the game's own name field show the new name.
             applying = true;
@@ -810,13 +880,17 @@ namespace ArmorFragments.UI
             if (createUndoStep) ModuleOutputs.RefreshDesignerVariables(part);
 
             // Armor weighs: the craft's mass and center of mass change with it (as with the game's Dead Weight).
-            if (createUndoStep && (armorBefore || tags.Armor != null))
+            if (createUndoStep && armorRelated)
                 Assets.Scripts.Design.Designer.Instance.SetAircraftStructureChanged();
 
             if (createUndoStep)
             {
-                Assets.Scripts.Design.Designer.Instance.CreateUndoStepForSelectedPart(
-                    "Armor tags", "armor-tags-" + part.Part.Id);
+                // With symmetry partners changed too, the undo step covers the whole craft, so one undo reverts all.
+                if (partners > 0)
+                    Assets.Scripts.Design.Designer.Instance.CreateUndoStep("Armor tags", "armor-tags-" + part.Part.Id);
+                else
+                    Assets.Scripts.Design.Designer.Instance.CreateUndoStepForSelectedPart(
+                        "Armor tags", "armor-tags-" + part.Part.Id);
             }
         }
 

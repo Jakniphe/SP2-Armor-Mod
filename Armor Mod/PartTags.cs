@@ -72,6 +72,13 @@ namespace ArmorFragments
         public ModuleTag Module;
         public AmmoRackTag AmmoRack;
         public VentTag Vent;
+        public HoleTag Hole;           // null = the walls of the holes this cutter carves are no armor
+    }
+
+    // A carving part (hole cutter): the walls of the holes it carves into armor blocks are plates of this thickness.
+    internal sealed class HoleTag
+    {
+        public float Thickness = 20f;  // t: millimeters
     }
 
     // Any part: ammo rack cook-offs vent through the nearest one of these (a turret ring, a hatch).
@@ -83,7 +90,7 @@ namespace ArmorFragments
     {
         // [ARM t=20 h=100]   -> kind + a list of key=value pairs
         private static readonly Regex Block =
-            new Regex(@"\[(ARM|CAN|MOD|AMM|VNT)((?:\s+[a-z]+=[^\s\]]+)*)\s*\]");
+            new Regex(@"\[(ARM|CAN|MOD|AMM|VNT|HOL)((?:\s+[a-z]+=[^\s\]]+)*)\s*\]");
         private static readonly Regex Pair = new Regex(@"([a-z]+)=([^\s\]]+)");
         private static readonly Regex ExtraSpaces = new Regex(@"\s{2,}");
 
@@ -144,6 +151,10 @@ namespace ArmorFragments
                 {
                     tags.Vent = new VentTag();
                 }
+                else if (kind == "HOL")
+                {
+                    tags.Hole = new HoleTag { Thickness = Get(values, "t", 20f) };
+                }
                 else if (kind == "AMM")
                 {
                     float order;
@@ -184,6 +195,8 @@ namespace ArmorFragments
                        (tags.AmmoRack.Order.HasValue ? " o=" + tags.AmmoRack.Order.Value : "") + "]");
             if (tags.Vent != null)
                 Append(name, "[VNT]");
+            if (tags.Hole != null)
+                Append(name, "[HOL t=" + Number(tags.Hole.Thickness) + "]");
 
             return name.Length == 0 ? fallback : name.ToString();
         }
