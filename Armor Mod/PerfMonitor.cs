@@ -36,6 +36,13 @@ namespace ArmorFragments
         {
             Ring[next++ & (Size - 1)] = new Frame { Timestamp = Stopwatch.GetTimestamp(), Seconds = Time.unscaledDeltaTime };
 
+            if (Time.unscaledTime >= nextSceneReport)
+            {
+                nextSceneReport = Time.unscaledTime + 15f;
+                try { SceneReport(); }
+                catch (System.Exception e) { ArmorFragmentsPlugin.Log.LogWarning("[PERF] could not report the scene: " + e.Message); }
+            }
+
             SimEvent simulation;
             while (Events.TryDequeue(out simulation))
             {
@@ -103,6 +110,94 @@ namespace ArmorFragments
             totalSum = 0.0;
             totalWorst = 0.0;
             updates = 0;
+        }
+
+        // ---- Every 15 s: how the frames fare, next to what is in the scene --------------------------
+        // Idle or shooting, the line says how long frames take (average, median, worst of the last 15 s) and how many of the things that
+        // usually cost frames exist right now. If frame time climbs while one of the counts climbs with it, that is the suspect.
+        private static float nextSceneReport = 15f;
+
+        private static int CountActive<T>() where T : Component
+        {
+            T[] all = Object.FindObjectsByType<T>(FindObjectsSortMode.None);
+            int n = 0;
+            for (int i = 0; i < all.Length; i++)
+            {
+                Behaviour b = all[i] as Behaviour;
+                Renderer r = all[i] as Renderer;
+                if (b != null ? b.isActiveAndEnabled : (r != null ? r.enabled && r.gameObject.activeInHierarchy : all[i].gameObject.activeInHierarchy)) n++;
+            }
+            return n;
+        }
+
+        private static System.Type decalType;
+        private static bool decalSearched;
+
+        // DecalProjector lives in the render pipeline's assembly, which the plugin does not reference: found by name, once.
+        private static int CountDecals()
+        {
+            if (!decalSearched)
+            {
+                decalSearched = true;
+                foreach (System.Reflection.Assembly a in System.AppDomain.CurrentDomain.GetAssemblies())
+                {
+                    try { decalType = a.GetType("UnityEngine.Rendering.Universal.DecalProjector", false); }
+                    catch { }
+                    if (decalType != null) break;
+                }
+            }
+            if (decalType == null) return -1;
+            Object[] all = Object.FindObjectsByType(decalType, FindObjectsSortMode.None);
+            int n = 0;
+            for (int i = 0; i < all.Length; i++)
+            {
+                Behaviour b = all[i] as Behaviour;
+                if (b != null && b.isActiveAndEnabled) n++;
+            }
+            return n;
+        }
+
+        private static void SceneReport()
+        {
+            long now = Stopwatch.GetTimestamp();
+            List<float> times = new List<float>();
+            for (int i = 0; i < Size; i++)
+            {
+                Frame f = Ring[i];
+                if (f.Timestamp >= now - 15 * Stopwatch.Frequency && f.Timestamp <= now) times.Add(f.Seconds);
+            }
+            if (times.Count == 0) return;
+            times.Sort();
+            double sum = 0.0;
+            for (int i = 0; i < times.Count; i++) sum += times[i];
+
+            long started = Stopwatch.GetTimestamp();
+            int trails = 0, tracers = 0;
+            TrailRenderer[] trailRenderers = Object.FindObjectsByType<TrailRenderer>(FindObjectsSortMode.None);
+            for (int i = 0; i < trailRenderers.Length; i++)
+            {
+                if (!trailRenderers[i].gameObject.activeInHierarchy) continue;
+                trails++;
+                if (trailRenderers[i].gameObject.name.StartsWith("Tracer")) tracers++;
+            }
+            int particles = 0, playing = 0;
+            ParticleSystem[] systems = Object.FindObjectsByType<ParticleSystem>(FindObjectsSortMode.None);
+            for (int i = 0; i < systems.Length; i++)
+            {
+                if (!systems[i].gameObject.activeInHierarchy) continue;
+                particles++;
+                if (systems[i].isPlaying) playing++;
+            }
+
+            string line = "[PERF] frames over the last 15 s: " + times.Count + ", average " + (sum / times.Count * 1000.0).ToString("F1") + " ms, median " +
+                (times[times.Count / 2] * 1000f).ToString("F1") + " ms, worst " + (times[times.Count - 1] * 1000f).ToString("F1") + " ms; " +
+                (Application.isFocused ? "in focus" : "NOT in focus") + "; scene: trails " + trails + " (tracers " + tracers + "), particle systems " + particles +
+                " (playing " + playing + "), renderers " + CountActive<Renderer>() + ", colliders " + CountActive<Collider>() + ", rigidbodies " +
+                CountActive<Rigidbody>() + ", lights " + CountActive<Light>() + ", cameras " + CountActive<Camera>() + ", decals " +
+                CountDecals() + "; time scale " + Time.timeScale.ToString("F2") + ", target fps " +
+                Application.targetFrameRate + ", vsync " + QualitySettings.vSyncCount + "; C# heap " + System.GC.GetTotalMemory(false) / (1024 * 1024) +
+                " MB; this count took " + Since(started).ToString("F1") + " ms";
+            ArmorFragmentsPlugin.Log.LogInfo(line);
         }
 
         private static void Window(long from, long to, out int frames, out float average, out float worst)
