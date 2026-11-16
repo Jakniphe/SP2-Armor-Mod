@@ -403,16 +403,20 @@ namespace ArmorFragments.Sim
 
         // ---- Setup --------------------------------------------------------------------------------
 
+        // The card keeps the links, the velocities and the rest of the particles' state itself: only where the particles start (and, at the
+        // end, where they are) is needed here. So with a card the big arrays (the links alone are 3 x 18 numbers a particle, tens of
+        // megabytes, and made the garbage collector stall) are not made at all.
         private void Allocate()
         {
             px = new float[count]; py = new float[count]; pz = new float[count];
             ox = new float[count]; oy = new float[count]; oz = new float[count];
+            fixedFlag = new byte[count];
+            if (gpu != null) return;
             qx = new float[count]; qy = new float[count]; qz = new float[count];
             vx = new float[count]; vy = new float[count]; vz = new float[count];
             rest = new float[count * Links];
             rest0 = new float[count * Links];
             nbr = new int[count * Links];
-            fixedFlag = new byte[count];
             charged = new byte[count];
         }
 
@@ -437,12 +441,14 @@ namespace ArmorFragments.Sim
                         px[idx] = (i - (n - 1) * 0.5f) * h + noise() * h * jitter;
                         py[idx] = (j - (n - 1) * 0.5f) * h + noise() * h * jitter;
                         pz[idx] = -t * 0.5f + (kk + 0.5f) * hz; noise();   // (no jitter across the thickness: the surface heights would be noisy)
-                        qx[idx] = px[idx]; qy[idx] = py[idx]; qz[idx] = pz[idx];
+                        if (gpu == null) { qx[idx] = px[idx]; qy[idx] = py[idx]; qz[idx] = pz[idx]; }
                         ox[idx] = px[idx]; oy[idx] = py[idx]; oz[idx] = pz[idx];
                         fixedFlag[idx] = (byte)(edge ? 1 : 0);
                     }
                 }
             }
+
+            if (gpu != null) return;   // the card makes the links and the colors itself
 
             int[] colorCounts = new int[8];
             for (int idx = 0; idx < count; idx++)
