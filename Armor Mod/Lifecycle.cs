@@ -50,6 +50,24 @@ namespace ArmorFragments
             }
         }
 
+        // X-ray ghosts that nobody owns any more. An earlier build left the impact camera's ghosts of live parts in the scene
+        // (hundreds each time the camera closed): they are drawn over the part and, once the materials they used are freed (a reload),
+        // as the error shader's magenta. Removes them all; called a moment after loading, when this copy has made none yet.
+        public static int RemoveLeftoverGhosts()
+        {
+            int removed = 0;
+            foreach (MeshRenderer renderer in UnityEngine.Object.FindObjectsByType<MeshRenderer>(
+                         FindObjectsInactive.Include, FindObjectsSortMode.None))
+            {
+                if (renderer == null || renderer.name != "ArmorXRayGhost") continue;
+                UnityEngine.Object.Destroy(renderer.gameObject);
+                removed++;
+            }
+            if (removed > 0)
+                ArmorFragmentsPlugin.Log.LogInfo("[LIFECYCLE] Removed " + removed + " X-ray ghost(s) that an earlier build left in the scene");
+            return removed;
+        }
+
         public static void Shutdown()
         {
             if (done) return;

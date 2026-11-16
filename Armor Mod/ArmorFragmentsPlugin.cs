@@ -145,6 +145,8 @@ namespace ArmorFragments
             if (attachMenuAt > 0f && UnityEngine.Time.unscaledTime >= attachMenuAt)
             {
                 attachMenuAt = -1f;
+                try { Lifecycle.RemoveLeftoverGhosts(); }
+                catch (System.Exception e) { Log.LogWarning("Couldn't remove leftover X-ray ghosts: " + e.Message); }
                 try { UI.ArmorPanel.AttachToExistingMenus(); }
                 catch (System.Exception e) { Log.LogWarning("Couldn't add the menu button to the open flight menu: " + e.Message); }
             }

@@ -465,10 +465,13 @@ namespace ArmorFragments
 
         public void Dispose()
         {
-            // The holder owns every ghost.
+            // The holder owns only the ghosts of parts that were destroyed. The ghost of a part that is still alive is a child of the
+            // part's own mesh (so it goes where the part goes), and nothing else would ever remove it: each one is destroyed here.
+            foreach (GameObject ghost in ghostObjects)
+                if (ghost != null) Object.Destroy(ghost);
+            ghostObjects.Clear();
             if (holder != null) Object.Destroy(holder);
             holder = null;
-            ghostObjects.Clear();
 
             foreach (RimGhost rim in rims)
                 if (rim.Mesh != null) Object.Destroy(rim.Mesh);
