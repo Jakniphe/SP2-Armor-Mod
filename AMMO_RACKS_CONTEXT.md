@@ -12,7 +12,7 @@ Vehicles without armor die as in the base game.
 New:
 - `AmmoRacks.cs`: runtime. Registries (`Craft` with its `Rack`s, a `Feed` per rack-fed cannon, and the `Group`s that
   name the variables), feeding, weight, damage and cook-off, the
-  explosion and its blast, the knocked-out state, and the rack Harmony patches (end of file).
+  explosion and its blast, and the rack Harmony patches (end of file).
 - `AmmoRound.cs`: a round's size, mass, energy and explosive pounds, from the cannon's `CannonData`.
 - `RackGrid.cs`: measures a rack's shape, packs the rounds, line-vs-rounds test, removal order, rounds mesh.
 - `RackVisualizer.cs`: see-through racks with their rounds in the designer.
@@ -27,12 +27,16 @@ Changed: `FragmentSpawner.cs`, `ShellFlight.cs`, `Net/NetSync.cs`, `PartTags.cs`
 ## Tags
 - `[AMM g=<group> o=<order>]` on a fuselage: an ammo rack. `g` = the name of its Funky Trees variables (empty =
   "Ammo"; racks with the same `g` share them),
-  `o` = empty order: a cannon empties its racks from the lowest up (none = after the numbered ones, then part id).
+  `o` = empty order, 1 and up (none or 0 = No order, the designer's default): a cannon empties its numbered racks
+  from the lowest up, then the unnumbered ones nearest first; equal numbers also go nearest first (distance from the
+  gun at spawn in flight, in the designer for the read-out).
+  `f` = fullness, percent of the rounds loaded at spawn (none = 100): `RackGrid.Measure` takes the rest out from the
+  top (`LoadToFullness`), so `Capacity` is what the shape holds and `Remaining` what is loaded.
 - `[CAN ... r=<id>,<id>]`: the part ids of the racks the cannon draws from, picked in the designer. No `r` (or no
   id that is still a rack) = the game's Ammo Count. Several cannons can list the same rack.
 - `[VNT]` on a fuselage: a cook-off vent.
-- In the designer, armor is exclusive with `[MOD]`, `[AMM]` and `[VNT]` (armor takes no damage). Hollow/cut
-  fuselages and armor hold no rounds.
+- In the designer, armor is exclusive with `[MOD]`, `[AMM]` and `[VNT]` (armor takes no damage). Hollow
+  fuselages and armor hold no rounds; a cut fuselage is packed to its cut shape (the mesh is measured as drawn).
 
 ## Rounds (`AmmoRound`)
 - Shell: mass = `ProjectileVolume x 11342` kg; length 1.5 calibers (Slug) or 1 (Sphere); energy = ½ m v².
@@ -45,16 +49,29 @@ Changed: `FragmentSpawner.cs`, `ShellFlight.cs`, `Net/NetSync.cs`, `PartTags.cs`
   nothing.
 
 ## Shape and packing (`RackGrid`)
-- Frame: Z along the fuselage (`JFuselageData` offset), X/Y across; rounds lie along Z.
-- Measured from the render mesh (`XRayView.GhostSources`; designer colliders are bounding boxes): sliced along Z
-  (~1 cm, at most 1500 cuts), 5 scanlines per round circle, inside test by nonzero winding from both sides.
-  Collider fallback.
-- Across: a grid with pitch = diameter x (1 + `RoundSpacingPercent`/100). Each (column, layer) row holds as many
-  whole rounds end to end as fit its own length.
-- Removal order: top layer first, then left to right, then front to back.
+- Frame: Z = the direction the rounds lie in, X/Y across. The part's own axes: L along the fuselage
+  (`JFuselageData` offset), A across, U up.
+- Measured from the render mesh (`XRayView.GhostSources`; designer colliders are bounding boxes), kept in the part's
+  rotation and turned into each layout's frame: sliced along Z (~1 cm, at most 1500 cuts), 5 lines per round
+  circle, inside test by nonzero winding from both sides; the cut's segments are binned by height so a line only
+  reads its own band.
+- In flight the game builds a fuselage's mesh after the craft appears: `TryMeasure` waits up to 10 s of real time (`GiveUpMeasuringAt`, independent of the game speed) for every rack to have a shape; a rack still without one is measured again each real second (`MeasureLate`) until it has, then fills and its cannons get its rounds.
+- Across: a grid with pitch = diameter x (1 + `RoundSpacingPercent`/100): square, or staggered (odd layers shifted
+  half a pitch, layers pitch x sqrt(3)/2 apart). Each (column, layer) row holds as many whole rounds end to end as
+  fit its own length.
+- Layout search (`Search`, mesh only): 9 directions (L, A, U and the six 45-degree diagonals between them) x the
+  cross grid square or turned 45 degrees about Z x square or staggered, centered: 36 layouts; then the two best at
+  every shift (X and Y each centered, flush low, or flush plus half a pitch). A layout replaces the best only with
+  more rounds, and the lengthwise square centered one is tried first, so no rack holds fewer than before. A layout
+  whose box grid can't beat the best is skipped. The winner is cached per shape (vertex count, bounds, vertex sum
+  to the mm, L) and round (diameter, length, pitch) in `LayoutCache`, so later measures are one fill. The collider
+  fallback uses the lengthwise square centered layout only.
+- `WorldCenter`: the middle of the part's shape in its own axes, whatever the layout.
+- Removal order: highest first (height in the part, to the mm), then by X, then by Z.
 - `HitsRounds(transform, point, direction, thickness)`: the line through the point (both ways) is clipped to the
   rounds' box and sampled; `RoundAt` finds a present round within radius x 1.0488 + thickness, searching
-  neighboring columns and layers. Shells pass half their caliber (a tube); fragments pass 0.
+  neighboring layers and, per layer (with its stagger shift), columns. Shells pass half their caliber (a tube);
+  fragments pass 0.
 - `DebugDumpShape` writes the measured shape and rounds to `BepInEx/ammo-rack-shape.obj`.
 
 ## Feeding and weight
@@ -122,7 +139,7 @@ Changed: `FragmentSpawner.cs`, `ShellFlight.cs`, `Net/NetSync.cs`, `PartTags.cs`
 ## Vehicle death (`VehicleRules`)
 - `GameMayExplode(aircraft)` = not knocked out and (no `[ARM]` part or `GameDamageExplosions`, default false):
   unarmored vehicles keep the base game's damage explosions. Used by the `QueueExplosion` patch and both
-  `ExplodePart` patches (never `ExplodePart` on a rack). The game reaches these only from damage:
+  `ExplodePart` patches (never `ExplodePart` on a rack or a crew seat). The game reaches these only from damage:
   `PartScript.OnDamaged` (damage ≥ `DamageLimit` → `QueueExplosion(MainCockpit, 100)`),
   `OnPartDamageLevelIncreased` (roll on `DamageDisconnect` parts and destroyed parts; a cockpit-group part →
   `QueueExplosion`), `FuelTankScript`, `PropellerAssemblyScript`, `ExplosionScript`. Parts only disconnect
@@ -131,9 +148,11 @@ Changed: `FragmentSpawner.cs`, `ShellFlight.cs`, `Net/NetSync.cs`, `PartTags.cs`
   or wing area left, below `CriticalDamageThreshold`) → `MarkAsCriticallyDamaged` (sets `CriticallyDamaged`, raises
   `AircraftKilled` in `OnLateUpdate`: kill credit, kill cam, respawn; `NetworkAircraftScript.OnAircraftKilled`
   tells the other players). An armored vehicle loses no parts, so `VehicleRules.Kill` calls
-  `MarkAsCriticallyDamaged` (reflection) itself, in the owner's game, when a rack explodes. Planned: kills
-  decided by modules in general; a rack exploding stays a kill.
-- `TakesModDamage(part, tags)`: armor never; `[MOD]`/`[AMM]` always; other parts only when the vehicle has no
+  `MarkAsCriticallyDamaged` (reflection) itself, in the owner's game, when a rack explodes or the last crew
+  member dies (`Crew.cs`). Planned: more module kinds that decide kills; a rack exploding stays a kill.
+- Knocked out (`VehicleRules.KnockOut`, set by a burning rack and by the whole crew dying): `GameMayExplode` is
+  false, on any vehicle, so the shell stays intact.
+- `TakesModDamage(part, tags)`: armor never; `[MOD]`/`[AMM]`/`[CRW]` always; other parts only when the vehicle has no
   `[ARM]` part (`IsArmored`, cached) or `ArmoredStructureDamage` is on. Used by `FragmentSpawner.Deposit` and the
   blast.
 
@@ -165,6 +184,16 @@ Changed: `FragmentSpawner.cs`, `ShellFlight.cs`, `Net/NetSync.cs`, `PartTags.cs`
   (clone: copy i is part i of the selection), `SymmetryUtility.RemapSymmetricPartIDs` (symmetric copy i points at
   copy i of each rack). Ids outside the map are kept, as the game does. `Assembly.RemovePart` on the designer's
   craft takes the deleted id out of every cannon's list.
+- Symmetry: with the designer's symmetry on, `Commit` also calls `ArmorSymmetry.SyncCannonPartners`: partner cannons get the
+  same `[CAN]` settings, and each listed rack with symmetry partners becomes the one nearest to that partner gun (a
+  rack without partners stays shared). `RackLinksSymmetryPatch` also runs `ArmorSymmetry.MatchRacks` on new
+  symmetric copies.
+- Rack matching (`ArmorSymmetry.MapRacks`): a listed rack with symmetry copies becomes the copy nearest to the gun,
+  unless the gun lists more than one rack of that symmetric set (then all are kept). It runs only when an ammo rack
+  or a marked cannon is dropped (`RackLinksDropPatch`, `MovePartTool.EndPartMovement`) or connected
+  (`RackLinksConnectPatch`, `MovePartTool.ConnectPartToAttachPoint`, which the part connections tool also uses), via
+  `ArmorSymmetry.RematchAround`: a cannon (and its symmetry copies) matches its racks; a rack makes the cannons using
+  it or its copies match theirs. Never on load or undo.
 - `RackVisualizer`: ghost copies of rack meshes (still clickable), rounds as cylinders, up to 20,000 drawn,
   hidden for the screenshot dialog.
 - `AmmoRackXRay`: rounds of your own racks; burning = orange, exploded = empty.

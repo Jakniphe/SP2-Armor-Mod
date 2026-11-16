@@ -52,6 +52,8 @@ namespace ArmorFragments
         {
             entryDistance = 0f;
             exitDistance = 0f;
+            if (CrewBodies.IsBody(part))   // a crew seat: the body sitting in it
+                return CrewBodies.Chord(part, origin, direction, maxDistance, out entryDistance, out exitDistance);
 
             List<Vector2> stretches = new List<Vector2>();   // (enter, leave)
             Ray forward = new Ray(origin, direction);
@@ -92,6 +94,7 @@ namespace ArmorFragments
         public static float Density(PartScript part)
         {
             float density;
+            if (CrewBodies.IsBody(part)) return CrewBodies.Density();
             if (DensityOf.TryGetValue(part, out density)) return density;
 
             float mass = part.Part.LoadedMass / GameMassScale;
