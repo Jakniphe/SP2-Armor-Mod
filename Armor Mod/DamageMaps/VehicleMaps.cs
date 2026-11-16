@@ -927,6 +927,7 @@ namespace ArmorFragments
                 // used when the player wants it and it was found and tested; if it fails at any point the CPU takes over for good.
                 ClSolver gpu = job.UseGpu ? GpuStatus.Solver : null;
                 string grid;
+                long startedAt = System.Diagnostics.Stopwatch.GetTimestamp();
                 ImpactSimResult result = null;
                 if (gpu != null)
                 {
@@ -956,6 +957,10 @@ namespace ArmorFragments
                 if (stopping) return false;   // cut short by Shutdown: not a slow run, nothing to tune or report
                 bool onGpu = gpu != null;
                 LearnCost(impact, input, result, onGpu);
+                PerfMonitor.Events.Enqueue(new PerfMonitor.SimEvent
+                {
+                    Start = startedAt, End = System.Diagnostics.Stopwatch.GetTimestamp(), Gpu = onGpu, Particles = result.Particles, Ms = result.Ms,
+                });
 
                 LastSimMs = (int)result.Ms;
                 LastSimQuality = quality;

@@ -162,6 +162,7 @@ namespace ArmorFragments
                 catch (System.Exception e) { Log.LogWarning("Couldn't add the menu button to the open flight menu: " + e.Message); }
             }
             GpuStatus.Tick();
+            PerfMonitor.Tick();
             UI.DesignerSection.Tick();
             XRayView.Tick();
             VehicleXRay.Tick();
