@@ -34,14 +34,23 @@ namespace ArmorFragments
         public float KeptEnergy;       // ricochet: the share of its energy the shell keeps
     }
 
+    // The atlases a vehicle's plates are drawn into (one rectangle at a time).
+    internal enum AtlasKind
+    {
+        Normal,   // the normal map the shader reads
+        Hole,     // white with the hole mask in the alpha (the Lit material of a holed plate)
+        Height,   // the bump (height) map: the green channel, 0.5 = flat; read by the shader's parallax
+        Damage,   // dark red whose opacity says how damaged each pixel is (the impact camera's damage view)
+    }
+
     // A piece of the atlas to be overwritten (a small rectangle of one atlas).
     internal sealed class Delivery
     {
         public VehicleMaps Owner;
         public PlateVisual Plate;
-        public bool Alpha;         // the hole atlas (else the normal-map atlas)
+        public AtlasKind Kind;
         public int X, Y, W, H;
-        public byte[] Bytes;       // W*H*4, RGBA: normals, or (holes) white with the mask in the alpha
+        public byte[] Bytes;       // W*H*4, RGBA: normals; (holes) white with the mask in the alpha; (height) the height in green; (damage) dark red and its opacity
         public float DeliverAt;    // Time.time from which it may be shown (the shell's ray has to arrive first)
     }
 
@@ -299,12 +308,23 @@ namespace ArmorFragments
 
         // ---- Handing over what changed ------------------------------------------------------------
 
-        // The rectangles that changed since the last time, as bytes for the atlases: normals (and, if a hole changed, the mask).
-        public static void Flush(PlateCpu c, PlateVisual plate, VehicleMaps owner, float deliverAt, List<Delivery> output)
+        // Largest height (meters) the bump map can say, each way: the green channel runs from -HeightRange to +HeightRange.
+        public const float HeightRange = 0.06f;
+
+        // The rectangles that changed since the last time, as bytes for the atlases: normals (and, if a hole changed, the mask;
+        // and, if asked, the bump map and the damage view). 'everything' marks the whole of every face that has any damage as changed
+        // (what a stream that has just been switched on needs, to catch up).
+        public static void Flush(PlateCpu c, PlateVisual plate, VehicleMaps owner, float deliverAt, List<Delivery> output,
+                                 bool height = false, bool damage = false, bool everything = false)
         {
             for (int index = 0; index < 2; index++)
             {
                 PlateCpu.Face f = c.Faces[index];
+                if (f != null && everything)
+                {
+                    f.X0 = 0; f.Y0 = 0; f.X1 = c.Width; f.Y1 = c.Height;
+                    f.HoleDirty = f.HoleDirty || HasHole(f);   // the hole atlas only exists if there is a hole to put in it
+                }
                 if (f == null || f.X1 < 0) continue;
 
                 // One more pixel around: the normal of a pixel depends on its neighbors.
@@ -334,9 +354,55 @@ namespace ArmorFragments
                 }
                 output.Add(new Delivery
                 {
-                    Owner = owner, Plate = plate, Alpha = false,
+                    Owner = owner, Plate = plate, Kind = AtlasKind.Normal,
                     X = c.TileX[index] + x0, Y = c.TileY[index] + y0, W = w, H = h, Bytes = normals, DeliverAt = deliverAt,
                 });
+
+                if (height)
+                {
+                    byte[] bump = new byte[w * h * 4];
+                    for (int y = y0; y < y1; y++)
+                    {
+                        for (int x = x0; x < x1; x++)
+                        {
+                            int at = ((y - y0) * w + (x - x0)) * 4;
+                            float level = Mathf.Clamp01(0.5f + f.Height[y * c.Width + x] / HeightRange);
+                            bump[at] = 128; bump[at + 1] = (byte)Mathf.RoundToInt(level * 255f); bump[at + 2] = 128; bump[at + 3] = 255;
+                        }
+                    }
+                    output.Add(new Delivery
+                    {
+                        Owner = owner, Plate = plate, Kind = AtlasKind.Height,
+                        X = c.TileX[index] + x0, Y = c.TileY[index] + y0, W = w, H = h, Bytes = bump, DeliverAt = deliverAt,
+                    });
+                }
+
+                if (damage)
+                {
+                    byte[] view = new byte[w * h * 4];
+                    for (int y = y0; y < y1; y++)
+                    {
+                        for (int x = x0; x < x1; x++)
+                        {
+                            int at = ((y - y0) * w + (x - x0)) * 4;
+                            // How damaged this pixel is, 0..1: how far it was pushed in or out (a few millimeters already show;
+                            // thirty or so is as bad as it gets), and a hole is the worst there is.
+                            float depth = Mathf.Abs(f.Height[y * c.Width + x]);
+                            float level = f.Mask[y * c.Width + x] < 128 ? 1f : 1f - Mathf.Exp(-depth / 0.008f);
+                            if (level < 0.01f) continue;   // untouched: fully transparent (the array starts as zeros)
+                            // Little damage: a lighter red, see-through. A lot: dark red, nearly solid.
+                            view[at] = (byte)Mathf.RoundToInt(Mathf.Lerp(235f, 70f, level));
+                            view[at + 1] = (byte)Mathf.RoundToInt(Mathf.Lerp(45f, 0f, level));
+                            view[at + 2] = (byte)Mathf.RoundToInt(Mathf.Lerp(35f, 0f, level));
+                            view[at + 3] = (byte)Mathf.RoundToInt(255f * (0.25f + 0.70f * level));
+                        }
+                    }
+                    output.Add(new Delivery
+                    {
+                        Owner = owner, Plate = plate, Kind = AtlasKind.Damage,
+                        X = c.TileX[index] + x0, Y = c.TileY[index] + y0, W = w, H = h, Bytes = view, DeliverAt = deliverAt,
+                    });
+                }
 
                 if (f.HoleDirty)
                 {
@@ -352,7 +418,7 @@ namespace ArmorFragments
                     }
                     output.Add(new Delivery
                     {
-                        Owner = owner, Plate = plate, Alpha = true,
+                        Owner = owner, Plate = plate, Kind = AtlasKind.Hole,
                         X = c.TileX[index] + x0, Y = c.TileY[index] + y0, W = w, H = h, Bytes = mask, DeliverAt = deliverAt,
                     });
                 }
@@ -360,6 +426,13 @@ namespace ArmorFragments
                 f.X0 = int.MaxValue; f.Y0 = int.MaxValue; f.X1 = -1; f.Y1 = -1;
                 f.HoleDirty = false;
             }
+        }
+
+        private static bool HasHole(PlateCpu.Face f)
+        {
+            for (int i = 0; i < f.Mask.Length; i++)
+                if (f.Mask[i] < 128) return true;
+            return false;
         }
 
         private static byte Encode(float component)

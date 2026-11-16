@@ -293,6 +293,9 @@ namespace ArmorFragments.UI
                 "Degrees.", 1f, " deg");
             ToggleSetting(ArmorFragmentsPlugin.ImpactCameraXRay, "X-ray on impact",
                 "Switches to the X-ray view the moment the shot hits, showing the damage as the fragments arrive.");
+            ToggleSetting(ArmorFragmentsPlugin.ImpactCameraDamageView, "Armor damage view",
+                "Draws the armor's damage map over the plates in the impact camera: dark red where a plate is badly dented or holed, a lighter " +
+                "see-through red where it is slightly marked, nothing where it is untouched.");
             IntSetting(ArmorFragmentsPlugin.ImpactCameraGhostLayer, "X-ray layer",
                 "Unity layer of the X-ray ghosts (29 or 30 = the game's mod layers, 3 = unused). Change it if the ghosts do not show; it applies to the next impact.");
             ToggleSetting(ArmorFragmentsPlugin.ImpactCameraShadows, "Shadows",
@@ -384,6 +387,10 @@ namespace ArmorFragments.UI
                 "Pixels per meter of plate. Applies to vehicles that get their maps from now on.", 16f, " px/m");
             FloatSetting(ArmorFragmentsPlugin.DamageMapsNormalStrength, "Dent depth",
                 "How deep the dents look.", 0.1f, "x");
+            ChoiceSetting(ArmorFragmentsPlugin.DamageMapsRelief, "Relief",
+                "How the marks are shaded. Normal map: lighting only (as before). Bump map: the shader's parallax moves the surface itself " +
+                "by the marks' height. Both: the two together.",
+                new[] { "Normal map", "Bump map", "Normal + bump" });
             IntSetting(ArmorFragmentsPlugin.DamageMapsMaxVehicles, "Vehicles at once",
                 "Vehicles with maps at the same time. The one hit longest ago gives its maps back.");
             IntSetting(ArmorFragmentsPlugin.SimQuality, "Simulation quality",
@@ -489,6 +496,17 @@ namespace ArmorFragments.UI
         private void ToggleSetting(ConfigEntry<bool> entry, string label, string tooltip)
         {
             builder.Toggle(label, tooltip, entry.Value, x => SetValue(entry, x, true));
+        }
+
+        // A setting that is one of a few named choices (a slider with that many positions that shows the name).
+        private void ChoiceSetting(ConfigEntry<int> entry, string label, string tooltip, string[] names)
+        {
+            int last = names.Length - 1;
+            builder.Slider(label, tooltip, 0f, last, names.Length,
+                Mathf.Clamp(entry.Value, 0, last), "",
+                x => names[Mathf.Clamp(Mathf.RoundToInt(x), 0, last)],
+                x => SetValue(entry, Mathf.Clamp(Mathf.RoundToInt(x), 0, last), false),
+                x => NetSync.SaveConfig());
         }
 
         private void IntSetting(ConfigEntry<int> entry, string label, string tooltip)

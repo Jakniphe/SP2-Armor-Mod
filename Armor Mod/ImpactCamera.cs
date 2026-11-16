@@ -54,6 +54,7 @@ namespace ArmorFragments
         // (the picture dips to dark and back while the real vehicle gives way to the ghosts).
         private enum XState { Off, Waiting, FadeOut, FadeIn, Shown }
         private static ImpactXRay xray;
+        private static DamageOverlay overlay;   // the damage view over the plates (a setting), or null
         private static XState xstate;
         private static float xstateStart;
         private static float waitStart = -1f;   // when the shell reached the impact and the X-ray started waiting to switch
@@ -149,6 +150,7 @@ namespace ArmorFragments
             }
 
             active = true;
+            UpdateDamageView();
             UpdatePose();
             camera.enabled = true;
 
@@ -502,6 +504,7 @@ namespace ArmorFragments
             EnsureReference();
             UpdateFollow();
             UpdateXRay();
+            UpdateDamageView();
             UpdatePose();
 
             // Hidden together with the rest of the flight UI; the camera rests while nobody sees it.
@@ -509,6 +512,27 @@ namespace ArmorFragments
             canvas.enabled = show;
             camera.enabled = show;
             Layout();
+        }
+
+        // The damage view (the armor's damage map in red over the marked plates) follows its setting, also while the camera is open.
+        // Its copies are on the ghost layer, so that layer is added to what this camera draws and kept out of the main camera's.
+        private static void UpdateDamageView()
+        {
+            bool wanted = ArmorFragmentsPlugin.ImpactCameraDamageView.Value;
+            if (!wanted)
+            {
+                if (overlay == null) return;
+                overlay.Dispose();
+                overlay = null;
+                if (xray == null) RestoreMainCamera();   // nothing else keeps the ghost layer hidden from the main camera
+                return;
+            }
+
+            int layer = Mathf.Clamp(ArmorFragmentsPlugin.ImpactCameraGhostLayer.Value, 0, 31);
+            if (overlay == null) overlay = new DamageOverlay(targetAircraft, layer);
+            camera.cullingMask |= 1 << layer;
+            HideFromMainCamera(layer);
+            overlay.Tick();
         }
 
         // Builds the X-ray ghosts, shows damage as it arrives, and switches the picture to them when the
@@ -650,6 +674,11 @@ namespace ArmorFragments
                 xray = null;
             }
             xstate = XState.Off;
+            if (overlay != null)
+            {
+                overlay.Dispose();
+                overlay = null;
+            }
             RestoreMainCamera();
 
             if (cameraObject != null) Object.Destroy(cameraObject);

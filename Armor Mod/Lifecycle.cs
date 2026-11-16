@@ -59,7 +59,7 @@ namespace ArmorFragments
             foreach (MeshRenderer renderer in UnityEngine.Object.FindObjectsByType<MeshRenderer>(
                          FindObjectsInactive.Include, FindObjectsSortMode.None))
             {
-                if (renderer == null || renderer.name != "ArmorXRayGhost") continue;
+                if (renderer == null || (renderer.name != "ArmorXRayGhost" && renderer.name != DamageOverlay.ObjectName)) continue;
                 UnityEngine.Object.Destroy(renderer.gameObject);
                 removed++;
             }

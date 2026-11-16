@@ -499,7 +499,8 @@ namespace ArmorFragments
             // Any other mesh that is currently visible (propeller blades, for example).
             foreach (MeshRenderer renderer in part.GetComponentsInChildren<MeshRenderer>())
             {
-                if (renderer.name == "ArmorXRayGhost" || renderer.name == "AmmoRackRounds" || renderer.name == "AmmoRackGhost") continue;
+                if (renderer.name == "ArmorXRayGhost" || renderer.name == "AmmoRackRounds" || renderer.name == "AmmoRackGhost" ||
+                    renderer.name == DamageOverlay.ObjectName) continue;
                 if (renderer.shadowCastingMode == ShadowCastingMode.ShadowsOnly) continue;
                 if (renderer.enabled && seen.Add(renderer)) yield return renderer;
             }

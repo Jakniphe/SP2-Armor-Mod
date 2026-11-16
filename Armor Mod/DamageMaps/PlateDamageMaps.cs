@@ -336,6 +336,8 @@ namespace ArmorFragments
             DamageWorker.Job job = new DamageWorker.Job
             {
                 Owner = maps, Plate = plate, Impacts = impacts, DeliverAt = Time.time + Mathf.Max(delay, 0f),
+                Height = ArmorFragmentsPlugin.DamageMapsRelief.Value != 0,
+                Damage = ArmorFragmentsPlugin.ImpactCameraDamageView.Value,
             };
 
             // A shell's impact is simulated if the setting says so and the simulations are not piling up; the settings are taken
@@ -440,7 +442,52 @@ namespace ArmorFragments
             }
 
             if (++frame % 120 == 0) Prune();
+            TickSettings();
             TickTest();
+        }
+
+        // ---- Settings that change what is drawn ---------------------------------------------------
+
+        private static int shownRelief;
+        private static bool shownDamageView;
+
+        // The vehicle's maps, if it has any (the impact camera's damage view draws from them).
+        internal static VehicleMaps MapsFor(AircraftScript aircraft)
+        {
+            VehicleMaps maps;
+            return aircraft != null && Vehicles.TryGetValue(aircraft, out maps) && !maps.Disposed ? maps : null;
+        }
+
+        // The relief mode or the damage view was switched: the materials are set again, and a stream that was off until now gets
+        // everything the plates already have (they are marked on the CPU; the worker draws them into the new atlas).
+        private static void TickSettings()
+        {
+            int relief = Mathf.Clamp(ArmorFragmentsPlugin.DamageMapsRelief.Value, 0, 2);
+            bool view = ArmorFragmentsPlugin.ImpactCameraDamageView.Value;
+            if (relief == shownRelief && view == shownDamageView) return;
+
+            bool catchUpHeight = relief != 0 && shownRelief == 0;
+            bool catchUpView = view && !shownDamageView;
+            bool reliefChanged = relief != shownRelief;
+            shownRelief = relief;
+            shownDamageView = view;
+
+            foreach (VehicleMaps maps in Vehicles.Values)
+            {
+                if (maps.Disposed) continue;
+                if (reliefChanged) maps.RefreshRelief();
+                if (!catchUpHeight && !catchUpView) continue;
+
+                foreach (PlateVisual plate in maps.Plates.Values)
+                {
+                    if (!plate.Applied || (plate.Cpu.Faces[0] == null && plate.Cpu.Faces[1] == null)) continue;
+                    DamageWorker.Enqueue(new DamageWorker.Job
+                    {
+                        Owner = maps, Plate = plate, Impacts = new PlateImpact[0], DeliverAt = Time.time,
+                        Height = relief != 0, Damage = view, Everything = true,
+                    });
+                }
+            }
         }
 
         // ---- The simulation's load ------------------------------------------------------------------

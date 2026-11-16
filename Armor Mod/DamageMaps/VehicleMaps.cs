@@ -24,6 +24,9 @@ namespace ArmorFragments
         public int AtlasSize;
         public Texture2D Normal;
         public Texture2D Alpha;
+        public Texture2D Height;        // the bump map (made when the relief setting asks for it)
+        public Texture2D DamageAtlas;   // the impact camera's damage view (made when that is switched on)
+        public float Density;           // pixels per meter of the tiles
         public Material Clone;       // the game's part material with the normal atlas
         public float LastUsed;
         public bool Disposed;
@@ -82,7 +85,7 @@ namespace ArmorFragments
             }
             if (tiles == null) { LastFailure = "the plates do not fit in an atlas"; return null; }
 
-            VehicleMaps maps = new VehicleMaps(aircraft, theme) { AtlasSize = size, LastUsed = Time.time };
+            VehicleMaps maps = new VehicleMaps(aircraft, theme) { AtlasSize = size, LastUsed = Time.time, Density = density };
             for (int i = 0; i < infos.Count; i++)
             {
                 PlateInfo info = infos[i];
@@ -175,38 +178,105 @@ namespace ArmorFragments
             Alpha.Apply(false, false);
         }
 
+        // The bump map: the green channel is the height, 0.5 = flat. Made when the relief setting asks for it.
+        public void EnsureHeight()
+        {
+            if (Height != null) return;
+            Height = new Texture2D(AtlasSize, AtlasSize, TextureFormat.RGBA32, false, true) { wrapMode = TextureWrapMode.Clamp, name = "ArmorFragments damage heights" };
+            byte[] flat = new byte[AtlasSize * AtlasSize * 4];
+            FillPattern(flat, 128, 128, 128, 255);
+            Height.SetPixelData(flat, 0);
+            Height.Apply(false, false);
+        }
+
+        // The damage view: transparent everywhere until a plate is marked.
+        public void EnsureDamage()
+        {
+            if (DamageAtlas != null) return;
+            DamageAtlas = new Texture2D(AtlasSize, AtlasSize, TextureFormat.RGBA32, false, false) { wrapMode = TextureWrapMode.Clamp, name = "ArmorFragments damage view" };
+            DamageAtlas.SetPixelData(new byte[AtlasSize * AtlasSize * 4], 0);
+            DamageAtlas.Apply(false, false);
+        }
+
+        // How far the shader's parallax moves the surface for the largest height the bump map can say, in UV units (the shader
+        // takes its amplitude in UV, and the tiles hold Density pixels per meter of a plate).
+        public float ParallaxAmplitude
+        {
+            get { return PlateStamps.HeightRange * Density / Mathf.Max(AtlasSize, 1); }
+        }
+
+        // Sets a material (the vehicle's clone of the part material, or a holed plate's Lit one) to show the relief the way the
+        // setting says: the normal map, the bump map (parallax), or both.
+        public void ConfigureRelief(Material material)
+        {
+            int mode = Mathf.Clamp(ArmorFragmentsPlugin.DamageMapsRelief.Value, 0, 2);
+            bool normal = mode != 1, bump = mode != 0;
+
+            material.SetTexture("_BumpMap", normal ? Normal : null);
+            material.SetFloat("_BumpScale", ArmorFragmentsPlugin.DamageMapsNormalStrength.Value);
+            SetKeyword(material, "_NORMALMAP", normal);
+
+            if (bump) EnsureHeight();
+            material.SetTexture("_ParallaxMap", bump ? Height : null);
+            material.SetFloat("_Parallax", ParallaxAmplitude);
+            SetKeyword(material, "_PARALLAXMAP", bump);
+        }
+
+        private static void SetKeyword(Material material, string keyword, bool on)
+        {
+            if (on) material.EnableKeyword(keyword);
+            else material.DisableKeyword(keyword);
+        }
+
+        // The relief setting changed: every material of the vehicle is set again.
+        public void RefreshRelief()
+        {
+            if (Disposed) return;
+            if (Clone != null) ConfigureRelief(Clone);
+            foreach (PlateVisual plate in Plates.Values)
+                if (plate.Lit != null) ConfigureRelief(plate.Lit);
+        }
+
         // A rectangle computed by the worker goes into the atlas. Returns the milliseconds it took.
         public double Deliver(Delivery d)
         {
             if (Disposed) return 0;
             System.Diagnostics.Stopwatch watch = System.Diagnostics.Stopwatch.StartNew();
 
-            if (d.Alpha) EnsureAlpha();
+            Texture2D target;
+            switch (d.Kind)
+            {
+                case AtlasKind.Hole: EnsureAlpha(); target = Alpha; break;
+                case AtlasKind.Height: EnsureHeight(); target = Height; break;
+                case AtlasKind.Damage: EnsureDamage(); target = DamageAtlas; break;
+                default: target = Normal; break;
+            }
             const int bytesPerPixel = 4;
             int bucket = 16;
             while (bucket < Mathf.Max(d.W, d.H)) bucket *= 2;
-            Texture2D staging = Staging(d.Alpha, bucket);
-            byte[] padded = Padded(bucket, d.Alpha, bucket * bucket * bytesPerPixel);
+            Texture2D staging = Staging(d.Kind, bucket);
+            byte[] padded = Padded(bucket, d.Kind, bucket * bucket * bytesPerPixel);
             for (int row = 0; row < d.H; row++)
                 Buffer.BlockCopy(d.Bytes, row * d.W * bytesPerPixel, padded, row * bucket * bytesPerPixel, d.W * bytesPerPixel);
             staging.SetPixelData(padded, 0);
             staging.Apply(false, false);
-            Graphics.CopyTexture(staging, 0, 0, 0, 0, d.W, d.H, d.Alpha ? Alpha : Normal, 0, 0, d.X, d.Y);
+            Graphics.CopyTexture(staging, 0, 0, 0, 0, d.W, d.H, target, 0, 0, d.X, d.Y);
 
-            if (d.Alpha && d.Plate != null) d.Plate.EnsureLit();
+            if (d.Kind == AtlasKind.Hole && d.Plate != null) d.Plate.EnsureLit();
             return watch.Elapsed.TotalMilliseconds;
         }
 
         private static readonly Dictionary<int, Texture2D> StagingTextures = new Dictionary<int, Texture2D>();
         private static readonly Dictionary<int, byte[]> PaddedBuffers = new Dictionary<int, byte[]>();
 
-        private static Texture2D Staging(bool alpha, int bucket)
+        private static Texture2D Staging(AtlasKind kind, int bucket)
         {
-            int key = bucket * 2 + (alpha ? 1 : 0);
+            int key = bucket * 4 + (int)kind;
             Texture2D texture;
             if (StagingTextures.TryGetValue(key, out texture) && texture != null) return texture;
-            // Same format as the atlas it feeds (CopyTexture needs it): normals are linear, the hole mask is not.
-            texture = new Texture2D(bucket, bucket, TextureFormat.RGBA32, false, !alpha);
+            // Same format as the atlas it feeds (CopyTexture needs it): normals and heights are linear data, the hole mask and the
+            // damage view's colors are not.
+            texture = new Texture2D(bucket, bucket, TextureFormat.RGBA32, false, kind == AtlasKind.Normal || kind == AtlasKind.Height);
             texture.name = "ArmorFragments damage staging";
             StagingTextures[key] = texture;
             return texture;
@@ -222,9 +292,9 @@ namespace ArmorFragments
         }
 
         // The staging texture takes a whole texture's worth of bytes, of exactly its size (one buffer per size, reused).
-        private static byte[] Padded(int bucket, bool alpha, int length)
+        private static byte[] Padded(int bucket, AtlasKind kind, int length)
         {
-            int key = bucket * 2 + (alpha ? 1 : 0);
+            int key = bucket * 4 + (int)kind;
             byte[] buffer;
             if (!PaddedBuffers.TryGetValue(key, out buffer) || buffer.Length != length)
             {
@@ -249,8 +319,12 @@ namespace ArmorFragments
             }
             if (Normal != null) UnityEngine.Object.Destroy(Normal);
             if (Alpha != null) UnityEngine.Object.Destroy(Alpha);
+            if (Height != null) UnityEngine.Object.Destroy(Height);
+            if (DamageAtlas != null) UnityEngine.Object.Destroy(DamageAtlas);
             Normal = null;
             Alpha = null;
+            Height = null;
+            DamageAtlas = null;
         }
 
         // The game's part material with the normal atlas (one for the whole vehicle).
@@ -259,9 +333,7 @@ namespace ArmorFragments
             if (Clone != null) return Clone;
             Material material = Theme.RequestDefaultPartMaterialInstance();
             if (material == null) return null;
-            material.SetTexture("_BumpMap", Normal);
-            material.SetFloat("_BumpScale", ArmorFragmentsPlugin.DamageMapsNormalStrength.Value);
-            material.EnableKeyword("_NORMALMAP");
+            ConfigureRelief(material);
             Clone = material;
             return Clone;
         }
@@ -408,9 +480,7 @@ namespace ArmorFragments
             material.SetColor("_BaseColor", color);
             material.SetFloat("_Metallic", metallic);
             material.SetFloat("_Smoothness", smoothness);
-            material.SetTexture("_BumpMap", Owner.Normal);
-            material.SetFloat("_BumpScale", ArmorFragmentsPlugin.DamageMapsNormalStrength.Value);
-            material.EnableKeyword("_NORMALMAP");
+            Owner.ConfigureRelief(material);
             material.SetFloat("_AlphaClip", 1f);
             material.SetFloat("_Cutoff", 0.5f);
             material.EnableKeyword("_ALPHATEST_ON");
@@ -468,6 +538,12 @@ namespace ArmorFragments
             public int TimeLimitMs;
             public float ResistanceJPerM3;
             public int Threads;                // 0 = automatic
+
+            // Which extra atlases this job also fills (the settings, taken when the impact happened), and whether it must redo
+            // every marked pixel of the plate (a stream that was just switched on catching up).
+            public bool Height;
+            public bool Damage;
+            public bool Everything;
         }
 
         private static readonly BlockingCollection<Job> Jobs = new BlockingCollection<Job>(new ConcurrentQueue<Job>());
@@ -587,7 +663,7 @@ namespace ArmorFragments
                     if (stopping) continue;    // nobody is left to take what this job makes
 
                     List<Delivery> output = new List<Delivery>();
-                    PlateStamps.Flush(job.Plate.Cpu, job.Plate, job.Owner, job.DeliverAt, output);
+                    PlateStamps.Flush(job.Plate.Cpu, job.Plate, job.Owner, job.DeliverAt, output, job.Height, job.Damage, job.Everything);
                     foreach (Delivery d in output) Done.Enqueue(d);
                     LastMs10 = (int)(watch.Elapsed.TotalMilliseconds * 10.0);
                 }

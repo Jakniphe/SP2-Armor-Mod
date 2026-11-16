@@ -48,6 +48,8 @@ namespace ArmorFragments
         internal static ConfigEntry<float> ImpactCameraFov;
         internal static ConfigEntry<bool> ImpactCameraShadows;
         internal static ConfigEntry<bool> ImpactCameraXRay;
+        internal static ConfigEntry<bool> ImpactCameraDamageView;   // local: the damage map drawn over the plates in the impact camera
+        internal static ConfigEntry<int> DamageMapsRelief;           // local: 0 normal map, 1 bump (height) map, 2 both
         internal static ConfigEntry<int> ImpactCameraGhostLayer;
 
         // Shot simulation and X-ray view.
@@ -269,6 +271,10 @@ namespace ArmorFragments
             ImpactCameraXRay = Config.Bind("ImpactCamera", "XRay", true,
                 "If true, the impact camera switches to an X-ray view of the vehicle the moment the shell hits, " +
                 "showing the damage (yellow, orange, red) as the fragments reach each part.");
+            ImpactCameraDamageView = Config.Bind("ImpactCamera", "DamageView", false,
+                "If true, the impact camera also draws the armor's damage map over the plates: dark red where a plate is badly dented " +
+                "or holed, a lighter, more see-through red where it is only slightly marked, nothing where it is untouched. " +
+                "(Only in the impact camera: the main view does not change.)");
             ImpactCameraGhostLayer = Config.Bind("ImpactCamera", "XRayLayer", 29,
                 new ConfigDescription("Unity layer the impact camera's X-ray ghosts live on. Only that camera draws it (the main camera is told to skip it while the camera is open). " +
                     "29 and 30 are the game's 'Mod Layer 2/3'; 3 is unused. If the ghosts do not show, try another of these.",
@@ -376,6 +382,11 @@ namespace ArmorFragments
             DamageMapsNormalStrength = Config.Bind("DamageMaps", "NormalStrength", 1.5f,
                 new ConfigDescription("How deep the dents look (the normal map's strength).",
                     new AcceptableValueRange<float>(0.2f, 5f)));
+            DamageMapsRelief = Config.Bind("DamageMaps", "Relief", 0,
+                new ConfigDescription(
+                    "How a mark's relief is shown on the plate: 0 = the normal map (as before), 1 = the bump (height) map, which the " +
+                    "shader's parallax reads and which moves the surface itself, 2 = both together.",
+                    new AcceptableValueRange<int>(0, 2)));
             DamageMapsHoleBothSides = Config.Bind("DamageMaps", "HoleBothSides", true,
                 "A plate with a hole is drawn on both sides (shows the inside of the plate through the hole). Off = back faces are not drawn.");
             SimQuality = Config.Bind("DamageMaps", "SimQuality", 2,
