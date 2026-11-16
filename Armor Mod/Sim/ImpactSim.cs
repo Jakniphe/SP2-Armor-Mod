@@ -202,7 +202,38 @@ namespace ArmorFragments.Sim
             const int MaxActive = 600;
             const int SettleSteps = 24;
 
-            while (steps < MaxActive + SettleSteps)
+            // ---- The whole simulation on the card: the shell's logic too, queued in chunks of steps ------------------
+            bool deviceShell = gpu != null && gpu.DeviceShell;
+            if (deviceShell)
+            {
+                float[] state = gpuParams;
+                FillParams(dt, 0.995f, false);
+                state[ClSolver.PMass] = input.ShellMassKg; state[ClSolver.PSpeed0] = speed0; state[ClSolver.PEnergy0] = (float)energy0;
+                state[ClSolver.PCost] = (float)costPerParticle; state[ClSolver.PThickness] = t; state[ClSolver.PHz] = hz;
+                state[ClSolver.PDepthLimit] = depthLimit; state[ClSolver.PSkimLength] = skimLength;
+                state[ClSolver.PRicochet] = input.Ricochet ? 1f : 0f; state[ClSolver.PKept] = input.KeptEnergy;
+                state[ClSolver.PDu] = du; state[ClSolver.PDv] = dv;
+                state[ClSolver.PEnergy] = (float)energy0; state[ClSolver.PShellActive] = 1f; state[ClSolver.PDeepest] = deepestTip;
+                gpu.WriteParams(state);
+
+                const int ChunkSteps = 16;
+                while (true)
+                {
+                    if ((input.TimeLimitMs > 0 && watch.ElapsedMilliseconds > input.TimeLimitMs) ||
+                        (input.Cancelled != null && input.Cancelled()))
+                        return new ImpactSimResult { TimedOut = true, Steps = (int)state[ClSolver.PSteps], Particles = count, Ms = watch.Elapsed.TotalMilliseconds };
+                    if (gpu.RunSteps(ChunkSteps, iterations, state)) break;
+                }
+                energy = state[ClSolver.PEnergy];
+                stopped = state[ClSolver.PStopped] > 0.5f;
+                exited = state[ClSolver.PExited] > 0.5f;
+                deepestTip = state[ClSolver.PDeepest];
+                steps = (int)state[ClSolver.PSteps];
+                shellSteps = (int)state[ClSolver.PShellSteps];
+                gpuCharged = (int)state[ClSolver.PLastCount];
+            }
+
+            while (!deviceShell && steps < MaxActive + SettleSteps)
             {
                 if ((input.TimeLimitMs > 0 && watch.ElapsedMilliseconds > input.TimeLimitMs) ||
                     (input.Cancelled != null && input.Cancelled()))
@@ -342,7 +373,7 @@ namespace ArmorFragments.Sim
             {
                 breakdown += "; card: start " + (gpu.TicksBegin * perTick).ToString("F1") + " ms, numbers upload (waits for the step before) " +
                     (gpu.TicksParamWrite * perTick).ToString("F1") + " ms, queueing " + (gpu.TicksDispatch * perTick).ToString("F1") +
-                    " ms, wait for the shell's count (" + gpu.SyncedSteps + " steps) " + (gpu.TicksCounterRead * perTick).ToString("F1") +
+                    " ms, wait for the card (" + gpu.SyncedSteps + " waits" + (gpu.DeviceShell ? ", shell on the card" : "") + ") " + (gpu.TicksCounterRead * perTick).ToString("F1") +
                     " ms, finish " + (gpu.TicksFinish * perTick).ToString("F1") + " ms, read back " + (gpu.TicksReadback * perTick).ToString("F1") + " ms";
             }
             else

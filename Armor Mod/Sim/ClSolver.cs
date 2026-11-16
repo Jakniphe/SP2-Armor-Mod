@@ -13,7 +13,13 @@ namespace ArmorFragments.Sim
     internal sealed class ClSolver : IDisposable
     {
         // The slots of the parameter array that goes to the card every step (the same numbers are named in the kernel source below).
-        public const int ParamCount = 32;
+        public const int ParamCount = 64;
+        // The shell's own numbers, for the kernel that runs the shell on the card (the first group does not change during a simulation, the
+        // second is the shell's state, which that kernel updates every step).
+        public const int PMass = 26, PSpeed0 = 27, PEnergy0 = 28, PCost = 29, PThickness = 30, PHz = 31, PDepthLimit = 32, PSkimLength = 33,
+                         PRicochet = 34, PKept = 35, PDu = 36, PDv = 37;
+        public const int PEnergy = 40, PShellActive = 41, PStopped = 42, PExited = 43, PBounced = 44, PSkimming = 45, PSkimLeft = 46,
+                         PDeepest = 47, PSteps = 48, PSettle = 49, PStoppedSteps = 50, PShellSteps = 51, PLastCount = 52, PDone = 53;
         public const int PCx = 0, PCy = 1, PCz = 2, PAx = 3, PAy = 4, PAz = 5, PTipS = 6, PTx0 = 7, PTy0 = 8, PTz0 = 9, PAx0 = 10, PAy0 = 11,
                          PAz0 = 12, PRadius = 13, PBody = 14, PParticle = 15, PH = 16, PDt = 17, PDamp = 18, PHasShell = 19, PBackOpen = 20,
                          PBreak = 21, PYield = 22, PRate = 23, PDuctility = 24, PReach2 = 25;
@@ -50,6 +56,35 @@ __constant int OZ[18] = {0,0,0,0,1,-1,0,0,0,0,1,-1,1,-1,1,-1,1,-1};
 #define P_RATE 23
 #define P_DUCT 24
 #define P_REACH2 25
+#define P_MASS 26
+#define P_SPEED0 27
+#define P_ENERGY0 28
+#define P_COST 29
+#define P_T 30
+#define P_HZ 31
+#define P_DEPTHLIMIT 32
+#define P_SKIMLENGTH 33
+#define P_RICOCHET 34
+#define P_KEPT 35
+#define P_DU 36
+#define P_DV 37
+#define P_ENERGY 40
+#define P_SHELLACTIVE 41
+#define P_STOPPED 42
+#define P_EXITED 43
+#define P_BOUNCED 44
+#define P_SKIMMING 45
+#define P_SKIMLEFT 46
+#define P_DEEPEST 47
+#define P_STEPS 48
+#define P_SETTLE 49
+#define P_STOPPEDSTEPS 50
+#define P_SHELLSTEPS 51
+#define P_LASTCOUNT 52
+#define P_DONE 53
+
+#define MAX_ACTIVE 600.0f
+#define SETTLE_STEPS 24.0f
 
 // The index of the neighbor of particle (i, j, l) through link o, or -1 if there is none (outside the patch).
 inline int neighbor(int i, int j, int l, int o, int n, int k)
@@ -117,8 +152,8 @@ __kernel void init_links(__global const float4* p, __global float* rest, __globa
         int nb = neighbor(i, j, l, o, n, k);
         float r = 0.0f;
         if (nb >= 0) r = length(p[nb].xyz - p[idx].xyz);
-        rest[idx * LINKS + o] = r;
-        rest0[idx * LINKS + o] = r;
+        rest[o * count + idx] = r;
+        rest0[o * count + idx] = r;
     }
 }
 
@@ -127,6 +162,7 @@ __kernel void predict_push(__global const float4* p, __global const float4* v, _
 {
     int idx = get_global_id(0);
     if (idx >= count) return;
+    if (P[P_DONE] > 0.5f) return;
     if (fixedFlag[idx] != 0) return;
     float dt = P[P_DT];
     float3 pos = p[idx].xyz + v[idx].xyz * dt;
@@ -146,6 +182,7 @@ __kernel void push(__global float4* q, __global const uchar* fixedFlag, __consta
 {
     int idx = get_global_id(0);
     if (idx >= count) return;
+    if (P[P_DONE] > 0.5f || P[P_HASSHELL] < 0.5f) return;
     if (fixedFlag[idx] != 0) return;
     q[idx] = (float4)(push_one(q[idx].xyz, P), 0.0f);
 }
@@ -154,26 +191,29 @@ __kernel void tear(__global const float4* q, __global float* rest, __constant fl
 {
     int idx = get_global_id(0);
     if (idx >= count) return;
+    if (P[P_DONE] > 0.5f) return;
     int i = idx % n, j = (idx / n) % n, l = idx / (n * n);
     float3 a = q[idx].xyz;
     for (int o = 0; o < LINKS; o++)
     {
-        float r = rest[idx * LINKS + o];
+        float r = rest[o * count + idx];
         if (r <= 0.0f) continue;
         int nb = neighbor(i, j, l, o, n, k);
         float3 b = q[nb].xyz;
         float len = length(b - a);
-        if ((len - r) / r > P[P_BREAK] && can_break(l, OZ[o], a, b, P) != 0) rest[idx * LINKS + o] = -1.0f;
+        if ((len - r) / r > P[P_BREAK] && can_break(l, OZ[o], a, b, P) != 0) rest[o * count + idx] = -1.0f;
     }
 }
 
 // One color of the links (the particles of a color are not linked to each other, so they can all move at once).
-__kernel void relax(__global float4* q, __global const float* rest, __global const uchar* fixedFlag, int n, int k, int color)
+__kernel void relax(__global float4* q, __global const float* rest, __global const uchar* fixedFlag, int n, int k, int color, __constant float* P)
 {
+    if (P[P_DONE] > 0.5f) return;
     int cx = color & 1, cy = (color >> 1) & 1, cz = (color >> 2) & 1;
     int nx = (n - cx + 1) / 2, ny = (n - cy + 1) / 2, nz = (k - cz + 1) / 2;
     int gid = get_global_id(0);
     if (gid >= nx * ny * nz) return;
+    int count = n * n * k;
     int a = gid % nx, b = (gid / nx) % ny, d = gid / (nx * ny);
     int i = 2 * a + cx, j = 2 * b + cy, l = 2 * d + cz;
     int idx = (l * n + j) * n + i;
@@ -184,7 +224,7 @@ __kernel void relax(__global float4* q, __global const float* rest, __global con
     int used = 0;
     for (int o = 0; o < LINKS; o++)
     {
-        float r = rest[idx * LINKS + o];
+        float r = rest[o * count + idx];
         if (r <= 0.0f) continue;
         int nb = neighbor(i, j, l, o, n, k);
         float3 dv = q[nb].xyz - me;
@@ -201,11 +241,12 @@ __kernel void flow(__global const float4* q, __global float* rest, __global cons
 {
     int idx = get_global_id(0);
     if (idx >= count) return;
+    if (P[P_DONE] > 0.5f) return;
     int i = idx % n, j = (idx / n) % n, l = idx / (n * n);
     float3 a = q[idx].xyz;
     for (int o = 0; o < LINKS; o++)
     {
-        float r = rest[idx * LINKS + o];
+        float r = rest[o * count + idx];
         if (r <= 0.0f) continue;
         int nb = neighbor(i, j, l, o, n, k);
         float3 b = q[nb].xyz;
@@ -214,8 +255,8 @@ __kernel void flow(__global const float4* q, __global float* rest, __global cons
         if (strain > P[P_YIELD] || strain < -P[P_YIELD])
         {
             float flowed = r + P[P_RATE] * (len - r);
-            if (flowed > rest0[idx * LINKS + o] * (1.0f + P[P_DUCT]) && can_break(l, OZ[o], a, b, P) != 0) flowed = -1.0f;
-            rest[idx * LINKS + o] = flowed;
+            if (flowed > rest0[o * count + idx] * (1.0f + P[P_DUCT]) && can_break(l, OZ[o], a, b, P) != 0) flowed = -1.0f;
+            rest[o * count + idx] = flowed;
         }
     }
 }
@@ -224,12 +265,108 @@ __kernel void finish(__global float4* p, __global float4* v, __global const floa
 {
     int idx = get_global_id(0);
     if (idx >= count) return;
+    if (P[P_DONE] > 0.5f) return;
     if (fixedFlag[idx] != 0) return;
     float inverse = 1.0f / P[P_DT];
     float damp = P[P_DAMP];
     float3 pos = p[idx].xyz, now = q[idx].xyz;
     v[idx] = (float4)((now - pos) * inverse * damp, 0.0f);
     p[idx] = (float4)(now, 0.0f);
+}
+
+// The shell's logic, one step of it, by a single work-item (the same steps the CPU takes in ImpactSim.Execute, in the same order): the cost
+// of the particles it swept through in the last step comes off its energy, it moves, ricochets, stops or leaves; or, with the shell gone,
+// the plate is left to settle for a number of steps and then the whole simulation is done (every other kernel then does nothing). With
+// this, the card can be given many steps at once and nobody has to wait for it in between.
+__kernel void shell_step(__global float* S, __global const int* counter)
+{
+    if (get_global_id(0) != 0) return;
+    if (S[P_DONE] > 0.5f) return;
+
+    float total = (float)counter[0];
+    if (S[P_HASSHELL] > 0.5f) S[P_ENERGY] -= (total - S[P_LASTCOUNT]) * S[P_COST];
+    S[P_LASTCOUNT] = total;
+
+    float steps = S[P_STEPS];
+    if (steps >= MAX_ACTIVE + SETTLE_STEPS) { S[P_DONE] = 1.0f; S[P_HASSHELL] = 0.0f; return; }
+
+    float energy = S[P_ENERGY];
+    int active = S[P_SHELLACTIVE] > 0.5f;
+    int stopped = S[P_STOPPED] > 0.5f;
+
+    if (active)
+    {
+        float cx = S[P_CX], cy = S[P_CY], cz = S[P_CZ];
+        float ax = S[P_AX], ay = S[P_AY], az = S[P_AZ];
+        float radius = S[P_RADIUS], t = S[P_T], hz = S[P_HZ], dt = S[P_DT];
+        int bounced = S[P_BOUNCED] > 0.5f, skimming = S[P_SKIMMING] > 0.5f, exited = S[P_EXITED] > 0.5f;
+        float skimLeft = S[P_SKIMLEFT], deepest = S[P_DEEPEST], stoppedSteps = S[P_STOPPEDSTEPS];
+
+        float speed = 0.0f;
+        if (energy <= 0.0f || energy < S[P_ENERGY0] * 0.0004f) { stopped = 1; energy = 0.0f; }
+        else
+        {
+            speed = sqrt(2.0f * energy / S[P_MASS]);
+            speed = fmin(speed, S[P_SPEED0] * 1.0001f);
+        }
+        cx += ax * speed * dt;
+        cy += ay * speed * dt;
+        cz += az * speed * dt;
+
+        float tipZ = cz + az * radius;
+        S[P_TIPS] = (cx + ax * radius - S[P_TX0]) * S[P_AX0] + (cy + ay * radius - S[P_TY0]) * S[P_AY0] + (tipZ - S[P_TZ0]) * S[P_AZ0];
+
+        if (S[P_RICOCHET] > 0.5f && !bounced && !skimming && (t * 0.5f - tipZ) >= S[P_DEPTHLIMIT])
+        {
+            skimming = 1;
+            float lateral = sqrt(ax * ax + ay * ay);
+            if (lateral < 1e-4f) { ax = S[P_DU]; ay = S[P_DV]; lateral = 1.0f; }
+            ax /= lateral; ay /= lateral; az = 0.0f;
+            skimLeft = S[P_SKIMLENGTH];
+        }
+        if (skimming)
+        {
+            skimLeft -= speed * dt;
+            if (skimLeft <= 0.0f)
+            {
+                skimming = 0;
+                bounced = 1;
+                az = 0.5f;
+                float norm = sqrt(ax * ax + ay * ay + az * az);
+                ax /= norm; ay /= norm; az /= norm;
+                energy *= S[P_KEPT];
+            }
+        }
+        if (tipZ <= -t * 0.5f + hz) S[P_BACKOPEN] = 1.0f;
+        if (tipZ < deepest) deepest = tipZ;
+        if (az < 0.0f && tipZ < -t * 0.5f - radius * 1.2f) { exited = 1; active = 0; }
+        if (az > 0.0f && bounced && tipZ > t * 0.5f + radius * 1.5f) active = 0;
+        if (stopped)
+        {
+            stoppedSteps += 1.0f;
+            active = stoppedSteps <= 8.0f;
+        }
+        if (steps >= MAX_ACTIVE) active = 0;
+
+        S[P_CX] = cx; S[P_CY] = cy; S[P_CZ] = cz;
+        S[P_AX] = ax; S[P_AY] = ay; S[P_AZ] = az;
+        S[P_BOUNCED] = bounced ? 1.0f : 0.0f; S[P_SKIMMING] = skimming ? 1.0f : 0.0f; S[P_EXITED] = exited ? 1.0f : 0.0f;
+        S[P_SKIMLEFT] = skimLeft; S[P_DEEPEST] = deepest; S[P_STOPPEDSTEPS] = stoppedSteps;
+        S[P_ENERGY] = energy;
+        S[P_STOPPED] = stopped ? 1.0f : 0.0f;
+    }
+    else
+    {
+        float settle = S[P_SETTLE] + 1.0f;
+        S[P_SETTLE] = settle;
+        if (settle > SETTLE_STEPS) { S[P_DONE] = 1.0f; S[P_HASSHELL] = 0.0f; return; }
+    }
+
+    S[P_SHELLACTIVE] = active ? 1.0f : 0.0f;
+    S[P_HASSHELL] = active ? 1.0f : 0.0f;
+    S[P_DAMP] = active ? 0.995f : 0.85f;
+    if (active) S[P_SHELLSTEPS] += 1.0f;
+    S[P_STEPS] = steps + 1.0f;
 }
 
 __kernel void count_broken(__global const float* rest, __global int* counter, int total)
@@ -241,7 +378,11 @@ __kernel void count_broken(__global const float* rest, __global int* counter, in
 ";
 
         private IntPtr context, queue, program, device;
-        private IntPtr kInit, kPredict, kPush, kTear, kRelax, kFlow, kFinish, kBroken;
+        private IntPtr kInit, kPredict, kPush, kTear, kRelax, kFlow, kFinish, kBroken, kShell;
+
+        // True = the shell's logic runs on the card too (the whole simulation is queued in chunks, with a wait only after each chunk).
+        // False = the old way: the CPU runs the shell and the card is waited for twice a step (kept to compare the two).
+        public bool DeviceShell = true;
         private IntPtr bP, bV, bQ, bO, bRest, bRest0, bFixed, bCharged, bCounter, bParams;
         private int capacity;
         private int n, k, count;
@@ -328,7 +469,7 @@ __kernel void count_broken(__global const float* rest, __global int* counter, in
             BuildMs = build.Elapsed.TotalMilliseconds;
 
             kInit = Kernel("init_links"); kPredict = Kernel("predict_push"); kPush = Kernel("push"); kTear = Kernel("tear");
-            kRelax = Kernel("relax"); kFlow = Kernel("flow"); kFinish = Kernel("finish"); kBroken = Kernel("count_broken");
+            kRelax = Kernel("relax"); kFlow = Kernel("flow"); kFinish = Kernel("finish"); kBroken = Kernel("count_broken"); kShell = Kernel("shell_step");
             bParams = Buffer(ParamCount * 4);
             bCounter = Buffer(4);
         }
@@ -355,6 +496,7 @@ __kernel void count_broken(__global const float* rest, __global int* counter, in
             buffer = IntPtr.Zero;
         }
 
+        // (The links' rest lengths are stored link by link: rest[link * count + particle], so that neighbouring threads read neighbouring memory.)
         // Buffers big enough for this many particles (kept and reused: a bigger simulation makes them again).
         private void Reserve(int particles)
         {
@@ -427,7 +569,8 @@ __kernel void count_broken(__global const float* rest, __global int* counter, in
             Arg(kPredict, 5, bCharged); Arg(kPredict, 6, bCounter); Arg(kPredict, 7, bParams); Arg(kPredict, 8, count);
             Arg(kPush, 0, bQ); Arg(kPush, 1, bFixed); Arg(kPush, 2, bParams); Arg(kPush, 3, count);
             Arg(kTear, 0, bQ); Arg(kTear, 1, bRest); Arg(kTear, 2, bParams); Arg(kTear, 3, n); Arg(kTear, 4, k); Arg(kTear, 5, count);
-            Arg(kRelax, 0, bQ); Arg(kRelax, 1, bRest); Arg(kRelax, 2, bFixed); Arg(kRelax, 3, n); Arg(kRelax, 4, k);
+            Arg(kRelax, 0, bQ); Arg(kRelax, 1, bRest); Arg(kRelax, 2, bFixed); Arg(kRelax, 3, n); Arg(kRelax, 4, k); Arg(kRelax, 6, bParams);
+            Arg(kShell, 0, bParams); Arg(kShell, 1, bCounter);
             Arg(kFlow, 0, bQ); Arg(kFlow, 1, bRest); Arg(kFlow, 2, bRest0); Arg(kFlow, 3, bParams); Arg(kFlow, 4, n); Arg(kFlow, 5, k); Arg(kFlow, 6, count);
             Arg(kFinish, 0, bP); Arg(kFinish, 1, bV); Arg(kFinish, 2, bQ); Arg(kFinish, 3, bFixed); Arg(kFinish, 4, bParams); Arg(kFinish, 5, count);
 
@@ -469,6 +612,44 @@ __kernel void count_broken(__global const float* rest, __global int* counter, in
             return counterValue[0];
         }
 
+        // The shell's numbers and its state at the start (all the slots), for the shell kernel; they stay on the card.
+        public void WriteParams(float[] parameters)
+        {
+            Check(ClNative.clEnqueueWriteBuffer(queue, bParams, 1, UIntPtr.Zero, (UIntPtr)(ParamCount * 4), parameters, 0, null, IntPtr.Zero), "upload the shell's numbers");
+        }
+
+        // Queues 'steps' whole steps (the shell's logic and the particles' work) without waiting, then reads the shell's state back, which is
+        // the one wait. True = the simulation is over (the steps queued after it ended did nothing).
+        public bool RunSteps(int steps, int iterations, float[] state)
+        {
+            long t0 = System.Diagnostics.Stopwatch.GetTimestamp();
+            for (int step = 0; step < steps; step++)
+            {
+                Run(kShell, 1);
+                Run(kPredict, count);
+                Run(kTear, count);
+                for (int iteration = 0; iteration < iterations; iteration++)
+                {
+                    for (int color = 0; color < 8; color++)
+                    {
+                        Arg(kRelax, 5, color);
+                        int cx = color & 1, cy = (color >> 1) & 1, cz = (color >> 2) & 1;
+                        Run(kRelax, ((n - cx + 1) / 2) * ((n - cy + 1) / 2) * ((k - cz + 1) / 2));
+                    }
+                }
+                Run(kPush, count);
+                Run(kFlow, count);
+                Run(kFinish, count);
+            }
+            Steps += steps;
+            long t1 = System.Diagnostics.Stopwatch.GetTimestamp();
+            TicksDispatch += t1 - t0;
+            Check(ClNative.clEnqueueReadBuffer(queue, bParams, 1, UIntPtr.Zero, (UIntPtr)(ParamCount * 4), state, 0, null, IntPtr.Zero), "read the shell's state");
+            TicksCounterRead += System.Diagnostics.Stopwatch.GetTimestamp() - t1;
+            SyncedSteps++;
+            return state[PDone] > 0.5f;
+        }
+
         // The simulation is over: the particles' places come back, and the number of links that tore.
         public void End(float[] px, float[] py, float[] pz, out int brokenLinks)
         {
@@ -498,9 +679,9 @@ __kernel void count_broken(__global const float* rest, __global int* counter, in
             {
                 Release(ref bP); Release(ref bV); Release(ref bQ); Release(ref bO); Release(ref bRest); Release(ref bRest0);
                 Release(ref bFixed); Release(ref bCharged); Release(ref bCounter); Release(ref bParams);
-                foreach (IntPtr kernel in new[] { kInit, kPredict, kPush, kTear, kRelax, kFlow, kFinish, kBroken })
+                foreach (IntPtr kernel in new[] { kInit, kPredict, kPush, kTear, kRelax, kFlow, kFinish, kBroken, kShell })
                     if (kernel != IntPtr.Zero) ClNative.clReleaseKernel(kernel);
-                kInit = kPredict = kPush = kTear = kRelax = kFlow = kFinish = kBroken = IntPtr.Zero;
+                kInit = kPredict = kPush = kTear = kRelax = kFlow = kFinish = kBroken = kShell = IntPtr.Zero;
                 if (program != IntPtr.Zero) ClNative.clReleaseProgram(program);
                 if (queue != IntPtr.Zero) ClNative.clReleaseCommandQueue(queue);
                 if (context != IntPtr.Zero) ClNative.clReleaseContext(context);
