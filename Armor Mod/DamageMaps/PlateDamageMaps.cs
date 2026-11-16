@@ -216,11 +216,21 @@ namespace ArmorFragments
             if (part == null || part.Aircraft == null || part.Aircraft.LoadContext != CraftLoadContext.Flight) return;
 
             PlateInfo info = InfoOf(part);
-            if (info == null) return;
+            if (info == null)
+            {
+                NoMark(part, "its mesh cannot be marked (it is shared, unreadable or not a single mesh of its own)");
+                return;
+            }
 
             PlateGeometry g = info.Geometry;
             Vector3 normalLocal = part.transform.InverseTransformDirection(normalFacing).normalized;
-            if (Mathf.Abs(Vector3.Dot(g.N, normalLocal)) < BigFaceCos) return;   // an edge or a side of a block: it has no map
+            float facing = Mathf.Abs(Vector3.Dot(g.N, normalLocal));
+            if (facing < BigFaceCos)   // an edge or a side of a block: it has no map
+            {
+                NoMark(part, "the shell hit a side or an edge of the block, which has no map (the hit is " +
+                             (Mathf.Acos(Mathf.Clamp01(facing)) * Mathf.Rad2Deg).ToString("F0") + " deg off the block's thin axis; marks go on its two big faces)");
+                return;
+            }
             Vector3 directionLocal = part.transform.InverseTransformDirection(direction).normalized;
             Vector2 at = g.ToPlane(part.transform.InverseTransformPoint(point));
             Vector2 along = g.DirectionToPlane(directionLocal);
@@ -246,6 +256,15 @@ namespace ArmorFragments
 
             if (Weakens && !visualOnly) Record(part, info, impact);   // a simulated shot only draws: it never changes the armor model
             if (Visuals) Show(part, new[] { impact }, delay);
+        }
+
+        // Why a shell left no mark on a plate, told once per plate and reason (so the log does not stay silent).
+        private static readonly HashSet<string> NoMarkTold = new HashSet<string>();
+
+        private static void NoMark(PartScript part, string reason)
+        {
+            if (NoMarkTold.Add(part.GetInstanceID() + reason))
+                ArmorFragmentsPlugin.Log.LogInfo(Tag + "no mark on '" + part.Part.Name + "': " + reason);
         }
 
         // A fragment stopped in a plate (a pit) or went through it (a small hole). Gathered until the next frame.
