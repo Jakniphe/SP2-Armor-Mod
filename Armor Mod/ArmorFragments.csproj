@@ -5,6 +5,9 @@
 		<AssemblyName>ArmorFragments</AssemblyName>
 		<RootNamespace>ArmorFragments</RootNamespace>
 		<LangVersion>latest</LangVersion>
+			<!-- Symbols inside the DLL (one file to copy, nothing to forget): the ScriptEngine reads symbols when it reloads a plugin
+			     and refuses a DLL without them. Build with -p:DebugType=portable to get a separate .pdb instead. -->
+			<DebugType>embedded</DebugType>
 		<GameDir Condition="'$(GameDir)' == ''">C:\Program Files (x86)\Steam\steamapps\common\SimplePlanes 2</GameDir>
 	</PropertyGroup>
 
