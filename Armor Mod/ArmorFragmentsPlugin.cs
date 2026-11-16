@@ -97,7 +97,7 @@ namespace ArmorFragments
         internal static ConfigEntry<float> DamageMapsNormalStrength;// local: how deep the dents look
         internal static ConfigEntry<bool> DamageMapsHoleBothSides;  // local: draw both sides of a holed plate
         internal static ConfigEntry<int> DamageMapsMaxVehicles;     // local: vehicles with maps at once
-        internal static ConfigEntry<int> SimQuality;                // local: 0 off, 1 low, 2 medium, 3 high, 4 ultra, 5 extreme
+        internal static ConfigEntry<int> SimQuality;                // local: 0 off, 1 low, 2 medium, 3 high, 4 ultra
         internal static ConfigEntry<bool> SimCracks;                // local: the simulation's torn links make grooves in the marks
         internal static ConfigEntry<bool> SimSmoothEdges;           // local: the edge of a hole is smooth and a little ragged, not the grid's steps
         internal static ConfigEntry<int> SimThreads;                // local: 0 = all cores but two
@@ -444,10 +444,11 @@ namespace ArmorFragments
             SimQuality = Config.Bind("DamageMaps", "SimQuality", 2,
                 new ConfigDescription(
                     "How a shell's impact on a plate is worked out: 0 = off (the quick analytic marks), 1 = low (a 40 x 40 patch), " +
-                    "2 = medium (64 x 64), 3 = high (96 x 96), 4 = ultra (128 x 128), 5 = extreme (192 x 192; the graphics card only, and the " +
-                    "marks' own resolution limits what it shows). It is a small physics simulation of the plate, run in the background " +
-                    "on spare threads; the mark appears when it is ready. Higher = finer, slower. (Only the look: the energy model decides the game.)",
-                    new AcceptableValueRange<int>(0, 5)));
+                    "2 = medium (64 x 64), 3 = high (96 x 96), 4 = ultra (128 x 128). It is a small physics simulation of the plate, run in the " +
+                    "background on spare threads; the mark appears when it is ready. Higher = finer, slower, and never finer than the plate's map " +
+                    "can show (a vehicle with many plates has a coarse map, and then 'ultra' is lowered by itself). " +
+                    "(Only the look: the energy model decides the game.)",
+                    new AcceptableValueRange<int>(0, 4)));
             SimCracks = Config.Bind("DamageMaps", "SimCracks", true,
                 "The torn links of the simulated plate make thin cracks (grooves) around a hole and across a dent.");
             SimSmoothEdges = Config.Bind("DamageMaps", "SimSmoothEdges", true,

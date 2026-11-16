@@ -414,7 +414,7 @@ namespace ArmorFragments.UI
                 "The impact simulation runs on the graphics card when the computer has OpenCL, and on the CPU if not. Takes effect the next time the game or the plugin loads.");
             Live("Graphics card", () => GpuStatus.Text);
             IntSetting(ArmorFragmentsPlugin.SimQuality, "Simulation quality",
-                "0 = off (the quick marks), 1 = low (40x40), 2 = medium (64x64), 3 = high (96x96), 4 = ultra (128x128), 5 = extreme (192x192). A shell's impact is worked out by a small physics simulation of the plate, in the background; the mark appears when it is ready.");
+                "0 = off (the quick marks), 1 = low (40x40), 2 = medium (64x64), 3 = high (96x96), 4 = ultra (128x128), never finer than the map can show. A shell's impact is worked out by a small physics simulation of the plate, in the background; the mark appears when it is ready.");
             ToggleSetting(ArmorFragmentsPlugin.SimCracks, "Cracks in the marks",
                 "The torn links of the simulated plate make thin grooves around a hole and across a dent.");
             ToggleSetting(ArmorFragmentsPlugin.SimSmoothEdges, "Smooth, ragged hole edges",

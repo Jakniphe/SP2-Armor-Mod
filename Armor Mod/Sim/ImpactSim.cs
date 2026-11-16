@@ -127,14 +127,25 @@ namespace ArmorFragments.Sim
         // The columns per side of a quality's own grid.
         public static int ColumnsOfQuality(int quality)
         {
-            return quality <= 0 ? 40 : quality == 1 ? 64 : quality == 2 ? 96 : quality == 3 ? 128 : 192;
+            return quality <= 0 ? 40 : quality == 1 ? 64 : quality == 2 ? 96 : 128;
         }
 
-        public const int MaxQuality = 4;
+        public const int MaxQuality = 3;
 
         public static string QualityName(int quality)
         {
-            return quality <= 0 ? "low" : quality == 1 ? "medium" : quality == 2 ? "high" : quality == 3 ? "ultra" : "extreme";
+            return quality <= 0 ? "low" : quality == 1 ? "medium" : quality == 2 ? "high" : "ultra";
+        }
+
+        // The columns that are worth having for a map with so many pixels a meter. The map shows nothing finer than its pixels, so a cell
+        // under half a pixel is work that nobody sees: the grid needs at most (patch width x pixels per meter x 2) columns. (At 120 px/m,
+        // which a vehicle with many plates gets, that is 84 columns for a 50 mm shell: the 96 columns of "high" already out-resolve it.)
+        // Returns int.MaxValue when the density is not known. Never under 32.
+        public static int UsefulColumns(float caliberM, float angleDeg, float pixelsPerMeter)
+        {
+            if (pixelsPerMeter <= 0f) return int.MaxValue;
+            float width = PatchSize(caliberM, angleDeg);
+            return Math.Max(32, (int)Math.Ceiling(width * pixelsPerMeter * 2f));
         }
 
         // How wide (meters) the patch of plate is that is simulated: so many calibres, never under 10 cm. Measured (the damage reaches 1.7 to

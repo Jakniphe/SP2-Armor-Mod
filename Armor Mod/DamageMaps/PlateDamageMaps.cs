@@ -363,7 +363,7 @@ namespace ArmorFragments
 
             // A shell's impact is simulated if the setting says so and the simulations are not piling up; the settings are taken
             // here, on the main thread, and travel with the job.
-            int quality = ArmorFragmentsPlugin.SimQuality.Value - 1;
+            int quality = Math.Min(ArmorFragmentsPlugin.SimQuality.Value - 1, ArmorFragments.Sim.ImpactSim.MaxQuality);
             if (quality >= 0 && impacts.Length == 1 && SimBridge.Wants(impacts[0]))
             {
                 if (DamageWorker.PendingSims < QueueLimit())

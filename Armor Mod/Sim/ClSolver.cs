@@ -676,9 +676,10 @@ __kernel void relax_fused(__global const float4* qin, __global float4* qout, __g
         {
             if (particles <= capacity) return;
             Release(ref bP); Release(ref bV); Release(ref bQ); Release(ref bQ2); Release(ref bO); Release(ref bRest); Release(ref bRest0); Release(ref bFixed); Release(ref bCharged);
-            // The biggest simulation the grids allow is 96 x 96 x 14 = 129,024 particles: the first run (the check at the start) makes room for
-            // that, so that a bigger impact later never has to make the card allocate new buffers in the middle of a shot (it took ~200 ms).
-            capacity = Math.Max(particles, 132000);
+            // The biggest simulation the grids allow is 128 x 128 x 14 = 229,376 particles (~52 MB on the card): the first run (the check at
+            // the start) makes room for that, so that a bigger impact later never has to make the card allocate new buffers in the middle of
+            // a shot (it took ~200 ms).
+            capacity = Math.Max(particles, 229376);
             bP = Buffer(16L * capacity); bV = Buffer(16L * capacity); bQ = Buffer(16L * capacity); bQ2 = Buffer(16L * capacity); bO = Buffer(16L * capacity);
             bRest = Buffer(4L * 18 * capacity); bRest0 = Buffer(4L * 18 * capacity);
             bFixed = Buffer(capacity); bCharged = Buffer(capacity);

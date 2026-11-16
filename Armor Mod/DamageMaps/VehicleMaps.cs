@@ -983,7 +983,7 @@ namespace ArmorFragments
                 {
                     try
                     {
-                        input.Columns = ChooseColumns(impact, input, quality, true, out grid);
+                        input.Columns = ChooseColumns(impact, input, quality, true, MapDensity(job), out grid);
                         result = ImpactSim.Run(input, simPool, gpu);
                     }
                     catch (Exception e)
@@ -997,7 +997,7 @@ namespace ArmorFragments
                 if (result == null)
                 {
                     simPool = EnsurePool(job.Threads);
-                    input.Columns = ChooseColumns(impact, input, quality, false, out grid);
+                    input.Columns = ChooseColumns(impact, input, quality, false, MapDensity(job), out grid);
                     result = ImpactSim.Run(input, simPool);
                 }
                 else
@@ -1059,7 +1059,7 @@ namespace ArmorFragments
         // outcome (a shell that goes through takes more steps than one that is stopped), so it is learned from the runs themselves,
         // one value per kind of impact. The first guesses come from the first real runs in the game (Mono, 14 threads).
         private const double BudgetShare = 0.45;                // of the time limit: a mark that comes later than this is too late to matter
-        private static readonly int[] Ladder = { 192, 160, 128, 112, 96, 80, 64, 56, 48, 40, 32 };
+        private static readonly int[] Ladder = { 128, 112, 96, 80, 64, 56, 48, 40, 32 };
         private static readonly double[] CostPerUnit = { 2.0e-3, 1.4e-3, 2.1e-3 };   // ms per (columns^3 x layers): ricochet, blocked, penetrated
         private static readonly double[] CostPerUnitGpu = { 4.0e-5, 4.0e-5, 4.0e-5 };    // the same on the graphics card (measured: about 3e-5)
         private static string GridNote = "";
@@ -1075,11 +1075,38 @@ namespace ArmorFragments
         }
 
         // The finest grid (not above the quality's own) whose predicted time fits the budget; the coarsest one if none does.
-        private static int ChooseColumns(PlateImpact impact, ImpactSimInput input, int quality, bool gpu, out string note)
+        // The plate's map, in pixels per meter (the finer of its two directions): what the marks can show.
+        private static float MapDensity(Job job)
+        {
+            PlateCpu cpu = job.Plate != null ? job.Plate.Cpu : null;
+            return cpu != null ? Math.Max(cpu.PxU, cpu.PxV) : 0f;
+        }
+
+        private static int ChooseColumns(PlateImpact impact, ImpactSimInput input, int quality, bool gpu, float pixelsPerMeter, out string note)
         {
             int wanted = ImpactSim.ColumnsOfQuality(quality);
             note = "";
             GridNote = "";
+
+            // No finer than the map can show: the quality is the most the simulation may use, not what it always uses. The first grid of the
+            // ladder that is at least as fine as the map needs (it is only ever lowered, and never under the ladder's 32).
+            string mapNote = "";
+            int useful = ImpactSim.UsefulColumns(input.CaliberM, input.AngleDeg, pixelsPerMeter);
+            if (useful < wanted)
+            {
+                int enough = Ladder[0];
+                for (int i = Ladder.Length - 1; i >= 0; i--)
+                {
+                    if (Ladder[i] >= useful) { enough = Ladder[i]; break; }
+                }
+                if (enough < wanted)
+                {
+                    mapNote = " (the map shows " + pixelsPerMeter.ToString("F0") + " px/m, which a " + enough + "x" + enough + " grid already out-resolves)";
+                    wanted = enough;
+                }
+            }
+            note = mapNote;
+            GridNote = mapNote;
             if (input.TimeLimitMs <= 0) return wanted;   // no limit: nothing to fit
 
             double budget = input.TimeLimitMs * BudgetShare;
@@ -1092,7 +1119,7 @@ namespace ArmorFragments
                 if (Units(input, columns) * cost <= budget) break;
             }
             if (chosen < wanted)
-                note = " (a " + chosen + "x" + chosen + " grid: " + wanted + "x" + wanted + " would take about " +
+                note = mapNote + " (a " + chosen + "x" + chosen + " grid: " + wanted + "x" + wanted + " would take about " +
                        (Units(input, wanted) * cost / 1000.0).ToString("F1") + " s)";
             GridNote = note;
             return chosen;
