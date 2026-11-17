@@ -1,3 +1,61 @@
+# Crew
+
+0.10.0
+
+Crew members are the seats inside the vehicle. A vehicle whose whole crew is dead is killed, with its hull intact and nothing exploding. An armored vehicle now dies when an ammo rack explodes or when its last crew member dies.
+
+As with the rest of the mod, a build that uses any of its parts plays by all of it: a vehicle with ammo racks needs crew to load its rack-fed cannons.
+
+Setting up
+- Turn on "Crew" on a seat (Seat, Seat Ejection or Car Seat): that seat is one crew member. Only seats can be crew.
+- A new crew member has no role. Pick his trade: Commander, Gunner, Loader, Driver or Radio operator. The trade brings its own job: a Driver drives, a Gunner aims, a Loader loads. Commander and Radio operator have none: they are spares.
+- A copied, mirrored or pasted crew seat (or one in a subassembly) comes in with no role and no extra jobs.
+- Under "Also does", give him more jobs (Driving, Aiming, Loading) to make him double up, for example a Commander who also loads. Any crew size works.
+- A vehicle has at most one Driver, one Commander and one Radio operator, and only one crew member drives (any trade can be the one, through "Also does"). What another seat already has is marked * in the panel and can't be picked. Gunners and Loaders can be doubled.
+- In the name: `[CRW t=commander j=load]` (`j` = the jobs he also does; no `t` = no role).
+
+Jobs
+- Drive: the vehicle's engines (car engines and turboshafts) give their horsepower x the drive efficiency.
+- Aim: rotators (hinge, small rotator, rotator) with "Aimed by crew" turned on (a turret ring, a gun's elevation) turn at their speed x the aim efficiency, whatever their input asks for. Other rotators aren't affected. In the name: `[AIM]`.
+- Load: cannons fed by ammo racks reload in their Firing Delay / the load efficiency. A rack-fed cannon on a vehicle with no crew doesn't fire. Cannons on Ammo Count aren't affected.
+
+Efficiency
+- A crew member's efficiency at a job is his trade's skill at it times his workload: one job 100%, two jobs 90%, three jobs 80%.
+- Skill (Drive / Aim / Load): Commander 70 / 85 / 85, Gunner 65 / 100 / 70, Loader 65 / 70 / 100, Driver 100 / 60 / 60, Radio operator 85 / 70 / 85, no role 60 / 60 / 60 (%). A crew member with no role does no job until one is left without crew.
+- Crew on the same job stack, best first, each adding less: two aimers (the second adds 30% of his efficiency); any number of loaders. Aim and Load can go past 100%: rotators turn faster than their set speed and the reload is shorter than the Firing Delay.
+- Loading depends on the round's weight (shell, case and propellant): it takes one loader per 20 kg, rounded, at least 1. With fewer, it's slower in proportion (one loader on a two-loader round: 50%).
+- Past the loaders it takes, extra loaders keep helping with no ceiling, each adding less: the k-th extra adds his efficiency x 20% x the square root of the loaders it takes / k. Heavier rounds gain more from each extra loader, so heavier guns end up higher.
+- With 100% loaders (1, 2, 3, 4, 6, 10, 20 loaders): 1-loader round: 100, 120, 130, 137, 146, 157, 171%. 2-loader round: 50, 100, 128, 142, 159, 177, 199%. 3-loader round: 33, 67, 100, 135, 164, 190, 219%.
+- Example: a 5 s gun with a light round, loaded by a Commander who also aims: 85% x 90% = 77%, so it reloads in 6.5 s. With two Loaders: 120%, so it reloads in 4.2 s.
+- A rack-fed cannon's panel shows its round's weight and how many loaders it takes.
+- A job the vehicle needs that nobody has (no crew member of that trade, and nobody also doing it) goes, at the start, to the crew member who would do it best ("auto" in the panel).
+- The crew panel lists this seat's jobs and the vehicle's, one row each with its efficiency. A cannon fed by racks shows its reload with this crew and who loads it; an aimed rotator shows its turn speed.
+
+Bodies
+- In flight, a character sits in every crew seat: the seat's Designer Character (Chad WW1 when it is set to None), posed by the seat. A seat your own character sits in keeps yours. Every player sees them.
+- Hits are decided by the body, not the seat: shells and fragments pass through the seat itself and meet capsules around the sitting character's head, torso, arms and legs (on the skeleton the seat poses him with, so they follow his pose and the vehicle), which slow them like a human body would.
+- The game's own shells fly through crew seats too. A shell whose path crosses a crew member (an open-topped vehicle, a gap in the armor) hits him there, even if nothing solid is in the way.
+- Fragments don't ricochet off bodies.
+
+Losses
+- A crew member dies when the damage to his body has used up the seat's health, or when the seat breaks off the vehicle. The game never blows a crew seat up or off.
+- A dead crew member's body stays in his seat and still stops fragments.
+- His jobs go to the living crew member who would do each best, so the vehicle gets slower, weaker and slower to reload as its crew dies.
+- Taking over a job takes time: the new holder needs `[Crew] SwitchSeconds` (5 s) to reach its station and does that job at 0% until then. If he was the only one on it, the job stops meanwhile: no driver, the engines are off until he starts them again; no aimer, the aimed rotators freeze; no loader, no shots. A job someone else still does (a second Loader or Gunner) carries on at their level. At the start of a flight, jobs nobody was given are filled at once.
+- When the last crew member dies, the vehicle is killed: kill credit, kill cam and respawn, as when an ammo rack explodes, but with no fire or blast. Nothing on it works any more: its engines are off and every rotator stops.
+- Crew seats take shell and fragment damage on armored vehicles, like damage modules and ammo racks. A crew seat can also be a damage module, to read that crew member's damage in Funky Trees.
+
+Funky Trees
+- `Crew_alive` = crew members alive; `Crew_drive`, `Crew_aim`, `Crew_load` = each job's efficiency (0 to 1).
+
+Settings (host): `[Crew] Enabled`, `[Crew] SwitchSeconds` (5 s).
+
+Bug fix
+- An ammo rack could hold no rounds for a whole flight (its cannon never fired) when its fuselage's shape was built later than the rack waited for, which happened easily with the game sped up. The rack now waits in real time and keeps measuring until the shape is there, then fills.
+
+Next
+- A part finder in the designer, to find stray parts that bring the mod's rules onto a build (a forgotten armor block, rack or crew seat).
+
 # Per-face armor
 
 0.9.0
@@ -54,6 +112,16 @@ Weight
 
 Ammo racks are fuselages that hold a cannon's ammunition. When hit through their rounds they can catch fire and explode inside the vehicle, killing it without blowing the hull apart.
 
+0.10.0
+- Cut fuselages can be ammo racks: the rounds are packed to the cut shape. Hollow fuselages still hold none.
+
+0.9.2
+- Racks pack their rounds in whichever layout holds the most: lying along the fuselage, across it, upright, or on a 45-degree diagonal; in square or staggered rows (each row nested into the gaps of the one below); centered or shifted. The rounds still all point the same way. A rack never holds fewer rounds than before. The rack's panel shows the layout it picked.
+- New "Fullness" slider on racks (0 to 100%): how full the rack starts. The top rounds are left out, as if already fired, so a part-full rack has safe space at the top, weighs less and makes a smaller cook-off.
+- Symmetric guns share their settings: with symmetry on, changing a cannon (Cannon on/off, shell hardness, fuse, filler, brittleness, Add rack / Remove rack) changes its symmetry partners too. Each partner draws from the matching rack: when the racks are symmetric too, the left gun keeps the left rack and the right gun the right one; a single rack stays shared. Making a gun symmetric also gives each copy its nearest matching rack. A duplicated gun keeps the original's settings and racks.
+- Draw order: a gun empties its numbered racks first, lowest number up, then the racks with no order, nearest first (racks with the same number also go nearest first). New "No order" toggle on racks, on by default; turn it off to give the rack an Empty order (1 to 20). Racks from before count as No order.
+- Racks follow the gun: when you drop a gun or a rack onto the craft (drag, clone, paste) or link it with the part connections tool, each gun swaps any of its racks that has symmetry copies for the copy nearest to it. A duplicated gun on the other side takes that side's rack as soon as it's connected. A gun that lists both racks of a mirrored pair keeps both and drains its own side first. Loading the craft, undo and other edits never change rack picks.
+
 0.8.1
 - Cannons pick their own ammo racks with "Add rack" and "Remove rack". Cannons of different sizes each draw from their own racks, instead of every cannon sharing every rack.
 - With no rack picked, a cannon uses its Ammo Count slider.
@@ -64,7 +132,7 @@ Ammo racks are fuselages that hold a cannon's ammunition. When hit through their
 
 Setting up
 - Turn on "Ammo rack" on a fuselage (`[AMM]`) and "Cannon" on the gun (`[CAN]`). On the cannon, "Add rack" opens the game's part picker: click the racks it draws from (as a wheel picks its engine). A cannon can draw from several racks, and cannons that fire the same round can share one. With no rack picked, the cannon keeps its Ammo Count slider.
-- A rack holds whole rounds sized from the cannons that draw from it, packed into the fuselage's real shape. It weighs its rounds and empties from the top layer down. A cannon empties its racks in the "Empty order" set on each rack (`o=`).
+- A rack holds whole rounds sized from the cannons that draw from it, packed into the fuselage's real shape. It weighs its rounds and empties from the top down. A cannon empties its racks in the "Empty order" set on each rack (`o=`).
 - Mark a fuselage at the turret ring or a hatch as a "Cook-off vent" (`[VNT]`).
 
 Cook-off

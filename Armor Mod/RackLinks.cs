@@ -170,6 +170,11 @@ namespace ArmorFragments
                     foreach (ValueTuple<PartData, IReadOnlyList<PartData>> group in symmetricPartGroups)
                         if (group.Item2 != null && i < group.Item2.Count) RackLinks.Remap(group.Item2[i], idMap);
                 }
+
+                // Racks made symmetric earlier: each copy of a cannon takes the copy of the rack nearest to it.
+                foreach (ValueTuple<PartData, IReadOnlyList<PartData>> group in symmetricPartGroups)
+                    if (group.Item2 != null)
+                        foreach (PartData copy in group.Item2) ArmorSymmetry.MatchRacks(copy);
             }
             catch (Exception e)
             {
@@ -195,6 +200,85 @@ namespace ArmorFragments
             catch (Exception e)
             {
                 ArmorFragmentsPlugin.Log.LogWarning("Ammo rack links (deleted part) failed: " + e.Message);
+            }
+        }
+    }
+}
+
+namespace ArmorFragments
+{
+    // Rack matching runs when an ammo rack or a marked cannon is dropped onto the craft or connected in the
+    // designer, and at no other time (not on load or undo): each such cannon, and every cannon using such a rack or
+    // one of its symmetry copies, takes the copies nearest to it (ArmorSymmetry.RematchAround). Other parts:
+    // nothing.
+
+    // Drag and drop (dragged, cloned, pasted or added, with or without symmetry): the parts being placed, once
+    // they are in their final place.
+    [HarmonyPatch(typeof(MovePartTool), "EndPartMovement")]
+    internal static class RackLinksDropPatch
+    {
+        private static readonly System.Reflection.FieldInfo SelectionField =
+            AccessTools.Field(typeof(MovePartTool), "_partSelection");
+        private static readonly System.Reflection.FieldInfo SymmetricField =
+            AccessTools.Field(typeof(MovePartTool), "_symmetricPartSelections");
+
+        // The parts being placed, before the tool lets go of them.
+        private static void Prefix(MovePartTool __instance, out List<PartData> __state)
+        {
+            __state = new List<PartData>();
+            try
+            {
+                Add(SelectionField != null ? SelectionField.GetValue(__instance) as PartSelection : null, __state);
+                System.Collections.IEnumerable symmetric =
+                    SymmetricField != null ? SymmetricField.GetValue(__instance) as System.Collections.IEnumerable : null;
+                if (symmetric != null)
+                    foreach (object selection in symmetric) Add(selection as PartSelection, __state);
+            }
+            catch (Exception e)
+            {
+                __state.Clear();
+                ArmorFragmentsPlugin.Log.LogWarning("Ammo rack links (dropped parts) failed: " + e.Message);
+            }
+        }
+
+        private static void Postfix(List<PartData> __state)
+        {
+            if (__state == null || __state.Count == 0) return;
+            try
+            {
+                foreach (PartData part in __state) ArmorSymmetry.RematchAround(part);
+            }
+            catch (Exception e)
+            {
+                ArmorFragmentsPlugin.Log.LogWarning("Ammo rack links (dropped parts) failed: " + e.Message);
+            }
+        }
+
+        private static void Add(PartSelection selection, List<PartData> parts)
+        {
+            if (selection == null || selection.Parts == null) return;
+            foreach (PartScript part in selection.Parts)
+                if (part != null && part.Part != null && !parts.Contains(part.Part)) parts.Add(part.Part);
+        }
+    }
+
+    // A connection made in the designer (the part connections tool, or a part snapping on): both ends.
+    [HarmonyPatch(typeof(MovePartTool), "ConnectPartToAttachPoint")]
+    internal static class RackLinksConnectPatch
+    {
+        private static void Postfix(AttachPointScript attachPointScript, AttachPointScript targetAttachPointScript)
+        {
+            try
+            {
+                if (Designer.Instance == null) return;
+                PartScript a = attachPointScript != null ? attachPointScript.PartScript : null;
+                PartScript b = targetAttachPointScript != null ? targetAttachPointScript.PartScript : null;
+                if (a != null) ArmorSymmetry.RematchAround(a.Part);
+                if (b != null && b != a) ArmorSymmetry.RematchAround(b.Part);
+            }
+            catch (Exception e)
+            {
+                ArmorFragmentsPlugin.Log.LogWarning("Ammo rack links (connected parts) failed: " + e.Message);
             }
         }
     }

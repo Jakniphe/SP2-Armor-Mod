@@ -53,6 +53,21 @@
 			<Private>False</Private>
 		</Reference>
 
+		<!-- Crew: the seated characters' bones -->
+		<Reference Include="UnityEngine.AnimationModule">
+			<HintPath>$(ManagedDir)\UnityEngine.AnimationModule.dll</HintPath>
+			<Private>False</Private>
+		</Reference>
+		<!-- Crew: engines' power (the game's vehicle physics) -->
+		<Reference Include="NWH.VehiclePhysics2">
+			<HintPath>$(ManagedDir)\NWH.VehiclePhysics2.dll</HintPath>
+			<Private>False</Private>
+		</Reference>
+		<Reference Include="NWH.Common">
+			<HintPath>$(ManagedDir)\NWH.Common.dll</HintPath>
+			<Private>False</Private>
+		</Reference>
+
 		<!-- UI panel: the game's UI library (Juicy) and what it is built on -->
 		<Reference Include="Jundroo.Packages">
 			<HintPath>$(ManagedDir)\Jundroo.Packages.dll</HintPath>

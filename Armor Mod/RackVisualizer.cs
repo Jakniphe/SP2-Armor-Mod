@@ -110,6 +110,7 @@ namespace ArmorFragments
 
         private static void Refresh()
         {
+            if (RackGrid.DesignerDragging()) return;   // redrawn once the part is let go
             AircraftScript aircraft = Designer.Instance != null ? Designer.Instance.Aircraft : null;
             bool active = aircraft != null && aircraft.LoadContext == CraftLoadContext.Designer &&
                           aircraft.Aircraft != null && aircraft.Aircraft.Assembly != null &&

@@ -152,6 +152,10 @@ namespace ArmorFragments
         internal static ConfigEntry<bool> ShowRacksInDesigner;   // local: only changes what you see
         internal static ConfigEntry<bool> DebugDumpShape;        // local: diagnostic file
 
+        // Crew ([CRW] seats, see Crew.cs).
+        internal static ConfigEntry<bool> CrewEnabled;
+        internal static ConfigEntry<float> CrewSwitchSeconds;
+
         // Shown in the log and the panel, to tell which build the game is really running.
         public const string Version = "0.10.0";
 
@@ -183,6 +187,8 @@ namespace ArmorFragments
             HostResolver.Tick(); PerfMonitor.Lap("HostResolver");
             ModuleOutputs.Tick(); PerfMonitor.Lap("ModuleOutputs");
             AmmoRacks.Tick(); PerfMonitor.Lap("AmmoRacks");
+            Crew.Tick(); PerfMonitor.Lap("Crew");
+            CrewBodies.Tick(); PerfMonitor.Lap("CrewBodies");
             RackFireSync.Tick(); PerfMonitor.Lap("RackFireSync");
             if (DamageMapsShareMarks.Value) MarksSync.Tick(); PerfMonitor.Lap("MarksSync");
             RackVisualizer.Tick(); PerfMonitor.Lap("RackVisualizer");
@@ -681,6 +687,14 @@ namespace ArmorFragments
                 "Diagnostic: each time the designer re-measures an ammo rack, write its shape, round positions and " +
                 "measurement to BepInEx/ammo-rack-shape.obj (overwritten each time).");
 
+            CrewEnabled = Config.Bind("Crew", "Enabled", true,
+                "If true, seats with a [CRW] tag are crew members: each dies when its seat has lost all its " +
+                "health, and the vehicle is killed when its last crew member dies.");
+            CrewSwitchSeconds = Config.Bind("Crew", "SwitchSeconds", 5f,
+                new ConfigDescription("Seconds a crew member takes to reach the station of a job he takes over from a dead " +
+                    "one. Until then he does that job at 0%: the only driver gone means no engine power, the only aimer gone " +
+                    "frozen aimed rotators, the only loader gone no shots.", new AcceptableValueRange<float>(0f, 30f)));
+
             NetSync.RegisterGlobal(
                 ApplyDamage, FragmentMass, MaxVisualFragments, BallisticRayRange, IgnoreGameDamageOnArmor,
                 GameDamageExplosions, ArmoredStructureDamage,
@@ -693,7 +707,8 @@ namespace ArmorFragments
                 FragmentRicochetAngle, FragmentRicochetMultiplier,
                 AmmoRacksEnabled, CaseDiameterRatio, CaseLitresPerMJ, RoundSpacingPercent,
                 CookOffEnergyKJ, CookOffDirectHit, CookOffBurnSeconds, CookOffTNTEfficiency, CookOffWreckKPa, CookOffDamageKPa, CookOffArmorHalvingMm,
-                BlastStrength, BlastType, MaxBlastLb, BlastVisualPercent);
+                BlastStrength, BlastType, MaxBlastLb, BlastVisualPercent,
+                CrewEnabled, CrewSwitchSeconds);
 
             // One patch failing (for example after a game update) must not stop the others.
             HarmonyInstance = new Harmony("com.yourname.armorfragments");
