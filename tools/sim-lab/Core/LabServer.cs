@@ -144,7 +144,7 @@ namespace SimLab
             {
                 progress = 0f;
                 running = true;
-                try { return Results.Json(RunScenario(s, true)); }
+                try { return Results.Json(RunScenario(s, true, true)); }
                 finally { progress = 1f; running = false; }
             });
             app.MapPost("/api/sweep", (SweepRequest r) => Results.Json(Sweep(r)));
@@ -174,7 +174,7 @@ namespace SimLab
             return pool;
         }
 
-        private static object RunScenario(Scenario s, bool images)
+        private static object RunScenario(Scenario s, bool images, bool view3d = false)
         {
             float caliberM = s.Caliber * 0.001f;
             float mass = s.Mass > 0f ? s.Mass : EnergyModel.ShellMassForCaliber(s.Caliber);
@@ -284,7 +284,35 @@ namespace SimLab
                     patchCm = sim.Size * 100f,
                 },
                 images = picture,
+                // the plate itself, for the three-dimensional view: what the game draws, the simulation's own grid, the quick marks
+                plate3d = view3d ? new[]
+                {
+                    Pack3D("As the game draws it", gameFront, gameBack, gameHole, gameN, 1f / Math.Min(Math.Max(s.MapPxPerM, 32f), 1024f), input.ThicknessM),
+                    Pack3D("The simulation's own grid", sim.Front, sim.Back, sim.Hole, sim.N, sim.Cell, input.ThicknessM),
+                    Pack3D("The quick marks (what the mod drew before the simulation)", anaFront, anaBack, anaHole, sim.N, sim.Cell, input.ThicknessM),
+                } : null,
             };
+        }
+
+        // A plate's heights as the page's viewer wants them: the middle (at most 'limit' pixels a side) of the front's and the back's height
+        // fields (16-bit, in units of 10 micrometers) and the hole mask (0 = hole), each as base64.
+        private static object Pack3D(string label, float[] front, float[] back, byte[] hole, int n, float cell, float thickness, int limit = 240)
+        {
+            int w = Math.Min(n, limit), x0 = (n - w) / 2, y0 = (n - w) / 2;
+            byte[] f = new byte[w * w * 2], b = new byte[w * w * 2], h = new byte[w * w];
+            for (int j = 0; j < w; j++)
+            {
+                for (int i = 0; i < w; i++)
+                {
+                    int src = (y0 + j) * n + (x0 + i), dst = j * w + i;
+                    short fv = (short)Math.Max(-32000, Math.Min(32000, (int)Math.Round(front[src] / 1e-5f)));
+                    short bv = (short)Math.Max(-32000, Math.Min(32000, (int)Math.Round(back[src] / 1e-5f)));
+                    f[2 * dst] = (byte)(fv & 0xFF); f[2 * dst + 1] = (byte)((fv >> 8) & 0xFF);
+                    b[2 * dst] = (byte)(bv & 0xFF); b[2 * dst + 1] = (byte)((bv >> 8) & 0xFF);
+                    h[dst] = hole[src];
+                }
+            }
+            return new { label, n = w, cell, thickness, front = Convert.ToBase64String(f), back = Convert.ToBase64String(b), hole = Convert.ToBase64String(h) };
         }
 
         // The analytic stamp of the same impact, as arrays of the same size as the simulation's.

@@ -97,11 +97,300 @@
       <h2>Result</h2>
       <div id="result">Press Run.</div>
     </section>
+    <section id="viewBox" style="display:none">
+      <h2>The plate in 3D</h2>
+      <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-bottom:8px">
+        <select id="view3dSet" style="width:auto; min-width:220px"></select>
+        <label style="font-size:12.5px; display:flex; gap:6px; align-items:center">Depth exaggeration
+          <input type="range" id="view3dExag" min="1" max="30" step="1" value="4" style="width:130px"> <b id="view3dExagText">4×</b></label>
+        <button data-view3d="reset">Reset view</button>
+        <button data-view3d="top">Top</button>
+        <button data-view3d="side">Side (section)</button>
+        <button data-view3d="back">Back</button>
+      </div>
+      <canvas id="view3dCanvas" style="width:100%; height:520px; border:1px solid var(--line); border-radius:8px; display:block; touch-action:none; cursor:grab"></canvas>
+      <p class="note" id="view3dNote">Left drag: rotate. Right drag or Shift + drag: pan. Wheel: zoom. Double-click: reset. Holes are cut through, with the copper-colored walls the shell left; dents and bumps are exaggerated by the slider above (the plate itself is drawn at its real thickness).</p>
+    </section>
     <section id="sweepBox" style="display:none"><h2>Speed sweep</h2><div id="sweepResult"></div></section>
     <section id="scalingBox" style="display:none"><h2>Thread scaling</h2><div id="scalingResult"></div></section>
   </div>
 </main>
 <script>
+// ---- The plate in three dimensions: a small WebGL viewer (no libraries). Left drag rotates, right drag or shift+drag pans, the wheel zooms.
+const View3D = (() => {
+  let canvas, gl, program, vao, indexCount = 0, sets = [], current = 0, ready = false, dirty = false, framed = false;
+  const cam = { yaw: 0.5, pitch: 0.75, dist: 1, target: [0, 0, 0] };
+  let scale = 1;
+
+  const vertexSource = `#version 300 es
+    in vec3 aPos; in vec3 aNormal; in vec3 aColor;
+    uniform mat4 uViewProj;
+    out vec3 vN; out vec3 vC; out vec3 vW;
+    void main() { vW = aPos; vN = aNormal; vC = aColor; gl_Position = uViewProj * vec4(aPos, 1.0); }`;
+  const fragmentSource = `#version 300 es
+    precision highp float;
+    in vec3 vN; in vec3 vC; in vec3 vW;
+    uniform vec3 uEye; uniform vec3 uLight;
+    out vec4 outColor;
+    void main() {
+      vec3 v = normalize(uEye - vW);
+      vec3 n = normalize(vN);
+      if (dot(n, v) < 0.0) n = -n;                       // both sides of the metal are lit
+      vec3 l = normalize(uLight);
+      float diffuse = max(dot(n, l), 0.0) * 0.52 + max(dot(n, v), 0.0) * 0.12;
+      float spec = pow(max(dot(n, normalize(l + v)), 0.0), 48.0) * 0.22;
+      float ambient = 0.20 + 0.10 * n.z;
+      outColor = vec4(min(vC * (ambient + diffuse) + vec3(spec), vec3(1.0)), 1.0);
+    }`;
+
+  // ---- Small matrix helpers (column-major, as WebGL wants) ----
+  const sub = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+  const cross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+  const norm = a => { const l = Math.hypot(a[0], a[1], a[2]) || 1; return [a[0] / l, a[1] / l, a[2] / l]; };
+  const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+  function lookAt(eye, target, up) {
+    const f = norm(sub(target, eye)), s = norm(cross(f, up)), u = cross(s, f);
+    return [s[0], u[0], -f[0], 0, s[1], u[1], -f[1], 0, s[2], u[2], -f[2], 0, -dot(s, eye), -dot(u, eye), dot(f, eye), 1];
+  }
+  function perspective(fov, aspect, near, far) {
+    const f = 1 / Math.tan(fov / 2), r = 1 / (near - far);
+    return [f / aspect, 0, 0, 0, 0, f, 0, 0, 0, 0, (far + near) * r, -1, 0, 0, 2 * far * near * r, 0];
+  }
+  function multiply(a, b) {
+    const o = new Array(16).fill(0);
+    for (let c = 0; c < 4; c++) for (let r = 0; r < 4; r++) for (let k = 0; k < 4; k++) o[c * 4 + r] += a[k * 4 + r] * b[c * 4 + k];
+    return o;
+  }
+
+  function eyePosition() {
+    const cp = Math.cos(cam.pitch);
+    return [cam.target[0] + cam.dist * cp * Math.sin(cam.yaw), cam.target[1] - cam.dist * cp * Math.cos(cam.yaw), cam.target[2] + cam.dist * Math.sin(cam.pitch)];
+  }
+  function basis() {
+    const eye = eyePosition();
+    const f = norm(sub(cam.target, eye)), s = norm(cross(f, [0, 0, 1]));
+    return { eye, right: s, up: cross(s, f) };
+  }
+
+  // ---- Geometry: the front and back surfaces (holes cut out), the walls of the holes and the edges of the patch ----
+  function decode16(b64) {
+    const bin = atob(b64), bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    return new Int16Array(bytes.buffer);
+  }
+  function decode8(b64) {
+    const bin = atob(b64), bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    return bytes;
+  }
+
+  function build(set, exaggeration) {
+    const n = set.n, cell = set.cell, t = set.thickness;
+    const F = decode16(set.front), B = decode16(set.back), H = decode8(set.hole);
+    const c = (n - 1) / 2;
+    const px = i => (i - c) * cell, py = j => -(j - c) * cell;
+    const zf = (i, j) => t / 2 + F[j * n + i] * 1e-5 * exaggeration;
+    const zb = (i, j) => -t / 2 - B[j * n + i] * 1e-5 * exaggeration;
+
+    const positions = [], normals = [], colors = [], indices = [];
+    const frontColor = [0.66, 0.68, 0.72], backColor = [0.56, 0.58, 0.63], edgeColor = [0.48, 0.50, 0.55], holeColor = [0.84, 0.64, 0.42];
+
+    // Surfaces: a vertex per pixel on each side, normals from the neighbors.
+    for (let side = 0; side < 2; side++) {
+      for (let j = 0; j < n; j++) {
+        for (let i = 0; i < n; i++) {
+          const z = side === 0 ? zf : zb;
+          const dzdi = (z(Math.min(i + 1, n - 1), j) - z(Math.max(i - 1, 0), j)) / ((Math.min(i + 1, n - 1) - Math.max(i - 1, 0)) * cell);
+          const dzdj = (z(i, Math.min(j + 1, n - 1)) - z(i, Math.max(j - 1, 0))) / ((Math.min(j + 1, n - 1) - Math.max(j - 1, 0)) * cell);
+          const dzdx = dzdi, dzdy = -dzdj;
+          const nn = side === 0 ? norm([-dzdx, -dzdy, 1]) : norm([dzdx, dzdy, -1]);
+          positions.push(px(i), py(j), z(i, j));
+          normals.push(nn[0], nn[1], nn[2]);
+          const col = side === 0 ? frontColor : backColor;
+          colors.push(col[0], col[1], col[2]);
+        }
+      }
+    }
+    const removed = new Uint8Array((n - 1) * (n - 1));
+    for (let j = 0; j < n - 1; j++) {
+      for (let i = 0; i < n - 1; i++) {
+        const holes = (H[j * n + i] === 0) + (H[j * n + i + 1] === 0) + (H[(j + 1) * n + i] === 0) + (H[(j + 1) * n + i + 1] === 0);
+        removed[j * (n - 1) + i] = holes >= 2 ? 1 : 0;
+      }
+    }
+    const isRemoved = (i, j) => removed[j * (n - 1) + i] === 1;
+    const inside = (i, j) => i >= 0 && j >= 0 && i < n - 1 && j < n - 1;
+    for (let j = 0; j < n - 1; j++) {
+      for (let i = 0; i < n - 1; i++) {
+        if (isRemoved(i, j)) continue;
+        for (let side = 0; side < 2; side++) {
+          const o = side * n * n, a = o + j * n + i, b = a + 1, cc = a + n, d = cc + 1;
+          indices.push(a, b, cc, b, d, cc);
+        }
+      }
+    }
+
+    // Walls: a quad between the front and the back along an edge of the cell, with a normal that points away from the metal.
+    const wall = (i1, j1, i2, j2, nx, ny, color) => {
+      const p = [[px(i1), py(j1), zf(i1, j1)], [px(i2), py(j2), zf(i2, j2)], [px(i2), py(j2), zb(i2, j2)], [px(i1), py(j1), zb(i1, j1)]];
+      const base = positions.length / 3;
+      for (const q of p) { positions.push(q[0], q[1], q[2]); normals.push(nx, ny, 0); colors.push(color[0], color[1], color[2]); }
+      indices.push(base, base + 1, base + 2, base, base + 2, base + 3);
+    };
+    for (let j = 0; j < n - 1; j++) {
+      for (let i = 0; i < n - 1; i++) {
+        if (isRemoved(i, j)) {
+          if (inside(i - 1, j) && !isRemoved(i - 1, j)) wall(i, j, i, j + 1, 1, 0, holeColor);
+          if (inside(i + 1, j) && !isRemoved(i + 1, j)) wall(i + 1, j, i + 1, j + 1, -1, 0, holeColor);
+          if (inside(i, j - 1) && !isRemoved(i, j - 1)) wall(i, j, i + 1, j, 0, -1, holeColor);
+          if (inside(i, j + 1) && !isRemoved(i, j + 1)) wall(i, j + 1, i + 1, j + 1, 0, 1, holeColor);
+        } else {
+          if (i === 0) wall(0, j, 0, j + 1, -1, 0, edgeColor);
+          if (i === n - 2) wall(n - 1, j, n - 1, j + 1, 1, 0, edgeColor);
+          if (j === 0) wall(i, 0, i + 1, 0, 0, 1, edgeColor);
+          if (j === n - 2) wall(i, n - 1, i + 1, n - 1, 0, -1, edgeColor);
+        }
+      }
+    }
+
+    function upload(location, data, size) {
+      const buffer = gl.createBuffer();
+      gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+      gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(data), gl.STATIC_DRAW);
+      gl.enableVertexAttribArray(location);
+      gl.vertexAttribPointer(location, size, gl.FLOAT, false, 0, 0);
+    }
+    if (vao) gl.deleteVertexArray(vao);
+    vao = gl.createVertexArray();
+    gl.bindVertexArray(vao);
+    upload(gl.getAttribLocation(program, 'aPos'), positions, 3);
+    upload(gl.getAttribLocation(program, 'aNormal'), normals, 3);
+    upload(gl.getAttribLocation(program, 'aColor'), colors, 3);
+    const indexBuffer = gl.createBuffer();
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, indexBuffer);
+    gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new Uint32Array(indices), gl.STATIC_DRAW);
+    indexCount = indices.length;
+    scale = n * cell;
+  }
+
+  function compile(type, source) {
+    const shader = gl.createShader(type);
+    gl.shaderSource(shader, source);
+    gl.compileShader(shader);
+    if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(shader));
+    return shader;
+  }
+
+  function resize() {
+    const ratio = window.devicePixelRatio || 1;
+    const w = Math.max(1, Math.round(canvas.clientWidth * ratio)), h = Math.max(1, Math.round(canvas.clientHeight * ratio));
+    if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
+  }
+
+  function draw() {
+    dirty = false;
+    if (!ready || !indexCount) return;
+    resize();
+    gl.viewport(0, 0, canvas.width, canvas.height);
+    const dark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+    if (dark) gl.clearColor(0.09, 0.10, 0.12, 1); else gl.clearColor(0.86, 0.88, 0.91, 1);
+    gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+    gl.enable(gl.DEPTH_TEST);
+    const { eye } = basis();
+    const view = lookAt(eye, cam.target, [0, 0, 1]);
+    const projection = perspective(0.7, canvas.width / canvas.height, cam.dist * 0.01, cam.dist * 60);
+    gl.useProgram(program);
+    gl.uniformMatrix4fv(gl.getUniformLocation(program, 'uViewProj'), false, new Float32Array(multiply(projection, view)));
+    gl.uniform3fv(gl.getUniformLocation(program, 'uEye'), eye);
+    gl.uniform3fv(gl.getUniformLocation(program, 'uLight'), [-0.5, 0.45, 0.8]);
+    gl.bindVertexArray(vao);
+    gl.drawElements(gl.TRIANGLES, indexCount, gl.UNSIGNED_INT, 0);
+  }
+  function request() { if (!dirty) { dirty = true; requestAnimationFrame(draw); } }
+
+  function frame() { cam.dist = scale * 0.9; cam.target = [0, 0, 0]; }
+  function view(name) {
+    if (name === 'top') { cam.yaw = 0; cam.pitch = 1.5; }
+    else if (name === 'side') { cam.yaw = 0; cam.pitch = 0; }
+    else if (name === 'back') { cam.yaw = 0.5; cam.pitch = -0.75; }
+    else { cam.yaw = 0.5; cam.pitch = 0.75; }
+    request();
+  }
+
+  function init() {
+    canvas = document.getElementById('view3dCanvas');
+    gl = canvas.getContext('webgl2', { antialias: true });
+    if (!gl) { document.getElementById('view3dNote').textContent = 'This browser has no WebGL 2: the 3D view is not available.'; return; }
+    program = gl.createProgram();
+    gl.attachShader(program, compile(gl.VERTEX_SHADER, vertexSource));
+    gl.attachShader(program, compile(gl.FRAGMENT_SHADER, fragmentSource));
+    gl.linkProgram(program);
+    if (!gl.getProgramParameter(program, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(program));
+    ready = true;
+
+    let drag = null;
+    canvas.addEventListener('contextmenu', e => e.preventDefault());
+    canvas.addEventListener('pointerdown', e => {
+      canvas.setPointerCapture(e.pointerId);
+      drag = { x: e.clientX, y: e.clientY, pan: e.button === 2 || e.button === 1 || e.shiftKey };
+    });
+    canvas.addEventListener('pointermove', e => {
+      if (!drag) return;
+      const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
+      drag.x = e.clientX; drag.y = e.clientY;
+      if (drag.pan) {
+        const { right, up } = basis(), k = cam.dist * 0.0016;
+        for (let a = 0; a < 3; a++) cam.target[a] += (-right[a] * dx + up[a] * dy) * k;
+      } else {
+        cam.yaw -= dx * 0.008;
+        cam.pitch = Math.max(-1.5, Math.min(1.5, cam.pitch + dy * 0.008));
+      }
+      request();
+    });
+    const end = () => { drag = null; };
+    canvas.addEventListener('pointerup', end);
+    canvas.addEventListener('pointercancel', end);
+    canvas.addEventListener('wheel', e => {
+      e.preventDefault();
+      cam.dist = Math.max(scale * 0.03, Math.min(scale * 8, cam.dist * Math.exp(e.deltaY * 0.0012)));
+      request();
+    }, { passive: false });
+    canvas.addEventListener('dblclick', () => { frame(); view('iso'); });
+    window.addEventListener('resize', request);
+
+    document.getElementById('view3dSet').addEventListener('change', e => { current = parseInt(e.target.value); rebuild(); });
+    document.getElementById('view3dExag').addEventListener('input', () => { updateLabel(); rebuild(); });
+    for (const button of document.querySelectorAll('[data-view3d]')) button.addEventListener('click', () => { if (button.dataset.view3d === 'reset') frame(); view(button.dataset.view3d === 'reset' ? 'iso' : button.dataset.view3d); });
+  }
+
+  function exaggeration() { return parseFloat(document.getElementById('view3dExag').value) || 1; }
+  function updateLabel() { document.getElementById('view3dExagText').textContent = exaggeration() + '×'; }
+  function rebuild() { if (sets.length && ready) { build(sets[current], exaggeration()); request(); } }
+
+  return {
+    // The plate's data from the last run (an array of datasets, or null).
+    load(data) {
+      const box = document.getElementById('viewBox');
+      if (!data || !data.length) return;
+      box.style.display = '';
+      if (!canvas) { try { init(); } catch (e) { document.getElementById('view3dNote').textContent = '3D view failed: ' + e.message; return; } }
+      if (!ready) return;
+      const keep = current;
+      sets = data;
+      const select = document.getElementById('view3dSet');
+      select.innerHTML = data.map((d, i) => `<option value="${i}">${d.label}</option>`).join('');
+      current = keep < data.length ? keep : 0;
+      select.value = current;
+      updateLabel();
+      const old = scale;
+      rebuild();
+      if (!framed || Math.abs(old - scale) > 1e-6) { frame(); framed = true; }
+      request();
+    },
+  };
+})();
+
+
 const ids = ['thickness','hardness','brittleness','caliber','mass','speed','shellHardness','angle','azimuth','threads','seed','energyScale','mapPxPerM'];
 const defaults = { thickness:20, hardness:100, brittleness:50, caliber:75, mass:0, speed:800, shellHardness:100, angle:0, azimuth:0, threads:0, seed:1, energyScale:1, quality:1, mapPxPerM:120 };
 const presets = [[20,'20 mm autocannon'],[30,'30 mm'],[37,'37 mm'],[45,'45 mm'],[57,'57 mm'],[75,'75 mm'],[88,'88 mm'],[100,'100 mm'],[105,'105 mm'],[122,'122 mm'],[152,'152 mm']];
@@ -190,6 +479,7 @@ function show(res) {
       ${img(res.images.anaSection, 'section')}
     </div>
     <p class="note">Blue = see-through hole. Light from the upper left. Dents look dark, bumps look warm.</p>`;
+  View3D.load(res.plate3d);
 }
 
 async function run() {

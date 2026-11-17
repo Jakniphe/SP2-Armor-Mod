@@ -1,4 +1,4 @@
-# Armor impact lab
+﻿# Armor impact lab
 
 A program to try the mod's impact simulation outside the game, with different armor, ammunition, angle and speed.
 It compiles the mod's own simulation (`Armor Mod/Sim/`), energy model (`EnergyModel.cs`), ammunition and tag code and
@@ -37,6 +37,8 @@ It prints the address (http://localhost:5057) and opens the page.
   free, so a busy thread simply takes fewer. Small grids (low quality) are not worth threading.
 
 - **Plate map** (pixels per meter; the game gives 120 to a vehicle with many plates): the grid is never finer than the map can show, as in the game (the Grid line says when the map limited it), and the "as the game draws it" pictures use that density. **Cracks in the marks** and **Smooth, ragged hole edges** are the mod's `SimCracks` and `SimSmoothEdges`.
+
+- **The plate in 3D:** below the result there is a three-dimensional view of the plate (a small WebGL viewer, no libraries; needs a browser or WebView2 with WebGL 2): left drag rotates, right drag or Shift + drag pans, the wheel zooms, double-click resets. It shows what the game draws, the simulation's own grid, or the quick marks; holes are cut through with the walls the shell left, and a slider exaggerates the depth (the plate keeps its real thickness). Buttons: top, side (a section through the impact), back.
 
 ## What the lab does NOT show
 The real geometry (the finer mesh around holes: `tools/mesher-test` checks that offline), the atlases (their mip levels too: `tools/mesher-test` checks that the levels are aligned and averaged correctly), the marks sent to other players, and the game's own rendering, decals and textures. Those need the game. What the lab does show of the newest changes: the depth limit (a dent never goes deeper than 60% of the plate, however many shots) is in the maps it draws.
