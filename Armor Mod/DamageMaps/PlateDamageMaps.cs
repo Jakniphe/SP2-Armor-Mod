@@ -383,6 +383,10 @@ namespace ArmorFragments
             delay = RealTime(delay, false);
             if (!Visuals || part == null || part.Aircraft == null || part.Aircraft.LoadContext != CraftLoadContext.Flight) return;
 
+            // A fragment's pit is small and there are hundreds: it goes only on a plate that a shell has already marked. A plate that only a fragment
+            // touched is left as the game draws it (setting it up for a pit gave it a tile and switched it to the Lit material, and the atlas filled up
+            // with plates nobody could tell had been hit).
+            if (!AlreadyMarked(part)) return;
             PlateInfo info = InfoOf(part);
             if (info == null) return;
 
@@ -569,6 +573,7 @@ namespace ArmorFragments
                     float share = 0.5f * (1f - distance[other] / 0.3f);
                     float neighborDepth = depth * share;
                     if (neighborDepth < 0.0008f) continue;
+                    if (!AlreadyMarked(other)) continue;   // a plate nobody has marked is not set up just to bend a little
                     PlateInfo info = InfoOf(other);
                     if (info == null) continue;
 
@@ -583,6 +588,15 @@ namespace ArmorFragments
                     ShowOn(other, new[] { flex }, 0f, 0);   // a Flex asks for no flexing of its own neighbors
                 }
             }
+        }
+
+        // Has this plate been set up for marks already (a shell hit it)?
+        private static bool AlreadyMarked(PartScript part)
+        {
+            VehicleMaps maps;
+            PlateVisual plate;
+            return part != null && part.Aircraft != null && Vehicles.TryGetValue(part.Aircraft, out maps) && !maps.Disposed &&
+                   maps.Plates.TryGetValue(part, out plate) && plate.Applied && !plate.Failed;
         }
 
         private static VehicleMaps VehicleFor(AircraftScript aircraft)
