@@ -374,6 +374,8 @@ namespace ArmorFragments.UI
             builder.Header("Damage maps", collapsed: true);
             ToggleSetting(ArmorFragmentsPlugin.DamageMapsEnabled, "Marks on armor",
                 "Shots leave dents, holes, grooves and pits on armor plates.");
+            ToggleSetting(ArmorFragmentsPlugin.DamageMapsPaintDamage, "Scorched and flaked paint",
+                "Marks scorch the paint and knock it off, showing steel. Marked plates are drawn with the Lit shader in their paint's color. Applies to the next vehicle that gets marks (Clear starts over).");
             ToggleSetting(ArmorFragmentsPlugin.DamageMapsShareMarks, "Share marks with other players",
                 "In multiplayer, send the marks of your shots to the other players who have the mod, and draw theirs. Players without the mod see nothing.");
             ToggleSetting(ArmorFragmentsPlugin.DamageMapsSimulatedShots, "Marks on simulated shots",

@@ -74,6 +74,7 @@ namespace ArmorFragments
             float pixel = 1f / Mathf.Max(cpu.PxU, cpu.PxV);
             float grooveDepth = Mathf.Clamp(0.04f * impact.Caliber, 0.0004f, 0.002f);   // meters at a full crack
             float ragged = smooth ? 0.10f + 0.20f * Mathf.Clamp01(impact.PlateBrittleness) : 0f;
+            float rimWidth = Mathf.Max(impact.Caliber * 0.12f, pixel * 1.5f);
 
             // How the plate fails where a shell goes through: tearing into petals that fold outward, or shearing out a plug with a clean edge.
             bool through = impact.Kind == DamageKind.Penetrated && sim.HoleRadiusM > 0f;
@@ -106,6 +107,13 @@ namespace ArmorFragments
                         if (distance != null)
                         {
                             float d = Sample(distance, n, i, j, fx, fy) - ragged * Noise(x, y, impact.Seed) * sim.Cell - edgeShift;
+                            // Round the edge of a hole the paint is gone and the steel shows (a bright rim, brightest at the edge).
+                            if (cpu.PaintMode && d >= 0f && d < rimWidth)
+                            {
+                                byte rim = (byte)Mathf.RoundToInt(255f * (1f - d / rimWidth));
+                                if (rim > faceIn.Bare[idx]) faceIn.Bare[idx] = rim;
+                                if (rim > faceOut.Bare[idx]) faceOut.Bare[idx] = rim;
+                            }
                             float value = Mathf.Clamp(128f + d / pixel * 128f, 0f, 255f);
                             if (value < 255f)
                             {
@@ -133,6 +141,7 @@ namespace ArmorFragments
             PlateStamps.Dirty(faceOut, x0, y0, x1, y1, anyHole);
             if (through && anyHole) ShapeExit(cpu, faceIn, faceOut, impact, sim, petalAmount, plugAmount);
             PlateStamps.LimitDepth(cpu, impact.Thickness);
+            PlateStamps.PaintImpact(cpu, impact);
         }
 
         // 0 = it tears into petals, 1 = it shears out a plug. A pointed nose, a thin ductile plate: petals. A flat nose, a thick or brittle

@@ -62,6 +62,7 @@
       <div class="row"><label>Mass <small>kg (0 = what the game gives that caliber)</small><input type="range" id="massR" min="0" max="60" step="0.1"></label><input type="number" id="mass" step="0.1"></div>
       <div class="row"><label>Speed <small>m/s</small><input type="range" id="speedR" min="50" max="2000" step="10"></label><input type="number" id="speed"></div>
       <div class="row"><label>Shell hardness <small>%</small><input type="range" id="shellHardnessR" min="10" max="300" step="5"></label><input type="number" id="shellHardness"></div>
+      <div class="row full"><label>Plate paint <small>the marks scorch it and flake it off (see the 3D view)</small> <input type="color" id="paint" value="#6b7352" style="width:100%; height:30px; padding:0"></label></div>
       <div class="row full"><label>Nose shape <small>how the metal is pushed aside; what the shell pays for it does not change</small>
         <select id="nose"><option value="ap">AP: pointed and round (ogive)</option><option value="aphe">APHE: fuller</option><option value="he">HE: short and nearly flat</option><option value="legacy">The old hemisphere</option><option value="custom">Your own (procedural)</option></select></label></div>
       <div class="row"><label>Nose length <small>shell radii (custom)</small><input type="number" id="noseLength" step="0.05" min="0.05"></label><label>Fullness <small>1 cone, 2 ellipse, 3+ blunt (custom)</small><input type="number" id="noseFullness" step="0.05" min="1"></label></div>
@@ -187,6 +188,7 @@ const View3D = (() => {
   function build(set, exaggeration) {
     const n = set.n, cell = set.cell, t = set.thickness;
     const F = decode16(set.front), B = decode16(set.back), H = decode8(set.hole);
+    const FC = set.frontColor ? decode8(set.frontColor) : null, BC = set.backColor ? decode8(set.backColor) : null;
     const c = (n - 1) / 2;
     const px = i => (i - c) * cell, py = j => -(j - c) * cell;
     const zf = (i, j) => t / 2 + F[j * n + i] * 1e-5 * exaggeration;
@@ -206,8 +208,9 @@ const View3D = (() => {
           const nn = side === 0 ? norm([-dzdx, -dzdy, 1]) : norm([dzdx, dzdy, -1]);
           positions.push(px(i), py(j), z(i, j));
           normals.push(nn[0], nn[1], nn[2]);
-          const col = side === 0 ? frontColor : backColor;
-          colors.push(col[0], col[1], col[2]);
+          const own = side === 0 ? FC : BC;
+          if (own) { const k = 3 * (j * n + i); colors.push(own[k] / 255, own[k + 1] / 255, own[k + 2] / 255); }
+          else { const col = side === 0 ? frontColor : backColor; colors.push(col[0], col[1], col[2]); }
         }
       }
     }
@@ -408,6 +411,7 @@ function read() {
   const s = {};
   ids.forEach(id => s[id] = parseFloat($(id).value) || 0);
   s.quality = parseInt($('quality').value);
+  s.paint = $('paint').value;
   s.nose = $('nose').value;
   s.noseLength = parseFloat($('noseLength').value) || 1.4;
   s.noseFullness = parseFloat($('noseFullness').value) || 1.95;
@@ -420,6 +424,7 @@ function read() {
 function write(s) {
   ids.forEach(id => { $(id).value = s[id]; $(id + 'R').value = s[id]; });
   $('quality').value = s.quality;
+  $('paint').value = s.paint || '#6b7352';
   $('nose').value = s.nose || 'ap';
   $('noseLength').value = s.noseLength || 1.4;
   $('noseFullness').value = s.noseFullness || 1.95;
@@ -538,7 +543,7 @@ async function scaling() {
   write(Object.assign({}, defaults, saved));
   sel.addEventListener('change', () => { if (sel.value) { $('caliber').value = $('caliberR').value = sel.value; store(); } });
   $('quality').addEventListener('change', store);
-  ['nose', 'noseLength', 'noseFullness'].forEach(id => { $(id).addEventListener('change', store); $(id).addEventListener('input', store); });
+  ['paint', 'nose', 'noseLength', 'noseFullness'].forEach(id => { $(id).addEventListener('change', store); $(id).addEventListener('input', store); });
   $('gpu').addEventListener('change', store);
   $('cracks').addEventListener('change', store);
   $('smooth').addEventListener('change', store);

@@ -72,10 +72,14 @@ namespace ArmorFragments
         {
             public float[] Height;
             public byte[] Mask;
+            public byte[] Soot;   // 0..255: how scorched the paint is (the blast and the heat of a hit)
+            public byte[] Bare;   // 0..255: how much of the paint has flaked off, showing the steel
             public int X0 = int.MaxValue, Y0 = int.MaxValue, X1 = -1, Y1 = -1;   // what changed since the last flush
             public bool HoleDirty;
         }
 
+        public bool PaintMode;          // marks also change the color (the plate is drawn from the hole atlas, which carries its whole color)
+        public Vector3 Paint = new Vector3(0.5f, 0.5f, 0.5f);   // the plate's paint (sRGB, 0..1): what the colors of its marks start from
         public float Thickness;         // the plate's own thickness (meters, before any dent thinned it): what the depth limit is a share of
         public int Width, Height;       // the tile's size in pixels, the same for both faces
         public float PxU, PxV;          // pixels per meter inside the border
@@ -88,7 +92,7 @@ namespace ArmorFragments
             Face face = Faces[index];
             if (face == null)
             {
-                face = new Face { Height = new float[Width * Height], Mask = new byte[Width * Height] };
+                face = new Face { Height = new float[Width * Height], Mask = new byte[Width * Height], Soot = new byte[Width * Height], Bare = new byte[Width * Height] };
                 for (int i = 0; i < face.Mask.Length; i++) face.Mask[i] = 255;
                 Faces[index] = face;
             }
@@ -165,6 +169,134 @@ namespace ArmorFragments
                 }
             }
             LimitDepth(cpu, impact.Thickness);
+            PaintImpact(cpu, impact);
+        }
+
+        // ---- Paint: scorching and flaked-off paint (the look of a mark, apart from its shape) ----
+
+        // A hit scorches the paint around it and knocks it off where the metal is struck, showing bare steel (brighter, with uneven edges); a
+        // blast scorches a wide area; a ricochet leaves a streak of bare metal. Added to the plate's soot and bare-steel fields, which
+        // become color when the maps are handed over (PixelColor). Used both for the quick marks and for the simulation's.
+        public static void PaintImpact(PlateCpu cpu, PlateImpact impact)
+        {
+            if (!cpu.PaintMode) return;
+            Vector2 dir = new Vector2(impact.DirU, impact.DirV);
+            if (dir.sqrMagnitude < 0.0001f) dir = new Vector2(1f, 0f);
+            dir.Normalize();
+            float caliber = Mathf.Max(impact.Caliber, 0.002f);
+            float strength = Mathf.Clamp01(impact.Strength);
+            int entry = impact.Front ? 0 : 1, exit = 1 - entry;
+            float angle = Mathf.Clamp(impact.Angle, 0f, 85f) * Mathf.Deg2Rad;
+
+            switch (impact.Kind)
+            {
+                case DamageKind.Blocked:
+                    Splash(cpu, cpu.Get(entry), impact.U, impact.V, caliber * 1.6f, 0.30f + 0.40f * strength, caliber * (1.0f + 0.5f * strength), 1f, impact.Seed);
+                    break;
+                case DamageKind.Penetrated:
+                {
+                    Splash(cpu, cpu.Get(entry), impact.U, impact.V, caliber * 1.8f, 0.40f + 0.30f * strength, caliber * 1.4f, 1f, impact.Seed);
+                    // The way out is the hotter side: the shell and the torn metal leave it black, and the paint flakes round the hole.
+                    float lateral = Mathf.Min(impact.Thickness * Mathf.Tan(angle), 0.6f);
+                    Splash(cpu, cpu.Get(exit), impact.U + dir.x * lateral, impact.V + dir.y * lateral, caliber * 1.5f, 0.65f + 0.30f * strength, caliber * 1.1f, 1f, impact.Seed + 1);
+                    break;
+                }
+                case DamageKind.Ricochet:
+                {
+                    float length = Mathf.Clamp(caliber * (1.5f + 8f * (impact.Angle / 90f) * (impact.Angle / 90f)), 0.02f, 1f);
+                    float step = Mathf.Max(caliber * 0.35f, 0.004f);
+                    int count = Mathf.Clamp(Mathf.CeilToInt(length / step), 1, 80);
+                    for (int i = 0; i <= count; i++)
+                    {
+                        float t = (float)i / count;
+                        Splash(cpu, cpu.Get(entry), impact.U + dir.x * length * t, impact.V + dir.y * length * t, caliber * 0.9f, 0.18f, caliber * 0.5f, 1f - 0.5f * t, impact.Seed + i);
+                    }
+                    break;
+                }
+                case DamageKind.Burst:
+                    // The blast scorches a wide area and blows some of the paint off in its middle.
+                    Splash(cpu, cpu.Get(entry), impact.U, impact.V, caliber * 2.4f, 0.50f + 0.30f * strength, caliber * 1.2f, 0.55f, impact.Seed);
+                    break;
+                case DamageKind.Pit:
+                    Splash(cpu, cpu.Get(entry), impact.U, impact.V, caliber * 1.0f, 0f, caliber * 1.1f, 1f, impact.Seed);
+                    break;
+                case DamageKind.SmallHole:
+                    Splash(cpu, cpu.Get(entry), impact.U, impact.V, caliber * 1.0f, 0.15f, caliber * 1.3f, 1f, impact.Seed);
+                    Splash(cpu, cpu.Get(exit), impact.U, impact.V, caliber * 1.0f, 0.25f, caliber * 1.3f, 1f, impact.Seed + 1);
+                    break;
+            }
+        }
+
+        // Soot (soft, dark, patchy) of radius 'radius' and flaked paint (a ragged-edged patch of bare steel) of radius 'chipRadius'.
+        private static void Splash(PlateCpu c, PlateCpu.Face f, float cu, float cv, float radius, float soot, float chipRadius, float chipAmount, int seed)
+        {
+            float extent = Mathf.Max(radius * 2f, chipRadius) * 1.1f;
+            int x0, y0, x1, y1;
+            if (!Region(c, cu, cv, extent, out x0, out y0, out x1, out y1)) return;
+
+            for (int y = y0; y < y1; y++)
+            {
+                for (int x = x0; x < x1; x++)
+                {
+                    int at = y * c.Width + x;
+                    float dx = (x + 0.5f - PlateCpu.Border) / c.PxU - cu;
+                    float dy = (y + 0.5f - PlateCpu.Border) / c.PxV - cv;
+                    float dist = Mathf.Sqrt(dx * dx + dy * dy);
+
+                    if (soot > 0f)
+                    {
+                        float rho = dist / radius;
+                        if (rho < 2f)
+                        {
+                            float s = soot * Mathf.Exp(-rho * rho * 1.2f) * (0.7f + 0.6f * ValueNoise(x * 0.45f, y * 0.45f, seed));
+                            int value = f.Soot[at] + Mathf.RoundToInt(Mathf.Clamp01(s) * 255f);
+                            f.Soot[at] = (byte)Mathf.Min(value, 255);
+                        }
+                    }
+                    if (chipAmount > 0f && dist < chipRadius)
+                    {
+                        // The flakes: bare in the middle, patchy toward the edge (the noise decides which bits of the paint hold on).
+                        float chip = (1f - dist / chipRadius) * 1.7f - 0.55f * ValueNoise(x * 0.6f + 17f, y * 0.6f + 5f, seed + 11);
+                        chip = Mathf.Clamp01(chip * 1.5f) * chipAmount;
+                        int value = Mathf.RoundToInt(chip * 255f);
+                        if (value > f.Bare[at]) f.Bare[at] = (byte)value;
+                    }
+                }
+            }
+            Dirty(f, x0, y0, x1, y1, true);
+        }
+
+        // Smooth noise in 0..1 on a lattice of one unit (the same for the same seed).
+        private static float ValueNoise(float x, float y, int seed)
+        {
+            int ix = Mathf.FloorToInt(x), iy = Mathf.FloorToInt(y);
+            float tx = x - ix, ty = y - iy;
+            tx = tx * tx * (3f - 2f * tx);
+            ty = ty * ty * (3f - 2f * ty);
+            float a = Hash(ix * 374761393 + iy * 668265263 + seed * 1442695041);
+            float b = Hash((ix + 1) * 374761393 + iy * 668265263 + seed * 1442695041);
+            float cc = Hash(ix * 374761393 + (iy + 1) * 668265263 + seed * 1442695041);
+            float d = Hash((ix + 1) * 374761393 + (iy + 1) * 668265263 + seed * 1442695041);
+            return (a * (1f - tx) + b * tx) * (1f - ty) + (cc * (1f - tx) + d * tx) * ty;
+        }
+
+        // The color of one pixel of a face, as the plate's own paint changed by its marks: paint, flaked toward steel, scorched toward soot.
+        public static void PixelColor(PlateCpu c, PlateCpu.Face f, int index, out byte r, out byte g, out byte b)
+        {
+            float bare = f != null && f.Bare != null ? f.Bare[index] / 255f : 0f;
+            float soot = f != null && f.Soot != null ? f.Soot[index] / 255f : 0f;
+            if (bare <= 0f && soot <= 0f)
+            {
+                r = (byte)Mathf.RoundToInt(c.Paint.x * 255f); g = (byte)Mathf.RoundToInt(c.Paint.y * 255f); b = (byte)Mathf.RoundToInt(c.Paint.z * 255f);
+                return;
+            }
+            float v = 0.92f + 0.16f * Hash(index);   // bare steel is never quite even
+            float rr = Mathf.Lerp(c.Paint.x, 0.66f * v, bare), gg = Mathf.Lerp(c.Paint.y, 0.67f * v, bare), bb = Mathf.Lerp(c.Paint.z, 0.71f * v, bare);
+            float s = Mathf.Clamp01(soot) * 0.92f * (1f - 0.65f * bare);   // soot clings less to bare steel
+            rr = rr * (1f - s) + 0.07f * s; gg = gg * (1f - s) + 0.062f * s; bb = bb * (1f - s) + 0.055f * s;
+            r = (byte)Mathf.Clamp(Mathf.RoundToInt(rr * 255f), 0, 255);
+            g = (byte)Mathf.Clamp(Mathf.RoundToInt(gg * 255f), 0, 255);
+            b = (byte)Mathf.Clamp(Mathf.RoundToInt(bb * 255f), 0, 255);
         }
 
         // Marks add up (a shot on an old dent digs a new one on top), but a plate cannot be dented deeper than it is thick: the heights are held
@@ -358,7 +490,7 @@ namespace ArmorFragments
         // and, if asked, the bump map and the damage view). 'everything' marks the whole of every face that has any damage as changed
         // (what a stream that has just been switched on needs, to catch up).
         public static void Flush(PlateCpu c, PlateVisual plate, VehicleMaps owner, float deliverAt, List<Delivery> output,
-                                 bool height = false, bool damage = false, bool everything = false)
+                                 bool height = false, bool damage = false, bool everything = false, bool paint = false)
         {
             for (int index = 0; index < 2; index++)
             {
@@ -366,7 +498,7 @@ namespace ArmorFragments
                 if (f != null && everything)
                 {
                     f.X0 = 0; f.Y0 = 0; f.X1 = c.Width; f.Y1 = c.Height;
-                    f.HoleDirty = f.HoleDirty || HasHole(f);   // the hole atlas only exists if there is a hole to put in it
+                    f.HoleDirty = f.HoleDirty || paint || HasHole(f);   // the hole atlas only exists if there is a hole (or paint) to put in it
                 }
                 if (f == null || f.X1 < 0) continue;
 
@@ -462,7 +594,8 @@ namespace ArmorFragments
                         for (int x = x0; x < x1; x++)
                         {
                             int at = ((y - y0) * w + (x - x0)) * 4;
-                            mask[at] = 255; mask[at + 1] = 255; mask[at + 2] = 255;
+                            if (paint) PixelColor(c, f, y * c.Width + x, out mask[at], out mask[at + 1], out mask[at + 2]);
+                            else { mask[at] = 255; mask[at + 1] = 255; mask[at + 2] = 255; }
                             mask[at + 3] = f.Mask[y * c.Width + x];
                         }
                     }

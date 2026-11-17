@@ -94,6 +94,7 @@ namespace ArmorFragments
         internal static ConfigEntry<float> DefaultFuse;
         internal static ConfigEntry<bool> KeepPlatesApart;          // local: armor plates keep their own renderer in flight
         internal static ConfigEntry<bool> DamageMapsEnabled;        // local: marks on the plates
+        internal static ConfigEntry<bool> DamageMapsPaintDamage;    // local: marks scorch the paint and flake it off, showing steel (marked plates are drawn with the Lit shader)
         internal static ConfigEntry<bool> DamageMapsShareMarks;     // local: send the marks of my shots to the other players, and draw theirs
         internal static ConfigEntry<bool> DamageMapsSimulatedShots; // local: the simulated shot leaves (visual only) marks too
         internal static ConfigEntry<bool> DamageMapsWeakenArmor;    // global: holes let shots through, dents thin the plate
@@ -397,6 +398,11 @@ namespace ArmorFragments
                 "Needed for the damage maps: a merged plate cannot be changed. Takes effect when a flight starts.");
             DamageMapsEnabled = Config.Bind("DamageMaps", "Enabled", true,
                 "Shots leave marks on armor plates: dents, holes, grooves and pits, drawn into the plate's normal map and hole mask.");
+            DamageMapsPaintDamage = Config.Bind("DamageMaps", "PaintDamage", true,
+                "Marks also change the plate's COLOR: the paint is scorched dark around a hit and flakes off where the metal was struck, showing bright " +
+                "steel (and a bright rim round holes). Plates with marks are then drawn with the Lit shader in their paint's color (a plate with a pattern " +
+                "or a texture loses it). Takes effect for the next vehicle that gets marks (the panel's Clear button starts over).")
+            ;
             DamageMapsShareMarks = Config.Bind("DamageMaps", "ShareMarks", true,
                 "In multiplayer, the marks of the shells you shoot at another player's vehicle are sent to the other players who have the mod " +
                 "(and to the player who was shot), and theirs are drawn on your screen and your vehicle. Players without the mod see nothing of it.");

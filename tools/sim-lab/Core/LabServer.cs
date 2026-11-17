@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
@@ -27,6 +27,7 @@ namespace SimLab
         public float Mass { get; set; } = 0;            // kg; 0 = what the game gives a shell of that caliber
         public float Speed { get; set; } = 800;         // m/s
         public float ShellHardness { get; set; } = 100; // %
+        public string Paint { get; set; } = "#6b7352";  // the plate's paint (the marks scorch it and flake it off)
         public string Nose { get; set; } = "ap";        // the shape of the shell's nose: legacy (the old hemisphere), ap, aphe, he, or custom
         public float NoseLength { get; set; } = 1.4f;   // custom: the nose's length in shell radii
         public float NoseFullness { get; set; } = 1.95f;// custom: its exponent (1 = cone, 2 = ellipse, more = blunter)
@@ -226,10 +227,10 @@ namespace SimLab
 
             // What the game would draw: the simulation laid into a plate tile (256 px per meter), or the quick marks if the
             // simulation does not agree with the model (as the game does).
-            float[] gameFront, gameBack; byte[] gameHole; int gameN;
+            float[] gameFront, gameBack; byte[] gameHole; int gameN; byte[] gameFrontColor, gameBackColor;
             DamageKind kind = verdict == "Ricochet" ? DamageKind.Ricochet : (verdict == "Blocked" ? DamageKind.Blocked : DamageKind.Penetrated);
             bool agrees = SimBridge.Agrees(kind, sim);
-            InGame(s, input, kind, energy, absorbed, kept, sim, agrees, out gameFront, out gameBack, out gameHole, out gameN);
+            InGame(s, input, kind, energy, absorbed, kept, sim, agrees, out gameFront, out gameBack, out gameHole, out gameN, out gameFrontColor, out gameBackColor);
 
             object picture = null;
             if (images)
@@ -287,7 +288,7 @@ namespace SimLab
                 // the plate itself, for the three-dimensional view: what the game draws, the simulation's own grid, the quick marks
                 plate3d = view3d ? new[]
                 {
-                    Pack3D("As the game draws it", gameFront, gameBack, gameHole, gameN, 1f / Math.Min(Math.Max(s.MapPxPerM, 32f), 1024f), input.ThicknessM),
+                    Pack3D("As the game draws it", gameFront, gameBack, gameHole, gameN, 1f / Math.Min(Math.Max(s.MapPxPerM, 32f), 1024f), input.ThicknessM, 240, gameFrontColor, gameBackColor),
                     Pack3D("The simulation's own grid", sim.Front, sim.Back, sim.Hole, sim.N, sim.Cell, input.ThicknessM),
                     Pack3D("The quick marks (what the mod drew before the simulation)", anaFront, anaBack, anaHole, sim.N, sim.Cell, input.ThicknessM),
                 } : null,
@@ -296,10 +297,12 @@ namespace SimLab
 
         // A plate's heights as the page's viewer wants them: the middle (at most 'limit' pixels a side) of the front's and the back's height
         // fields (16-bit, in units of 10 micrometers) and the hole mask (0 = hole), each as base64.
-        private static object Pack3D(string label, float[] front, float[] back, byte[] hole, int n, float cell, float thickness, int limit = 240)
+        private static object Pack3D(string label, float[] front, float[] back, byte[] hole, int n, float cell, float thickness, int limit = 240,
+                                     byte[] frontColor = null, byte[] backColor = null)
         {
             int w = Math.Min(n, limit), x0 = (n - w) / 2, y0 = (n - w) / 2;
             byte[] f = new byte[w * w * 2], b = new byte[w * w * 2], h = new byte[w * w];
+            byte[] fc = frontColor != null ? new byte[w * w * 3] : null, bc = backColor != null ? new byte[w * w * 3] : null;
             for (int j = 0; j < w; j++)
             {
                 for (int i = 0; i < w; i++)
@@ -310,9 +313,18 @@ namespace SimLab
                     f[2 * dst] = (byte)(fv & 0xFF); f[2 * dst + 1] = (byte)((fv >> 8) & 0xFF);
                     b[2 * dst] = (byte)(bv & 0xFF); b[2 * dst + 1] = (byte)((bv >> 8) & 0xFF);
                     h[dst] = hole[src];
+                    for (int k = 0; k < 3; k++)
+                    {
+                        if (fc != null) fc[3 * dst + k] = frontColor[3 * src + k];
+                        if (bc != null) bc[3 * dst + k] = backColor[3 * src + k];
+                    }
                 }
             }
-            return new { label, n = w, cell, thickness, front = Convert.ToBase64String(f), back = Convert.ToBase64String(b), hole = Convert.ToBase64String(h) };
+            return new
+            {
+                label, n = w, cell, thickness, front = Convert.ToBase64String(f), back = Convert.ToBase64String(b), hole = Convert.ToBase64String(h),
+                frontColor = fc != null ? Convert.ToBase64String(fc) : null, backColor = bc != null ? Convert.ToBase64String(bc) : null,
+            };
         }
 
         // The analytic stamp of the same impact, as arrays of the same size as the simulation's.
@@ -355,12 +367,14 @@ namespace SimLab
         // The same thing the game does with a finished simulation: lays it into the plate's tile (or, if it disagrees with the
         // energy model, draws the quick marks), then reads the tile back as arrays.
         private static void InGame(Scenario s, ImpactSimInput input, DamageKind kind, float energy, float absorbed, float kept,
-                                   ImpactSimResult sim, bool agrees, out float[] front, out float[] back, out byte[] hole, out int n)
+                                   ImpactSimResult sim, bool agrees, out float[] front, out float[] back, out byte[] hole, out int n,
+                                   out byte[] frontColor, out byte[] backColor)
         {
             const float plate = 1.0f;
             float density = Math.Min(Math.Max(s.MapPxPerM, 32f), 1024f);   // the map's pixels per meter, as the game's plate has it
             n = (int)(plate * density);
-            PlateCpu cpu = new PlateCpu { Width = n + 2 * PlateCpu.Border, Height = n + 2 * PlateCpu.Border, PxU = n / plate, PxV = n / plate };
+            PlateCpu cpu = new PlateCpu { Width = n + 2 * PlateCpu.Border, Height = n + 2 * PlateCpu.Border, PxU = n / plate, PxV = n / plate, PaintMode = true };
+            cpu.Paint = ParsePaint(s.Paint);
             float strength = kind == DamageKind.Blocked ? Math.Min(1f, energy / Math.Max(absorbed, 1f))
                            : kind == DamageKind.Penetrated ? Math.Min(1f, absorbed / Math.Max(energy, 1f)) : 1f - kept;
             PlateImpact impact = new PlateImpact
@@ -373,6 +387,7 @@ namespace SimLab
             if (agrees) SimBridge.Apply(cpu, impact, sim, s.Cracks, s.Smooth); else PlateStamps.Apply(cpu, impact);
 
             front = new float[n * n]; back = new float[n * n]; hole = new byte[n * n];
+            frontColor = new byte[n * n * 3]; backColor = new byte[n * n * 3];
             for (int i = 0; i < hole.Length; i++) hole[i] = 255;
             PlateCpu.Face f0 = cpu.Faces[0], f1 = cpu.Faces[1];
             for (int j = 0; j < n; j++)
@@ -380,10 +395,26 @@ namespace SimLab
                 for (int i = 0; i < n; i++)
                 {
                     int at = (j + PlateCpu.Border) * cpu.Width + (i + PlateCpu.Border);
-                    if (f0 != null) { front[j * n + i] = f0.Height[at]; if (f0.Mask[at] < 128) hole[j * n + i] = 0; }
-                    if (f1 != null) { back[j * n + i] = f1.Height[at]; if (f1.Mask[at] < 128) hole[j * n + i] = 0; }
+                    int dst = j * n + i;
+                    if (f0 != null) { front[dst] = f0.Height[at]; if (f0.Mask[at] < 128) hole[dst] = 0; }
+                    if (f1 != null) { back[dst] = f1.Height[at]; if (f1.Mask[at] < 128) hole[dst] = 0; }
+                    PlateStamps.PixelColor(cpu, f0, at, out frontColor[3 * dst], out frontColor[3 * dst + 1], out frontColor[3 * dst + 2]);
+                    PlateStamps.PixelColor(cpu, f1, at, out backColor[3 * dst], out backColor[3 * dst + 1], out backColor[3 * dst + 2]);
                 }
             }
+        }
+
+        // "#rrggbb" to the 0..1 color the plate's paint is kept in.
+        private static UnityEngine.Vector3 ParsePaint(string text)
+        {
+            try
+            {
+                string hex = (text ?? "").TrimStart('#');
+                if (hex.Length == 6)
+                    return new UnityEngine.Vector3(Convert.ToInt32(hex.Substring(0, 2), 16) / 255f, Convert.ToInt32(hex.Substring(2, 2), 16) / 255f, Convert.ToInt32(hex.Substring(4, 2), 16) / 255f);
+            }
+            catch (Exception) { }
+            return new UnityEngine.Vector3(0.42f, 0.45f, 0.32f);
         }
 
         // ---- Sweeps -------------------------------------------------------------------------------
@@ -459,7 +490,7 @@ namespace SimLab
                 Thickness = s.Thickness, Hardness = s.Hardness, Brittleness = s.Brittleness, Caliber = s.Caliber, Mass = s.Mass,
                 Speed = s.Speed, ShellHardness = s.ShellHardness, Angle = s.Angle, Azimuth = s.Azimuth, Quality = s.Quality,
                 Threads = s.Threads, Seed = s.Seed, EnergyScale = s.EnergyScale,
-                Nose = s.Nose, NoseLength = s.NoseLength, NoseFullness = s.NoseFullness,
+                Nose = s.Nose, NoseLength = s.NoseLength, NoseFullness = s.NoseFullness, Paint = s.Paint,
             };
         }
 

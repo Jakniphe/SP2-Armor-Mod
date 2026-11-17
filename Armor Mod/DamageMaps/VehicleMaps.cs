@@ -27,6 +27,7 @@ namespace ArmorFragments
         public Texture2D Height;        // the bump map (made when the relief setting asks for it)
         public Texture2D DamageAtlas;   // the impact camera's damage view (made when that is switched on)
         public float Density;           // pixels per meter of the tiles
+        public bool PaintMode;          // marks change the plate's color too (the hole atlas then carries the plate's whole color, baked when it is made)
         public Material Clone;       // the game's part material with the normal atlas
         public float LastUsed;
         public bool Disposed;
@@ -101,13 +102,23 @@ namespace ArmorFragments
             }
             if (tiles == null) { LastFailure = "the plates do not fit in an atlas"; return null; }
 
-            VehicleMaps maps = new VehicleMaps(aircraft, theme) { AtlasSize = size, LastUsed = Time.time, Density = density };
+            VehicleMaps maps = new VehicleMaps(aircraft, theme) { AtlasSize = size, LastUsed = Time.time, Density = density, PaintMode = ArmorFragmentsPlugin.DamageMapsPaintDamage.Value };
+            Dictionary<PartScript, Vector3> paints = new Dictionary<PartScript, Vector3>();
             for (int i = 0; i < all.Count; i++)
             {
                 PlateInfo info = all[i];
                 int w = tiles[i][2], h = tiles[i][3];
+                Vector3 paint;
+                if (!paints.TryGetValue(info.Part, out paint))
+                {
+                    Color color; float metallic, smoothness;
+                    ReadPaint(theme, info.Part, out color, out metallic, out smoothness);
+                    paints[info.Part] = paint = new Vector3(color.r, color.g, color.b);
+                }
                 PlateCpu cpu = new PlateCpu
                 {
+                    Paint = paint,
+                    PaintMode = maps.PaintMode,
                     Width = w,
                     Height = h,
                     Thickness = info.ThicknessM,
@@ -236,6 +247,50 @@ namespace ArmorFragments
             return plate;
         }
 
+        // The plate's paint, as the game has it (the primary color of its first material), or a gray if it cannot be read.
+        public static void ReadPaint(ThemeScript theme, PartScript part, out Color color, out float metallic, out float smoothness)
+        {
+            color = new Color(0.5f, 0.5f, 0.5f, 1f);
+            metallic = 0f;
+            smoothness = 0.4f;
+            try
+            {
+                PartMaterial paint = theme.Theme.GetMaterial(part.Part.MaterialIds[0]);
+                if (paint != null && paint.ColorData != null && paint.ColorData.Length > 0)
+                {
+                    color = paint.PrimaryColor;
+                    color.a = 1f;
+                    metallic = paint.PrimaryColorMetallic;
+                    smoothness = paint.PrimaryColorSmoothness;
+                }
+            }
+            catch (Exception e)
+            {
+                ArmorFragmentsPlugin.Log.LogWarning("[DMAP] the plate's paint could not be read: " + e.Message);
+            }
+        }
+
+        // Paint mode: the hole atlas carries each plate's whole color, so every tile starts as that plate's paint (and the flat corner the
+        // sides of thin plates point to, as bare gray). Written straight into the texture's memory; the mip levels are made after.
+        private void BakePaint()
+        {
+            Unity.Collections.NativeArray<byte> raw = Alpha.GetRawTextureData<byte>();
+            foreach (PlateVisual plate in AllPlates())
+            {
+                PlateCpu c = plate.Cpu;
+                byte[] row = new byte[c.Width * 4];
+                FillPattern(row, (byte)Mathf.RoundToInt(c.Paint.x * 255f), (byte)Mathf.RoundToInt(c.Paint.y * 255f), (byte)Mathf.RoundToInt(c.Paint.z * 255f), 255);
+                for (int face = 0; face < 2; face++)
+                    for (int y = 0; y < c.Height; y++)
+                        Unity.Collections.NativeSliceExtensions.Slice(raw, ((c.TileY[face] + y) * AtlasSize + c.TileX[face]) * 4, c.Width * 4).CopyFrom(row);
+            }
+            byte[] gray = new byte[PlateCpu.Align * 4];
+            FillPattern(gray, 150, 152, 158, 255);
+            for (int y = 0; y < PlateCpu.Align; y++)
+                Unity.Collections.NativeSliceExtensions.Slice(raw, y * AtlasSize * 4, PlateCpu.Align * 4).CopyFrom(gray);
+            Alpha.Apply(true, false);
+        }
+
         // The hole atlas: white everywhere (the color comes from the material) with the mask in its alpha, 255 = solid.
         // It is RGBA, not Alpha8: an Alpha8 texture reads as black (0,0,0,a) on Direct3D, which painted the plate black.
         // Made when the first hole shows up, so vehicles that never get one do not pay for it.
@@ -244,6 +299,7 @@ namespace ArmorFragments
             if (Alpha != null) return;
             Alpha = new Texture2D(AtlasSize, AtlasSize, TextureFormat.RGBA32, PlateCpu.MipLevels, false) { wrapMode = TextureWrapMode.Clamp, name = "ArmorFragments damage holes" };
             FillTexture(Alpha, 255, 255, 255, 255);   // no holes
+            if (PaintMode) BakePaint();
         }
 
         // The bump map: the green channel is the height, 0.5 = flat. Made when the relief setting asks for it.
@@ -267,7 +323,7 @@ namespace ArmorFragments
             long started = System.Diagnostics.Stopwatch.GetTimestamp();
             string what = null;
             if (heightPending && Height == null) { EnsureHeight(); what = "bump map"; }
-            else if (Alpha == null && !ArmorFragmentsPlugin.DamageMapsGeometry.Value) { EnsureAlpha(); what = "hole map"; }
+            else if (Alpha == null && (PaintMode || !ArmorFragmentsPlugin.DamageMapsGeometry.Value)) { EnsureAlpha(); what = PaintMode ? "paint map" : "hole map"; }
             else if (DamageAtlas == null && ArmorFragmentsPlugin.ImpactCameraDamageView.Value) { EnsureDamage(); what = "damage view"; }
             if (what == null) return false;
             ArmorFragmentsPlugin.Log.LogInfo("[PERF] made the " + what + " atlas of '" + Aircraft.name + "' in its own frame: " + PerfMonitor.Since(started).ToString("F1") + " ms");
@@ -389,7 +445,7 @@ namespace ArmorFragments
                 w >>= 1; h >>= 1;
             }
 
-            if (d.Kind == AtlasKind.Hole && d.Plate != null && !d.Plate.UsesGeometry) d.Plate.EnsureLit();   // real geometry has real holes
+            if (d.Kind == AtlasKind.Hole && d.Plate != null && (PaintMode || !d.Plate.UsesGeometry)) d.Plate.EnsureLit();   // real geometry has real holes (but paint is drawn by the Lit shader)
             return watch.Elapsed.TotalMilliseconds;
         }
 
@@ -826,23 +882,10 @@ namespace ArmorFragments
             }
             Owner.EnsureAlpha();
 
-            Color color = new Color(0.5f, 0.5f, 0.5f, 1f);
-            float metallic = 0f, smoothness = 0.4f;
-            try
-            {
-                PartMaterial paint = Owner.Theme.Theme.GetMaterial(Info.Part.Part.MaterialIds[0]);
-                if (paint != null && paint.ColorData != null && paint.ColorData.Length > 0)
-                {
-                    color = paint.PrimaryColor;
-                    color.a = 1f;
-                    metallic = paint.PrimaryColorMetallic;
-                    smoothness = paint.PrimaryColorSmoothness;
-                }
-            }
-            catch (Exception e)
-            {
-                ArmorFragmentsPlugin.Log.LogWarning("[DMAP] the plate's paint could not be read: " + e.Message);
-            }
+            Color color;
+            float metallic, smoothness;
+            VehicleMaps.ReadPaint(Owner.Theme, Info.Part, out color, out metallic, out smoothness);
+            if (Owner.PaintMode) color = Color.white;   // the atlas carries the whole color
 
             Material material = new Material(lit);
             material.name = "ArmorFragments plate (Lit)";
@@ -1068,7 +1111,7 @@ namespace ArmorFragments
                     if (stopping) continue;    // nobody is left to take what this job makes
 
                     List<Delivery> output = new List<Delivery>();
-                    PlateStamps.Flush(job.Plate.Cpu, job.Plate, job.Owner, job.DeliverAt, output, job.Height, job.Damage, job.Everything);
+                    PlateStamps.Flush(job.Plate.Cpu, job.Plate, job.Owner, job.DeliverAt, output, job.Height, job.Damage, job.Everything, job.Owner.PaintMode);
                     foreach (Delivery d in output) Done.Enqueue(d);
 
                     // Real geometry: the plate's mesh is rewritten once the last job queued for it is done (the later jobs would
