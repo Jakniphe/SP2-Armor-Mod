@@ -390,6 +390,8 @@ namespace ArmorFragments.UI
                 "Cell size of the real geometry around holes and sharp features (cracks, rims), in millimeters. 0 = none. Smaller = sharper edges.", 0.5f, " mm");
             IntSetting(ArmorFragmentsPlugin.DamageMapsMaxKiloVertices, "Geometry vertex limit",
                 "Most vertices, in thousands, one plate's real geometry may have. A bigger plate gets a coarser grid.");
+            IntSetting(ArmorFragmentsPlugin.DamageMapsBudgetKiloVertices, "Geometry budget per vehicle",
+                "Most vertices, in thousands, all of a vehicle's damaged plates may have together. Too many makes every frame slow; plates marked after the budget is used get a coarser grid.");
             FloatSetting(ArmorFragmentsPlugin.GeometryStartPixels, "Geometry from (pixels)",
                 "Below this many pixels of error the maps are used. The error is the biggest push x tan(view angle) x pixels per meter.", 0.1f, " px");
             FloatSetting(ArmorFragmentsPlugin.GeometryFullPixels, "Full geometry at (pixels)",

@@ -523,7 +523,19 @@ namespace ArmorFragments
             job.Geometry = true;
             job.GridMeters = ArmorFragmentsPlugin.DamageMapsGridMm.Value * 0.001f;
             job.FineMeters = ArmorFragmentsPlugin.DamageMapsFineGridMm.Value * 0.001f;
-            job.MaxVertices = ArmorFragmentsPlugin.DamageMapsMaxKiloVertices.Value * 1000;
+            job.MaxVertices = VertexRoom(plate);
+        }
+
+        // How many vertices this plate's geometry may have: its own limit, but never more than half the vehicle's budget, and never more than
+        // what is left of that budget after the vehicle's other plates (a floor keeps a late plate from being left flat).
+        private static int VertexRoom(PlateVisual plate)
+        {
+            int own = ArmorFragmentsPlugin.DamageMapsMaxKiloVertices.Value * 1000;
+            int budget = ArmorFragmentsPlugin.DamageMapsBudgetKiloVertices.Value * 1000;
+            int others = 0;
+            foreach (PlateVisual other in plate.Owner.Plates.Values)
+                if (other != plate) others += other.GeometryVertices;
+            return Math.Max(3000, Math.Min(own, Math.Min(budget / 2, budget - others)));
         }
 
         // How many simulations may wait their turn. One shot that goes through several plates asks for one simulation per plate, so a fixed

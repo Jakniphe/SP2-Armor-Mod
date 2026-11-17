@@ -57,6 +57,7 @@ namespace ArmorFragments
         internal static ConfigEntry<int> DamageMapsMaxAtlas;         // local: the biggest atlas a vehicle's plates may share (2048 or 4096)
         internal static ConfigEntry<float> DamageMapsFineGridMm;     // local: the finer cell size around holes and sharp features (0 = none)
         internal static ConfigEntry<int> DamageMapsMaxKiloVertices;  // local: the most vertices one plate's geometry may have (thousands)
+        internal static ConfigEntry<int> DamageMapsBudgetKiloVertices;  // local: the most vertices all of a vehicle's plates may have together (thousands)
         internal static ConfigEntry<float> GeometryStartPixels, GeometryFullPixels;   // local: the transition from maps to geometry, in pixels of error
         internal static ConfigEntry<float> GeometryAngleStart, GeometryAngleFull;     // local: ... and in degrees of view angle
         internal static ConfigEntry<float> GeometryBlendSeconds;                      // local: ... and how fast it moves
@@ -430,9 +431,13 @@ namespace ArmorFragments
                 new ConfigDescription("Cell size of the real geometry around holes and sharp features (cracks, rims), in millimeters; the rest of " +
                     "the damage uses the grid above. 0 = no finer zone. Smaller = sharper hole edges, more vertices there.",
                     new AcceptableValueRange<float>(0f, 8f)));
-            DamageMapsMaxKiloVertices = Config.Bind("DamageMaps", "MaxKiloVertices", 120,
+            DamageMapsMaxKiloVertices = Config.Bind("DamageMaps", "MaxKiloVertices", 30,
                 new ConfigDescription("Most vertices (in thousands) one plate's real geometry may have; a bigger plate gets a coarser grid.",
                     new AcceptableValueRange<int>(10, 500)));
+            DamageMapsBudgetKiloVertices = Config.Bind("DamageMaps", "BudgetKiloVertices", 80,
+                new ConfigDescription("Most vertices (in thousands) ALL of one vehicle's damaged plates may have together. Past it the plates marked later get a coarser " +
+                    "grid. (In a test, 230 thousand vertices made frames take over a second; 180 thousand was still playable.)",
+                    new AcceptableValueRange<int>(10, 1000)));
             GeometryStartPixels = Config.Bind("DamageMaps", "GeometryStartPixels", 1f,
                 new ConfigDescription(
                     "Real geometry fades in with how much the maps would get wrong on screen: the biggest push x tan(view angle) x pixels " +
