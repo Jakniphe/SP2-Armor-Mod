@@ -833,6 +833,32 @@ namespace ArmorFragments
     // In flight a group of parts merges the meshes of its parts into one when it initializes. A plate that is merged has
     // no renderer of its own, so its look cannot be changed afterwards. With the setting on, armor plates are marked
     // "do not merge" just before that, and keep their own renderer (a few more draw calls).
+    // The group's own list is not always ready when it initializes (an AI vehicle's group may have no body yet, a part's renderer may be
+    // added later), and a plate that slips through is merged for good: "is merged into its group's mesh" in the log, and no marks. So the
+    // plate is also marked at the source: the moment its renderer is registered with its part's materials, an armor plate's renderer is
+    // registered as "do not merge".
+    [HarmonyPatch(typeof(PartMaterialScript), "AddRenderer", new[] { typeof(Renderer), typeof(Material[]), typeof(PartRendererMaterialType[]),
+        typeof(Texture2D[]), typeof(Texture2D[]), typeof(Texture2D[]), typeof(int[]), typeof(bool), typeof(bool), typeof(bool) })]
+    internal static class PlateRendererPatch
+    {
+        private static void Prefix(PartMaterialScript __instance, ref bool excludeFromCombine)
+        {
+            try
+            {
+                if (excludeFromCombine || !ArmorFragmentsPlugin.KeepPlatesApart.Value) return;
+                PartScript part = __instance.GetComponent<PartScript>();
+                if (part == null || part.Part == null) return;
+                AircraftScript aircraft = part.Aircraft;
+                if (aircraft != null && aircraft.LoadContext != CraftLoadContext.Flight) return;
+                if (TagCodec.Parse(part.Part.Name).Armor != null) excludeFromCombine = true;
+            }
+            catch (Exception e)
+            {
+                ArmorFragmentsPlugin.Log.LogWarning("[DMAP] plate renderer patch failed: " + e.Message);
+            }
+        }
+    }
+
     [HarmonyPatch(typeof(PartGroupScript), "Initialize")]
     internal static class PlateMergePatch
     {

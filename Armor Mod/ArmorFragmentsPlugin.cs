@@ -162,6 +162,8 @@ namespace ArmorFragments
                 attachMenuAt = -1f;
                 try { GpuStatus.Start(); }
                 catch (System.Exception e) { Log.LogWarning("Couldn't start the graphics card check: " + e.Message); }
+                try { AmmoRacks.RegisterExisting(); }
+                catch (System.Exception e) { Log.LogWarning("Couldn't look for ammo racks in the vehicles in flight: " + e.Message); }
                 try { Lifecycle.RemoveLeftoverGhosts(); }
                 catch (System.Exception e) { Log.LogWarning("Couldn't remove leftover X-ray ghosts: " + e.Message); }
                 try { UI.ArmorPanel.AttachToExistingMenus(); }
