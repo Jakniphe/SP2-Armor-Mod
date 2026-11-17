@@ -555,7 +555,9 @@ namespace ArmorFragments
                 w >>= 1; h >>= 1;
             }
 
-            if (d.Kind == AtlasKind.Hole && d.Plate != null && (PaintMode || !d.Plate.UsesGeometry)) d.Plate.EnsureLit();   // real geometry has real holes (but paint is drawn by the Lit shader)
+            // Real geometry has real holes (but paint is drawn by the Lit shader). The switch to Lit waits until every rectangle of the block's
+            // jobs is in the atlas (PlateDamageMaps.Tick): done now, the Lit material would read the atlas's blank, white, shiny parts for a few frames.
+            if (d.Kind == AtlasKind.Hole && d.Plate != null && (PaintMode || !d.Plate.UsesGeometry)) PlateDamageMaps.WantLit(d.Plate.Main ?? d.Plate);
             return watch.Elapsed.TotalMilliseconds;
         }
 

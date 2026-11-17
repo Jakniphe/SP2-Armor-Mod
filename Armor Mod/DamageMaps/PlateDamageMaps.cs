@@ -71,7 +71,28 @@ namespace ArmorFragments
         private static readonly Dictionary<AircraftScript, VehicleMaps> Vehicles = new Dictionary<AircraftScript, VehicleMaps>();
         private static readonly HashSet<AircraftScript> Refused = new HashSet<AircraftScript>();
         private static readonly List<Delivery> Holding = new List<Delivery>();
+        private static readonly List<PlateVisual> LitWanted = new List<PlateVisual>();   // blocks that are to be drawn with the Lit shader once all their rectangles are in
         private static int counter;
+
+        public static void WantLit(PlateVisual block)
+        {
+            if (block != null && !block.HasHole && !LitWanted.Contains(block)) LitWanted.Add(block);
+        }
+
+        // The family of jobs the worker still has for a block (its own and its sides').
+        private static bool WorkerBusy(PlateVisual block)
+        {
+            int pending = System.Threading.Volatile.Read(ref block.PendingJobs);
+            foreach (PlateVisual side in block.Sides) if (side != null) pending += System.Threading.Volatile.Read(ref side.PendingJobs);
+            return pending > 0;
+        }
+
+        private static bool HoldingFor(PlateVisual block)
+        {
+            foreach (Delivery d in Holding)
+                if (d.Plate != null && (d.Plate == block || d.Plate.Main == block)) return true;
+            return false;
+        }
         private static int frame;
         private static double lastDeliverMs;
 
@@ -673,6 +694,15 @@ namespace ArmorFragments
 
             // What the worker has finished goes into the atlases, a few rectangles a frame (and not before the shell's
             // ray has arrived), never more than a couple of milliseconds.
+            // Which blocks have the worker done with (read BEFORE the finished rectangles are taken: the worker queues them, then counts the job off).
+            List<PlateVisual> settled = null;
+            for (int i = LitWanted.Count - 1; i >= 0; i--)
+            {
+                PlateVisual block = LitWanted[i];
+                if (block.Owner == null || block.Owner.Disposed || block.HasHole) { LitWanted.RemoveAt(i); continue; }
+                if (!WorkerBusy(block)) (settled ?? (settled = new List<PlateVisual>())).Add(block);
+            }
+
             Delivery done;
             while (DamageWorker.Done.TryDequeue(out done)) Holding.Add(done);
             if (Holding.Count > 0)
@@ -697,6 +727,19 @@ namespace ArmorFragments
                     Holding.RemoveAt(i);
                     delivered++;
                     if (watch.Elapsed.TotalMilliseconds > 2.0) break;
+                }
+            }
+
+            // The Lit material goes on a block only when everything of it is in the atlas (nothing queued, nothing waiting for the shell's ray).
+            if (settled != null)
+            {
+                foreach (PlateVisual block in settled)
+                {
+                    if (HoldingFor(block)) continue;
+                    if (block.Owner.Gloss && block.Owner.Height == null) continue;   // the shine map is not made yet
+                    try { block.EnsureLit(); }
+                    catch (Exception e) { ArmorFragmentsPlugin.Log.LogWarning(Tag + "a plate could not be switched to the Lit shader: " + e.Message); }
+                    LitWanted.Remove(block);
                 }
             }
 
@@ -965,6 +1008,7 @@ namespace ArmorFragments
             Refused.Clear();
             Pits.Clear();
             Holding.Clear();
+            LitWanted.Clear();
             HoldingMeshes.Clear();
             PartDecals.Shutdown();   // the decals on the other parts too
             Message = "Cleared";
