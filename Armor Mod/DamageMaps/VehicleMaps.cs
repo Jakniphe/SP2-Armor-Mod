@@ -60,8 +60,9 @@ namespace ArmorFragments
             }
             if (infos.Count == 0) { LastFailure = "no armor plate with a readable mesh"; return null; }
 
-            // The tiles: as dense as the setting says, less dense if they do not fit in 2048 x 2048.
+            // The tiles: as dense as the setting says, less dense if they do not fit in the biggest atlas (2048 x 2048 unless the setting allows more).
             float density = Mathf.Max(ArmorFragmentsPlugin.DamageMapsDensity.Value, 16f);
+            int maxAtlas = Mathf.Clamp(Mathf.ClosestPowerOfTwo(ArmorFragmentsPlugin.DamageMapsMaxAtlas.Value), 1024, 4096);
             int size = 0;
             List<int[]> tiles = null;
             for (int attempt = 0; attempt < 8; attempt++)
@@ -76,8 +77,8 @@ namespace ArmorFragments
                     area += 2L * w * h;
                 }
                 int candidate = 64;
-                while (candidate < 2048 && (long)candidate * candidate < (area * 13L) / 10L + 4096) candidate *= 2;
-                for (int atlas = candidate; atlas <= 2048 && tiles == null; atlas *= 2)
+                while (candidate < maxAtlas && (long)candidate * candidate < (area * 13L) / 10L + 4096) candidate *= 2;
+                for (int atlas = candidate; atlas <= maxAtlas && tiles == null; atlas *= 2)
                 {
                     List<int[]> placed = Pack(sizes, atlas);
                     if (placed != null) { size = atlas; tiles = placed; }
@@ -109,7 +110,8 @@ namespace ArmorFragments
             FillTexture(maps.Normal, 128, 128, 255, 255);   // flat normals
 
             ArmorFragmentsPlugin.Log.LogInfo("[DMAP] atlas " + size + "x" + size + " for " + infos.Count + " armor plate(s) of '" +
-                                             aircraft.name + "', " + density.ToString("F0") + " px/m (the normal atlas took " +
+                                             aircraft.name + "', " + density.ToString("F0") + " px/m, up to " + (4L * size * size * 4 / (1024 * 1024)) +
+                                             " MB of video memory once all its atlases exist (the normal atlas took " +
                                              PerfMonitor.Since(atlasAt).ToString("F1") + " ms)");
             return maps;
         }
@@ -790,6 +792,7 @@ namespace ArmorFragments
             // Real geometry (experimental): after the last queued job for the plate the worker also rewrites its mesh.
             public bool Geometry;
             public float GridMeters;
+            public float FineMeters;           // the finer cell size around holes and sharp features (0 = none)
             public int MaxVertices;
         }
 
@@ -943,7 +946,7 @@ namespace ArmorFragments
                     if (job.Geometry && job.Plate.Source != null && job.Plate.Source.Ok && Volatile.Read(ref job.Plate.PendingJobs) <= 1)
                     {
                         MeshData mesh = PlateMesher.Build(job.Plate.Cpu, job.Plate.Info.Geometry, job.Plate.Source, job.Owner,
-                                                          job.GridMeters, job.MaxVertices);
+                                                          job.GridMeters, job.FineMeters, job.MaxVertices);
                         mesh.Plate = job.Plate;
                         mesh.DeliverAt = job.DeliverAt;
                         Meshes.Enqueue(mesh);

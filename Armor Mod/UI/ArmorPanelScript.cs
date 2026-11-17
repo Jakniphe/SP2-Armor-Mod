@@ -386,6 +386,8 @@ namespace ArmorFragments.UI
                 "really holes. The plate keeps its own paint, texture and decals. Thick, curved or non-rectangular plates keep the maps.");
             FloatSetting(ArmorFragmentsPlugin.DamageMapsGridMm, "Geometry grid",
                 "Cell size of the real geometry, in millimeters. Smaller = finer, more vertices.", 1f, " mm");
+            FloatSetting(ArmorFragmentsPlugin.DamageMapsFineGridMm, "Fine grid at holes",
+                "Cell size of the real geometry around holes and sharp features (cracks, rims), in millimeters. 0 = none. Smaller = sharper edges.", 0.5f, " mm");
             IntSetting(ArmorFragmentsPlugin.DamageMapsMaxKiloVertices, "Geometry vertex limit",
                 "Most vertices, in thousands, one plate's real geometry may have. A bigger plate gets a coarser grid.");
             FloatSetting(ArmorFragmentsPlugin.GeometryStartPixels, "Geometry from (pixels)",

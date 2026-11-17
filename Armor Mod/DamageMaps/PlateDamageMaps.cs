@@ -522,6 +522,7 @@ namespace ArmorFragments
             if (!ArmorFragmentsPlugin.DamageMapsGeometry.Value || !plate.CanRemesh()) return;
             job.Geometry = true;
             job.GridMeters = ArmorFragmentsPlugin.DamageMapsGridMm.Value * 0.001f;
+            job.FineMeters = ArmorFragmentsPlugin.DamageMapsFineGridMm.Value * 0.001f;
             job.MaxVertices = ArmorFragmentsPlugin.DamageMapsMaxKiloVertices.Value * 1000;
         }
 
@@ -575,7 +576,7 @@ namespace ArmorFragments
         private static void TickGeometrySettings()
         {
             bool on = ArmorFragmentsPlugin.DamageMapsGeometry.Value;
-            float grid = ArmorFragmentsPlugin.DamageMapsGridMm.Value;
+            float grid = ArmorFragmentsPlugin.DamageMapsGridMm.Value + 1000f * ArmorFragmentsPlugin.DamageMapsFineGridMm.Value;   // either one changing rewrites the plates
             if (on == shownGeometry && (!on || Mathf.Approximately(grid, shownGrid))) return;
 
             bool turnedOff = shownGeometry && !on;

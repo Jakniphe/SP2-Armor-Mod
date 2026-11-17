@@ -69,6 +69,8 @@ namespace ArmorFragments
             bool anyHole = false;
             bool grooves = cracks && sim.CrackFront != null && sim.CrackBack != null;
             bool smooth = smoothEdges && sim.Solid != null;
+            float[] distance = smooth ? SignedDistance(sim) : null;   // to the hole's edge, meters, + on the metal (null = no hole)
+            float pixel = 1f / Mathf.Max(cpu.PxU, cpu.PxV);
             float grooveDepth = Mathf.Clamp(0.04f * impact.Caliber, 0.0004f, 0.002f);   // meters at a full crack
             float ragged = smooth ? 0.10f + 0.20f * Mathf.Clamp01(impact.PlateBrittleness) : 0f;
             for (int y = y0; y < y1; y++)
@@ -86,14 +88,32 @@ namespace ArmorFragments
                     int idx = y * cpu.Width + x;
                     faceIn.Height[idx] += Sample(sim.Front, n, i, j, fx, fy);
                     faceOut.Height[idx] += Sample(sim.Back, n, i, j, fx, fy);
-                    float solid = smooth ? Sample(sim.Solid, n, i, j, fx, fy) : SampleHole(sim.Hole, n, i, j, fx, fy);
-                    float threshold = 0.5f + ragged * Noise(x, y, impact.Seed);
-                    if (solid < threshold)
+                    bool hole;
+                    if (smooth)
                     {
-                        faceIn.Mask[idx] = 0;
-                        faceOut.Mask[idx] = 0;
-                        anyHole = true;
+                        // The edge is written as a distance: 128 = on the edge, 128 more or less for a pixel's width of metal or of hole. The
+                        // pixels near the edge then say where it is to a fraction of a pixel (the geometry and the hole map both read them
+                        // smoothly), and the ragged edge is the distance moved a little by the noise.
+                        hole = false;
+                        if (distance != null)
+                        {
+                            float d = Sample(distance, n, i, j, fx, fy) - ragged * Noise(x, y, impact.Seed) * sim.Cell;
+                            float value = Mathf.Clamp(128f + d / pixel * 128f, 0f, 255f);
+                            if (value < 255f)
+                            {
+                                byte b = (byte)value;
+                                if (b < faceIn.Mask[idx]) faceIn.Mask[idx] = b;
+                                if (b < faceOut.Mask[idx]) faceOut.Mask[idx] = b;
+                            }
+                            hole = value < 128f;
+                        }
                     }
+                    else
+                    {
+                        hole = SampleHole(sim.Hole, n, i, j, fx, fy) < 0.5f;
+                        if (hole) { faceIn.Mask[idx] = 0; faceOut.Mask[idx] = 0; }
+                    }
+                    if (hole) anyHole = true;
                     else if (grooves)
                     {
                         faceIn.Height[idx] -= grooveDepth * Sample(sim.CrackFront, n, i, j, fx, fy);
@@ -103,6 +123,46 @@ namespace ArmorFragments
             }
             PlateStamps.Dirty(faceIn, x0, y0, x1, y1, anyHole);
             PlateStamps.Dirty(faceOut, x0, y0, x1, y1, anyHole);
+        }
+
+        // The distance, in meters, from the middle of each of the simulation's columns to the edge of the hole (positive on the metal, negative
+        // in the hole): half a column less than the distance to the nearest column of the other kind. Null if there is no hole. Looks 6 columns
+        // out; beyond that it is that far.
+        private static float[] SignedDistance(ImpactSimResult sim)
+        {
+            int n = sim.N;
+            bool[] hole = new bool[n * n];
+            bool any = false;
+            for (int j = 1; j < n - 1; j++)
+                for (int i = 1; i < n - 1; i++)
+                    if (sim.Solid[j * n + i] < 0.5f) { hole[j * n + i] = true; any = true; }
+            if (!any) return null;
+
+            const int reach = 6;
+            float[] distance = new float[n * n];
+            for (int j = 0; j < n; j++)
+            {
+                for (int i = 0; i < n; i++)
+                {
+                    bool mine = hole[j * n + i];
+                    int best = reach * reach * 2 + 1;
+                    for (int dj = -reach; dj <= reach; dj++)
+                    {
+                        int jj = j + dj;
+                        if (jj < 0 || jj >= n) continue;
+                        for (int di = -reach; di <= reach; di++)
+                        {
+                            int ii = i + di;
+                            if (ii < 0 || ii >= n || hole[jj * n + ii] == mine) continue;
+                            int d2 = di * di + dj * dj;
+                            if (d2 < best) best = d2;
+                        }
+                    }
+                    float cells = best > reach * reach * 2 ? reach : Mathf.Sqrt(best) - 0.5f;
+                    distance[j * n + i] = (mine ? -cells : cells) * sim.Cell;
+                }
+            }
+            return distance;
         }
 
         // Smooth noise in -1..1 on a lattice of 3 pixels (the same for the same seed): the ragged edge of torn metal.

@@ -1,0 +1,22 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Offline test of the real-geometry mesher (PlateMesher): cutting around damage, the fine zone at holes and cracks, no cracks in the mesh,
+       the vertex budget, UV1 carried over. Needs the game's UnityEngine.CoreModule.dll (set GameManaged if the game is elsewhere). -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>disable</Nullable>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <NoWarn>CS0649;CS0169;CS0414</NoWarn>
+    <GameManaged Condition="'$(GameManaged)' == ''">C:\Program Files (x86)\Steam\steamapps\common\SimplePlanes 2\SimplePlanes 2_Data\Managed</GameManaged>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="Test.cs" />
+    <Compile Include="..\..\Armor Mod\DamageMaps\PlateMesher.cs" />
+    <Compile Include="..\..\Armor Mod\DamageMaps\PlateStamps.cs" />
+    <Compile Include="..\..\Armor Mod\DamageMaps\PlateGeometry.cs" />
+    <Reference Include="UnityEngine.CoreModule">
+      <HintPath>$(GameManaged)\UnityEngine.CoreModule.dll</HintPath>
+    </Reference>
+  </ItemGroup>
+</Project>

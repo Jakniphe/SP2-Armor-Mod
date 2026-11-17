@@ -54,6 +54,8 @@ namespace ArmorFragments
         internal static ConfigEntry<bool> UseGpu;                    // local: the impact simulation on the graphics card (OpenCL), the CPU if it cannot
         internal static ConfigEntry<bool> DamageMapsGeometry;        // local, experimental: marked flat plates are rewritten as real geometry
         internal static ConfigEntry<float> DamageMapsGridMm;         // local: that geometry's cell size
+        internal static ConfigEntry<int> DamageMapsMaxAtlas;         // local: the biggest atlas a vehicle's plates may share (2048 or 4096)
+        internal static ConfigEntry<float> DamageMapsFineGridMm;     // local: the finer cell size around holes and sharp features (0 = none)
         internal static ConfigEntry<int> DamageMapsMaxKiloVertices;  // local: the most vertices one plate's geometry may have (thousands)
         internal static ConfigEntry<float> GeometryStartPixels, GeometryFullPixels;   // local: the transition from maps to geometry, in pixels of error
         internal static ConfigEntry<float> GeometryAngleStart, GeometryAngleFull;     // local: ... and in degrees of view angle
@@ -400,6 +402,11 @@ namespace ArmorFragments
             DamageMapsDensity = Config.Bind("DamageMaps", "PixelsPerMeter", 256f,
                 new ConfigDescription("How detailed the maps are: pixels per meter of plate. More = finer marks, more memory.",
                     new AcceptableValueRange<float>(64f, 1024f)));
+            DamageMapsMaxAtlas = Config.Bind("DamageMaps", "MaxAtlasSize", 2048,
+                new ConfigDescription("The biggest atlas (texture) the maps of one vehicle's plates may share, in pixels per side: 2048 (16 MB each, up to 4 " +
+                    "of them a vehicle) or 4096 (64 MB each, up to 256 MB a vehicle, about twice the detail on a vehicle with many plates, " +
+                    "and each atlas takes about 4 times as long to make). Experimental: the log says the density and the memory it got.",
+                    new AcceptableValueRange<int>(1024, 4096)));
             DamageMapsNormalStrength = Config.Bind("DamageMaps", "NormalStrength", 1.5f,
                 new ConfigDescription("How deep the dents look (the normal map's strength).",
                     new AcceptableValueRange<float>(0.2f, 5f)));
@@ -419,6 +426,10 @@ namespace ArmorFragments
             DamageMapsGridMm = Config.Bind("DamageMaps", "GridMillimeters", 8f,
                 new ConfigDescription("Cell size of the real geometry's grid, in millimeters. Smaller = finer, more vertices.",
                     new AcceptableValueRange<float>(2f, 40f)));
+            DamageMapsFineGridMm = Config.Bind("DamageMaps", "FineGridMillimeters", 3f,
+                new ConfigDescription("Cell size of the real geometry around holes and sharp features (cracks, rims), in millimeters; the rest of " +
+                    "the damage uses the grid above. 0 = no finer zone. Smaller = sharper hole edges, more vertices there.",
+                    new AcceptableValueRange<float>(0f, 8f)));
             DamageMapsMaxKiloVertices = Config.Bind("DamageMaps", "MaxKiloVertices", 120,
                 new ConfigDescription("Most vertices (in thousands) one plate's real geometry may have; a bigger plate gets a coarser grid.",
                     new AcceptableValueRange<int>(10, 500)));

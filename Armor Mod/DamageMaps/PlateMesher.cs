@@ -145,8 +145,14 @@ namespace ArmorFragments
         // pass 'maxVertices').
         public static MeshData Build(PlateCpu cpu, PlateGeometry g, PlateMeshSource s, VehicleMaps owner, float cellMeters, int maxVertices)
         {
+            return Build(cpu, g, s, owner, cellMeters, 0f, maxVertices);
+        }
+
+        // 'fineMeters' (0 = none): around holes and sharp features (cracks, rims) the cut goes down to this size instead.
+        public static MeshData Build(PlateCpu cpu, PlateGeometry g, PlateMeshSource s, VehicleMaps owner, float cellMeters, float fineMeters, int maxVertices)
+        {
             System.Diagnostics.Stopwatch watch = System.Diagnostics.Stopwatch.StartNew();
-            Refiner r = new Refiner(cpu, g, s, Mathf.Max(cellMeters, 0.002f), maxVertices);
+            Refiner r = new Refiner(cpu, g, s, Mathf.Max(cellMeters, 0.002f), fineMeters > 0.0005f ? Mathf.Max(fineMeters, 0.001f) : 0f, maxVertices);
             r.Run();
             return r.Finish(owner, watch);
         }
@@ -159,7 +165,11 @@ namespace ArmorFragments
             private readonly PlateGeometry g;
             private readonly PlateMeshSource s;
             private readonly float cell;
+            private readonly float fineCell;         // the cell size around holes and sharp features (0 or >= cell: no finer zone)
             private readonly int maxVertices;
+            private const int Block = 4;             // the fine zone is kept in blocks of this many pixels
+            private int blocksX, blocksY;
+            private readonly bool[][] fine = new bool[2][];
 
             private readonly List<Vector3> pos;      // base positions and normals, part frame (the originals, then the new ones)
             private readonly List<Vector3> nrm;
@@ -176,9 +186,10 @@ namespace ArmorFragments
             private readonly float[] regionU0 = new float[2], regionU1 = new float[2], regionV0 = new float[2], regionV1 = new float[2];
             private readonly int original;
 
-            public Refiner(PlateCpu cpu, PlateGeometry g, PlateMeshSource s, float cell, int maxVertices)
+            public Refiner(PlateCpu cpu, PlateGeometry g, PlateMeshSource s, float cell, float fineCell, int maxVertices)
             {
                 this.cpu = cpu; this.g = g; this.s = s; this.cell = cell; this.maxVertices = maxVertices;
+                this.fineCell = fineCell > 0f && fineCell < cell ? fineCell : 0f;
                 int count = s.Vertices.Length;
                 pos = new List<Vector3>(s.PartPositions);
                 nrm = new List<Vector3>(s.PartNormals);
@@ -227,12 +238,79 @@ namespace ArmorFragments
                     }
                 }
                 if (x1 < 0) return;
+                if (fineCell > 0f) FindFine(f, x0, y0, x1, y1);
                 float margin = cell * 2f;
                 hasRegion[f] = true;
                 regionU0[f] = (x0 - PlateCpu.Border) / cpu.PxU - margin;
                 regionU1[f] = (x1 + 1 - PlateCpu.Border) / cpu.PxU + margin;
                 regionV0[f] = (y0 - PlateCpu.Border) / cpu.PxV - margin;
                 regionV1[f] = (y1 + 1 - PlateCpu.Border) / cpu.PxV + margin;
+            }
+
+            // Where the fine zone is: the blocks (of Block x Block pixels) that hold a hole or its soft edge, or a sharp feature (a crack or a
+            // rim: the height differs from the mean of its 5 x 5 pixels by more than 0.4 mm; a smooth bowl does not), and the blocks next to
+            // them. Only inside the damaged box.
+            private void FindFine(int f, int x0, int y0, int x1, int y1)
+            {
+                PlateCpu.Face face = cpu.Faces[f];
+                blocksX = (cpu.Width + Block - 1) / Block;
+                blocksY = (cpu.Height + Block - 1) / Block;
+                bool[] marks = new bool[blocksX * blocksY];
+                int ex0 = Mathf.Max(0, x0 - 3), ey0 = Mathf.Max(0, y0 - 3), ex1 = Mathf.Min(cpu.Width - 1, x1 + 3), ey1 = Mathf.Min(cpu.Height - 1, y1 + 3);
+                for (int y = ey0; y <= ey1; y++)
+                {
+                    for (int x = ex0; x <= ex1; x++)
+                    {
+                        int at = y * cpu.Width + x;
+                        bool feature = face.Mask[at] != 255;
+                        if (!feature)
+                        {
+                            float sum = 0f;
+                            int taken = 0;
+                            for (int dy = -2; dy <= 2; dy++)
+                            {
+                                int yy = Mathf.Clamp(y + dy, 0, cpu.Height - 1);
+                                for (int dx = -2; dx <= 2; dx++)
+                                {
+                                    sum += face.Height[yy * cpu.Width + Mathf.Clamp(x + dx, 0, cpu.Width - 1)];
+                                    taken++;
+                                }
+                            }
+                            feature = Mathf.Abs(face.Height[at] - sum / taken) > 0.0004f;
+                        }
+                        if (feature) marks[(y / Block) * blocksX + x / Block] = true;
+                    }
+                }
+                bool[] grown = (bool[])marks.Clone();
+                for (int by = 0; by < blocksY; by++)
+                {
+                    for (int bx = 0; bx < blocksX; bx++)
+                    {
+                        if (!marks[by * blocksX + bx]) continue;
+                        for (int dy = -1; dy <= 1; dy++)
+                            for (int dx = -1; dx <= 1; dx++)
+                            {
+                                int nx = bx + dx, ny = by + dy;
+                                if (nx >= 0 && ny >= 0 && nx < blocksX && ny < blocksY) grown[ny * blocksX + nx] = true;
+                            }
+                    }
+                }
+                fine[f] = grown;
+            }
+
+            // The cell size that applies to a triangle: the fine one if it touches the fine zone.
+            private float CellOf(int t, float minU, float maxU, float minV, float maxV)
+            {
+                int f = tface[t];
+                if (fineCell <= 0f || fine[f] == null) return cell;
+                int bx0 = Mathf.Clamp((int)((PlateCpu.Border + minU * cpu.PxU) / Block), 0, blocksX - 1);
+                int bx1 = Mathf.Clamp((int)((PlateCpu.Border + maxU * cpu.PxU) / Block), 0, blocksX - 1);
+                int by0 = Mathf.Clamp((int)((PlateCpu.Border + minV * cpu.PxV) / Block), 0, blocksY - 1);
+                int by1 = Mathf.Clamp((int)((PlateCpu.Border + maxV * cpu.PxV) / Block), 0, blocksY - 1);
+                for (int by = by0; by <= by1; by++)
+                    for (int bx = bx0; bx <= bx1; bx++)
+                        if (fine[f][by * blocksX + bx]) return fineCell;
+                return cell;
             }
 
             // ---- Triangles and edges ----
@@ -325,7 +403,8 @@ namespace ArmorFragments
                 int f = tface[t];
                 if (!hasRegion[f]) return false;
                 int a = tri[3 * t], b = tri[3 * t + 1], c = tri[3 * t + 2];
-                if (Mathf.Max(Length(a, b), Mathf.Max(Length(b, c), Length(c, a))) <= cell) return false;
+                float longest = Mathf.Max(Length(a, b), Mathf.Max(Length(b, c), Length(c, a)));
+                if (longest <= (fineCell > 0f ? fineCell : cell)) return false;
 
                 float minU = float.MaxValue, maxU = float.MinValue, minV = float.MaxValue, maxV = float.MinValue;
                 for (int k = 0; k < 3; k++)
@@ -335,7 +414,8 @@ namespace ArmorFragments
                     if (u < minU) minU = u; if (u > maxU) maxU = u;
                     if (v < minV) minV = v; if (v > maxV) maxV = v;
                 }
-                return maxU >= regionU0[f] && minU <= regionU1[f] && maxV >= regionV0[f] && minV <= regionV1[f];
+                if (!(maxU >= regionU0[f] && minU <= regionU1[f] && maxV >= regionV0[f] && minV <= regionV1[f])) return false;
+                return longest > CellOf(t, minU, maxU, minV, maxV);
             }
 
             public void Run()
@@ -498,8 +578,8 @@ namespace ArmorFragments
         // The height of a face at (u, v) meters of the plate, smoothly between the pixels.
         private static float Sample(PlateCpu c, PlateCpu.Face f, float u, float v)
         {
-            float x = Mathf.Clamp(PlateCpu.Border + u * c.PxU, 0f, c.Width - 1.001f);
-            float y = Mathf.Clamp(PlateCpu.Border + v * c.PxV, 0f, c.Height - 1.001f);
+            float x = Mathf.Clamp(PlateCpu.Border + u * c.PxU - 0.5f, 0f, c.Width - 1.001f);   // (pixel x is centered at Border + u Px - 0.5)
+            float y = Mathf.Clamp(PlateCpu.Border + v * c.PxV - 0.5f, 0f, c.Height - 1.001f);
             int x0 = (int)x, y0 = (int)y;
             float fx = x - x0, fy = y - y0;
             float a = f.Height[y0 * c.Width + x0], b = f.Height[y0 * c.Width + x0 + 1];
@@ -507,14 +587,20 @@ namespace ArmorFragments
             return (a * (1f - fx) + b * fx) * (1f - fy) + (d * (1f - fx) + e * fx) * fy;
         }
 
-        // Is a small triangle over a hole? Its middle decides ('sumU' and 'sumV' are the three corners' plate coordinates added).
+        // Is a small triangle over a hole? Its middle decides ('sumU' and 'sumV' are the three corners' plate coordinates added). The
+        // mask is read smoothly between the pixels: the simulation writes a hole's edge as a distance (128 = on the edge), so the edge falls
+        // between the pixels, not on them.
         private static bool Hole(PlateCpu c, PlateCpu.Face f, float sumU, float sumV)
         {
             if (f == null) return false;
             float u = sumU / 3f, v = sumV / 3f;
-            int x = Mathf.Clamp(Mathf.RoundToInt(PlateCpu.Border + u * c.PxU), 0, c.Width - 1);
-            int y = Mathf.Clamp(Mathf.RoundToInt(PlateCpu.Border + v * c.PxV), 0, c.Height - 1);
-            return f.Mask[y * c.Width + x] < 128;
+            float x = Mathf.Clamp(PlateCpu.Border + u * c.PxU - 0.5f, 0f, c.Width - 1.001f);
+            float y = Mathf.Clamp(PlateCpu.Border + v * c.PxV - 0.5f, 0f, c.Height - 1.001f);
+            int x0 = (int)x, y0 = (int)y;
+            float fx = x - x0, fy = y - y0;
+            float a = f.Mask[y0 * c.Width + x0], b = f.Mask[y0 * c.Width + x0 + 1];
+            float d = f.Mask[(y0 + 1) * c.Width + x0], e = f.Mask[(y0 + 1) * c.Width + x0 + 1];
+            return (a * (1f - fx) + b * fx) * (1f - fy) + (d * (1f - fx) + e * fx) * fy < 128f;
         }
     }
 }

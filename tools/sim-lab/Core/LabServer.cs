@@ -297,8 +297,8 @@ namespace SimLab
                 for (int i = 0; i < n; i++)
                 {
                     int at = (j + PlateCpu.Border) * cpu.Width + (i + PlateCpu.Border);
-                    if (f0 != null) { front[j * n + i] = f0.Height[at]; if (f0.Mask[at] == 0) hole[j * n + i] = 0; }
-                    if (f1 != null) { back[j * n + i] = f1.Height[at]; if (f1.Mask[at] == 0) hole[j * n + i] = 0; }
+                    if (f0 != null) { front[j * n + i] = f0.Height[at]; if (f0.Mask[at] < 128) hole[j * n + i] = 0; }
+                    if (f1 != null) { back[j * n + i] = f1.Height[at]; if (f1.Mask[at] < 128) hole[j * n + i] = 0; }
                 }
             }
         }
@@ -330,8 +330,8 @@ namespace SimLab
                 for (int i = 0; i < n; i++)
                 {
                     int at = (j + PlateCpu.Border) * cpu.Width + (i + PlateCpu.Border);
-                    if (f0 != null) { front[j * n + i] = f0.Height[at]; if (f0.Mask[at] == 0) hole[j * n + i] = 0; }
-                    if (f1 != null) { back[j * n + i] = f1.Height[at]; if (f1.Mask[at] == 0) hole[j * n + i] = 0; }
+                    if (f0 != null) { front[j * n + i] = f0.Height[at]; if (f0.Mask[at] < 128) hole[j * n + i] = 0; }
+                    if (f1 != null) { back[j * n + i] = f1.Height[at]; if (f1.Mask[at] < 128) hole[j * n + i] = 0; }
                 }
             }
         }
