@@ -23,6 +23,7 @@ namespace ArmorFragments.Sim
         public int Columns;            // the grid's columns per side; 0 = the quality's own (40, 64 or 96). The game picks a smaller one when the quality's would take too long
         public int Seed;
         public int TimeLimitMs;        // give up after this long (0 = no limit)
+        public Action<float> Progress; // told how far along it is (0..1) as it goes (the lab's progress bar); null = nobody asks
         public Func<bool> Cancelled;   // asked once a step: true = stop now (the result then says TimedOut). Null = never
     }
 
@@ -282,7 +283,10 @@ namespace ArmorFragments.Sim
                     if ((input.TimeLimitMs > 0 && watch.ElapsedMilliseconds > input.TimeLimitMs) ||
                         (input.Cancelled != null && input.Cancelled()))
                         return new ImpactSimResult { TimedOut = true, Steps = (int)state[ClSolver.PSteps], Particles = count, Ms = watch.Elapsed.TotalMilliseconds };
-                    if (gpu.RunSteps(ChunkSteps, iterations, state)) break;
+                    bool finished = gpu.RunSteps(ChunkSteps, iterations, state);
+                    if (input.Progress != null)
+                        input.Progress(ProgressOf(state[ClSolver.PShellActive] > 0.5f, state[ClSolver.PCz] + state[ClSolver.PAz] * state[ClSolver.PRadius], (int)state[ClSolver.PSettle]));
+                    if (finished) break;
                 }
                 energy = state[ClSolver.PEnergy];
                 stopped = state[ClSolver.PStopped] > 0.5f;
@@ -362,6 +366,7 @@ namespace ArmorFragments.Sim
                     if (settle > SettleSteps) break;
                 }
 
+                if (input.Progress != null) input.Progress(ProgressOf(shellActive, cz + az * radius, settle));
                 bool hasShell = shellActive;
                 if (hasShell) shellSteps++;
                 float damp = shellActive ? 0.995f : 0.85f;
@@ -460,6 +465,19 @@ namespace ArmorFragments.Sim
             breakdown += "; reading the surfaces " + sampleMs.ToString("F1") + " ms";
             result.Breakdown = breakdown;
             return result;
+        }
+
+        // How far along the simulation is, 0..1: while the shell is in the plate, how far through it the tip has gone (85% of the way); then
+        // how many of the settling steps have been done. Never goes back (a shell that stops jumps ahead to the settling).
+        private float lastProgress;
+
+        private float ProgressOf(bool shellActive, float tipZ, int settle)
+        {
+            float p = shellActive
+                ? 0.85f * Math.Min(Math.Max((t * 0.5f - tipZ) / (t + 2.4f * radius), 0f), 1f)
+                : 0.85f + 0.15f * Math.Min(settle / 24f, 1f);
+            if (p > lastProgress) lastProgress = p;
+            return lastProgress;
         }
 
         // The shell's state and the material's numbers, for the graphics card's kernels (a step's worth).

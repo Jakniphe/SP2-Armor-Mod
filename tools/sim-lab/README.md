@@ -27,7 +27,7 @@ It prints the address (http://localhost:5057) and opens the page.
 - **Armor**: thickness (mm), hardness and brittleness (%), as in the `[ARM]` tag.
 - **Ammunition**: caliber (a preset or any value), mass (0 = what the game gives a shell of that caliber), speed, shell hardness.
 - **Shot**: angle from the plate's normal and the direction along the plate.
-- **Simulation**: quality (40x40, 64x64 or 96x96 columns), threads (0 = every core), seed, and an energy scale (a knob).
+- **Simulation**: quality (40x40 up to 128x128 columns), **use the graphics card (OpenCL)** (the same kernels as the game; falls back to the CPU if the computer has none that works; the first start builds the kernels, which can take a few seconds, and the page says when the card is ready), threads (0 = every core, for the CPU), seed, and an energy scale (a knob). A **progress bar** shows how much of the simulation is calculated while it runs.
 - **Run**: the game's energy-model verdict (ricochet, blocked, penetrated, with the numbers), what the simulation did (deepest dent,
   hole, energy left, time), pictures of the front and back of the plate and a section through the impact, and, below,
   what the mod draws today (the analytic stamps) for the same shot.

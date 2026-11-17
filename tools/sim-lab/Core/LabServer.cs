@@ -32,6 +32,7 @@ namespace SimLab
         public int Quality { get; set; } = 1;           // 0 low, 1 medium, 2 high
         public int Threads { get; set; } = 0;           // 0 = all the cores
         public int Seed { get; set; } = 1;
+        public bool Gpu { get; set; }                   // run on the graphics card (OpenCL) if the computer has one that works
         public float EnergyScale { get; set; } = 1;     // a knob: 1 = the shell's real energy
     }
 
@@ -50,6 +51,52 @@ namespace SimLab
         private static SimPool pool;
         private static int poolWorkers = -1;
 
+        // ---- The graphics card ----------------------------------------------------------------------
+        // Every OpenCL call must come from one thread, so the card has a thread of its own that does all the lab's card work. It is started
+        // (and the kernels are built, which can take seconds the first time) as soon as the lab starts.
+        private static System.Collections.Concurrent.BlockingCollection<Action> gpuQueue;
+        private static ClSolver gpuSolver;
+        private static volatile string gpuState = "starting";   // starting / ready / not available: <why>
+        private static volatile string gpuName = "";
+
+        // How far the last run of the page is, 0..1 (read by /api/progress).
+        private static volatile float progress;
+        private static volatile bool running;
+
+        private static void StartGpu()
+        {
+            if (gpuQueue != null) return;
+            gpuQueue = new System.Collections.Concurrent.BlockingCollection<Action>();
+            System.Threading.Thread thread = new System.Threading.Thread(() =>
+            {
+                try
+                {
+                    string error;
+                    gpuSolver = ClSolver.Create(out error);
+                    if (gpuSolver == null) gpuState = "not available: " + error;
+                    else { gpuName = gpuSolver.DeviceName; gpuState = "ready"; }
+                }
+                catch (Exception e) { gpuState = "not available: " + e.Message; }
+                foreach (Action work in gpuQueue.GetConsumingEnumerable()) work();
+            });
+            thread.IsBackground = true;
+            thread.Name = "lab graphics card";
+            thread.Start();
+        }
+
+        // Runs the simulation on the card, on the card's thread. Null = the card cannot be used (not there, still starting, or it failed).
+        private static ImpactSimResult OnCard(ImpactSimInput input)
+        {
+            StartGpu();
+            System.Threading.Tasks.TaskCompletionSource<ImpactSimResult> done = new System.Threading.Tasks.TaskCompletionSource<ImpactSimResult>();
+            gpuQueue.Add(() =>
+            {
+                try { done.SetResult(gpuSolver == null ? null : ImpactSim.Run(input, null, gpuSolver)); }
+                catch (Exception e) { gpuState = "failed: " + e.Message; gpuSolver = null; done.SetResult(null); }
+            });
+            return done.Task.Result;
+        }
+
         // The page, as embedded in this assembly.
         private static string html;
 
@@ -66,6 +113,7 @@ namespace SimLab
         public static WebApplication Create(string url, bool quiet)
         {
             ArmorFragmentsPlugin.RicochetRandomness.Value = 0f;   // the same answer every time
+            StartGpu();
 
             WebApplicationBuilder builder = WebApplication.CreateBuilder();
             builder.WebHost.UseUrls(url);
@@ -83,8 +131,16 @@ namespace SimLab
                     maxRicochets = ArmorFragmentsPlugin.MaxRicochets.Value,
                 },
                 source = ArmorFragmentsPlugin.Source,
+                gpu = new { state = gpuState, name = gpuName },
             }));
-            app.MapPost("/api/run", (Scenario s) => Results.Json(RunScenario(s, true)));
+            app.MapGet("/api/progress", () => Results.Json(new { value = progress, running }));
+            app.MapPost("/api/run", (Scenario s) =>
+            {
+                progress = 0f;
+                running = true;
+                try { return Results.Json(RunScenario(s, true)); }
+                finally { progress = 1f; running = false; }
+            });
             app.MapPost("/api/sweep", (SweepRequest r) => Results.Json(Sweep(r)));
             app.MapPost("/api/scaling", (Scenario s) => Results.Json(Scaling(s)));
             return app;
@@ -141,8 +197,10 @@ namespace SimLab
                 // a shell that goes through is turned toward the plate's normal by the energy model's own number
                 DeflectionDeg = verdict == "Penetrated" ? EnergyModel.DeflectionDegrees(armor, shell, s.Angle) : 0f,
             };
-            SimPool simPool = PoolFor(s.Threads);
-            ImpactSimResult sim = ImpactSim.Run(input, simPool);
+            input.Progress = p => { if (p > progress) progress = p; };
+            ImpactSimResult sim = s.Gpu ? OnCard(input) : null;
+            bool onCard = sim != null;
+            if (sim == null) sim = ImpactSim.Run(input, PoolFor(s.Threads));
 
             // What the mod draws today (the analytic stamps), on a patch of the same size.
             float[] anaFront, anaBack; byte[] anaHole;
@@ -198,6 +256,9 @@ namespace SimLab
                     ms = sim.Ms,
                     agrees,
                     threads = s.Threads > 0 ? s.Threads : Environment.ProcessorCount,
+                    gpu = onCard,
+                    gpuName,
+                    gpuState,
                     cellMm = sim.Cell * 1000f,
                     patchCm = sim.Size * 100f,
                 },

@@ -71,6 +71,7 @@
     <section>
       <h2>Simulation</h2>
       <div class="row full"><label>Quality <select id="quality"><option value="0">Low (40×40)</option><option value="1">Medium (64×64)</option><option value="2">High (96×96)</option><option value="3">Ultra (128×128)</option></select></label></div>
+      <div class="row full"><label><input type="checkbox" id="gpu" checked> Use the graphics card (OpenCL) <small id="gpuNote"></small></label></div>
       <div class="row"><label>Threads <small id="coresNote"></small><input type="range" id="threadsR" min="1" max="16" step="1"></label><input type="number" id="threads"></div>
       <div class="row"><label>Seed<input type="range" id="seedR" min="1" max="99" step="1"></label><input type="number" id="seed"></div>
       <div class="row"><label>Energy scale <small>1 = the shell's real energy (a knob)</small><input type="range" id="energyScaleR" min="0.1" max="3" step="0.05"></label><input type="number" id="energyScale" step="0.05"></div>
@@ -78,6 +79,10 @@
         <button class="primary" id="run">Run</button>
         <button id="sweep">Sweep speed</button>
         <button id="scaling">Thread scaling</button>
+      </div>
+      <div id="progressBox" style="display:none;margin:8px 0">
+        <div style="height:10px;background:#8884;border-radius:5px;overflow:hidden"><div id="progressBar" class="bar" style="height:10px;width:0%;border-radius:5px;transition:width .12s"></div></div>
+        <small id="progressText">0 %</small>
       </div>
       <p class="note">The verdict comes from the mod's own energy model (its default settings, read from the source). The pictures are of a patch of plate around the impact.</p>
     </section>
@@ -109,12 +114,14 @@ function read() {
   const s = {};
   ids.forEach(id => s[id] = parseFloat($(id).value) || 0);
   s.quality = parseInt($('quality').value);
+  s.gpu = $('gpu').checked;
   ['seed','threads'].forEach(k => s[k] = Math.round(s[k]));
   return s;
 }
 function write(s) {
   ids.forEach(id => { $(id).value = s[id]; $(id + 'R').value = s[id]; });
   $('quality').value = s.quality;
+  $('gpu').checked = s.gpu !== false;
 }
 async function post(url, body) {
   const r = await fetch(url, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) });
@@ -144,7 +151,7 @@ function show(res) {
         <span>Deepest dent</span><b>${f1(s.depthMm)} mm</b>
         <span>Hole</span><b>${s.holeCells > 0 ? f1(s.holeDiameterMm) + ' mm across' : 'none'}</b>
         <span>Energy left</span><b>${f1(s.energyLeftPercent)} %</b>
-        <span>Time</span><b>${Math.round(s.ms)} ms on ${s.threads} thread(s)</b>
+        <span>Time</span><b>${Math.round(s.ms)} ms on ${s.gpu ? 'the graphics card (' + s.gpuName + ')' : s.threads + ' thread(s)'}${$('gpu').checked && !s.gpu ? ' (the card is ' + s.gpuState + ')' : ''}</b>
         <span>Game uses</span><b>${s.agrees ? 'the simulation' : 'the quick marks (disagreement)'}</b>
         <span>Size</span><b>${s.particles} particles, ${s.steps} steps, cell ${f1(s.cellMm)} mm, patch ${f1(s.patchCm)} cm</b>
       </div></div>
@@ -171,9 +178,20 @@ function show(res) {
 
 async function run() {
   const b = $('run'); b.disabled = true; b.textContent = 'Running…';
+  // the progress bar: the server says how far the simulation is a few times a second while it runs
+  const box = $('progressBox'); box.style.display = 'block'; setProgress(0);
+  const timer = setInterval(async () => {
+    try { const p = await (await fetch('/api/progress')).json(); if (p.running) setProgress(p.value); } catch (e) {}
+  }, 150);
   try { show(await post('/api/run', read())); }
   catch (e) { $('result').textContent = 'Error: ' + e.message; }
+  clearInterval(timer); setProgress(1);
+  setTimeout(() => { if (!b.disabled) box.style.display = 'none'; }, 1200);
   b.disabled = false; b.textContent = 'Run';
+}
+function setProgress(v) {
+  $('progressBar').style.width = Math.round(100 * v) + '%';
+  $('progressText').textContent = Math.round(100 * v) + ' % of the simulation calculated';
 }
 async function sweep() {
   const b = $('sweep'); b.disabled = true; b.textContent = 'Sweeping…';
@@ -214,6 +232,7 @@ async function scaling() {
   write(Object.assign({}, defaults, saved));
   sel.addEventListener('change', () => { if (sel.value) { $('caliber').value = $('caliberR').value = sel.value; store(); } });
   $('quality').addEventListener('change', store);
+  $('gpu').addEventListener('change', store);
   $('run').addEventListener('click', run);
   $('sweep').addEventListener('click', sweep);
   $('scaling').addEventListener('click', scaling);
@@ -224,6 +243,12 @@ async function scaling() {
     $('threadsR').max = cores;
     $('coresNote').textContent = '(0 = all ' + cores + ' cores)';
     $('threadsR').min = 0;
+    const showGpu = async () => {
+      const g = (await (await fetch('/api/info')).json()).gpu;
+      $('gpuNote').textContent = g.state === 'ready' ? '(' + g.name + ')' : '(' + g.state + ')';
+      if (g.state === 'starting') setTimeout(showGpu, 700);
+    };
+    showGpu();
     $('info').textContent = cores + ' cores · armor resistance ' + info.defaults.resistance + ' J/mm/cm² · settings read from ' + info.source;
   } catch (e) { $('info').textContent = 'could not reach the server'; }
 })();
