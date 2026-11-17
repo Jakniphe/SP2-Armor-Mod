@@ -506,7 +506,9 @@ namespace ArmorFragments
             float m = c.PaintMetallic, s = c.PaintSmooth;
             if (bare > 0f || soot > 0f)
             {
-                m = Mathf.Lerp(m, 0.8f, bare);
+                // Not fully metal: the Lit shader gives a metal almost no color of its own (it shows what it reflects), and the game's dark
+                // surroundings made the bare steel look black. A low value keeps the steel's gray and still adds a shine.
+                m = Mathf.Lerp(m, 0.3f, bare);
                 s = Mathf.Lerp(s, 0.28f + 0.55f * shine, bare);
                 float k = Mathf.Clamp01(soot) * 0.92f * (1f - 0.65f * bare);   // the same as the color: soot clings less to steel
                 m *= 1f - k;

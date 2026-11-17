@@ -695,3 +695,7 @@ Três melhorias de aparência pedidas pelo usuário (itens 1, 2 e 4 da lista de 
 - **Sintoma:** com `PaintDamage` ligado, uma fuselagem por face (`[ARM ... fr=14 bk=14 ...]`, ZBZ-6) ficava com a face grande (o topo) branca e brilhante (atlas virgem: branco, metálico 0,5, suavidade 1). Com `PaintDamage` desligado voltava ao normal.
 - **Causa:** `ShowOn` só enchia (`Everything`) as faces do bloco quando o impacto era na placa própria (`plate.Main == null`). Um tiro numa LATERAL (eixo 1 ou 2) enchia só aquela lateral; o tile da placa própria (as faces grandes) ficava com `NeedsFull` ligado para sempre e o Lit lia o atlas virgem.
 - **Correção:** `ShowOn` agora parte do bloco (`plate.Main ?? plate`) e enfileira um job de preenchimento para o bloco e cada lateral com tile que ainda precisa e não é a placa do próprio job.
+
+## Aço nu escuro: metalicidade 0,8 trocada por 0,3 (print do usuário; só compilado, NÃO testado no jogo; versão 0.10.0)
+- **Sintoma:** com o preenchimento do bloco corrigido, as crateras e furos mostravam aço escuro/preto em vez de metal cinza, mesmo com "Shiny steel, dull soot" ligado.
+- **Causa provável:** `PlateStamps.PixelSurface` levava o aço nu a metalicidade 0,8. O Lit dá a um metal quase só o que ele reflete, e o ambiente do jogo é escuro, então o cinza do aço virava quase preto. Agora vai a 0,3 (a suavidade não mudou). O laboratório usa o mesmo `PixelSurface`, mas o reflexo de céu falso dele não é o do jogo.
