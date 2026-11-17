@@ -54,6 +54,72 @@ namespace ArmorFragments
             ScriptCalls[name] = calls + 1;
         }
 
+        // The game runs most of a craft's parts' updates through delegates that the parts register with the craft's CraftUpdateScript
+        // (CraftUpdateManagerScript.Update -> every craft -> its registered Update / FixedUpdate / LateUpdate delegates), so they are not Unity
+        // Update methods and the patches above do not see them. This finds the methods behind those delegates (reflection into the game's private
+        // lists, every couple of seconds so new ones are caught) and times them the same way.
+        private static readonly HashSet<MethodBase> WatchedDelegates = new HashSet<MethodBase>();
+        private static float nextDelegateScan;
+
+        public static void Tick()
+        {
+            if (!installed || scriptPatches == null || Time.unscaledTime < nextDelegateScan) return;
+            nextDelegateScan = Time.unscaledTime + 2f;
+            try { ScanDelegates(); }
+            catch (Exception e) { ArmorFragmentsPlugin.Log.LogWarning("[FRAME] could not scan the craft update delegates: " + e.Message); nextDelegateScan = float.MaxValue; }
+        }
+
+        private static object Member(object owner, string name)
+        {
+            if (owner == null) return null;
+            const BindingFlags all = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
+            Type type = owner.GetType();
+            FieldInfo field = type.GetField(name, all);
+            if (field != null) return field.GetValue(owner);
+            PropertyInfo property = type.GetProperty(name, all);
+            return property != null ? property.GetValue(owner, null) : null;
+        }
+
+        private static void ScanDelegates()
+        {
+            Type craftUpdate = typeof(Assets.Scripts.Craft.AircraftScript).Assembly.GetType("Assets.Scripts.Craft.CraftUpdateScript");
+            if (craftUpdate == null) return;
+            HarmonyMethod before = new HarmonyMethod(typeof(FrameProfiler).GetMethod("ScriptBefore", BindingFlags.Static | BindingFlags.NonPublic));
+            HarmonyMethod after = new HarmonyMethod(typeof(FrameProfiler).GetMethod("ScriptAfter", BindingFlags.Static | BindingFlags.NonPublic));
+            int added = 0;
+            foreach (UnityEngine.Object script in UnityEngine.Object.FindObjectsByType(craftUpdate, FindObjectsSortMode.None))
+            {
+                Array collections = Member(script, "_updateCollections") as Array;
+                if (collections == null) continue;
+                for (int c = 1; c < collections.Length && c <= 3; c++)   // Update, FixedUpdate, LateUpdate
+                {
+                    Array groups = Member(collections.GetValue(c), "UpdateGroupsByOrder") as Array;
+                    if (groups == null) continue;
+                    foreach (object group in groups)
+                    {
+                        Array items = Member(group, "Items") as Array;
+                        object countValue = Member(group, "Count");
+                        if (items == null || !(countValue is int)) continue;
+                        int count = Math.Min((int)countValue, items.Length);
+                        for (int j = 0; j < count; j++)
+                        {
+                            Delegate d = Member(items.GetValue(j), "Delegate") as Delegate;
+                            MethodInfo method = d != null ? d.Method : null;
+                            if (method == null || !WatchedDelegates.Add(method)) continue;
+                            try
+                            {
+                                if (method.GetMethodBody() == null) continue;
+                                scriptPatches.Patch(method, before, after);
+                                added++;
+                            }
+                            catch { }
+                        }
+                    }
+                }
+            }
+            if (added > 0) ArmorFragmentsPlugin.Log.LogInfo("[FRAME] timing " + added + " more methods that parts registered with their craft");
+        }
+
         private static void PatchScripts()
         {
             scriptPatches = new Harmony("com.yourname.armorfragments.frameprofiler");
@@ -130,6 +196,7 @@ namespace ArmorFragments
             try { if (scriptPatches != null) scriptPatches.UnpatchSelf(); }
             catch { }
             scriptPatches = null;
+            WatchedDelegates.Clear();
             PlayerLoopSystem root = PlayerLoop.GetCurrentPlayerLoop();
             if (root.subSystemList == null) return;
             PlayerLoopSystem[] groups = root.subSystemList;

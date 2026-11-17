@@ -37,6 +37,7 @@ namespace ArmorFragments
         public static void Tick()
         {
             Ring[next++ & (Size - 1)] = new Frame { Timestamp = Stopwatch.GetTimestamp(), Seconds = Time.unscaledDeltaTime };
+            FrameProfiler.Tick();
             if (ArmorFragmentsPlugin.PerfSceneReport.Value && !profilerTried)
             {
                 profilerTried = true;
