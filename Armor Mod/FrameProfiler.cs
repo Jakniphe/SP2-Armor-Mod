@@ -1,7 +1,10 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Reflection;
 using System.Text;
+using HarmonyLib;
+using UnityEngine;
 using UnityEngine.LowLevel;
 
 namespace ArmorFragments
@@ -24,6 +27,65 @@ namespace ArmorFragments
         private static long lastAt, frameStart;
         private static long lastLog;
         private static bool installed;
+
+        // Which script's Update / LateUpdate / FixedUpdate took the time: every such method of every MonoBehaviour in the game and in the other
+        // mods is wrapped by a pair of Harmony patches that add its time to a per-frame table.
+        private static Harmony scriptPatches;
+        private static readonly Dictionary<string, double> ScriptMs = new Dictionary<string, double>();
+        private static readonly Dictionary<string, int> ScriptCalls = new Dictionary<string, int>();
+        private static readonly Dictionary<MethodBase, string> ScriptNames = new Dictionary<MethodBase, string>();
+
+        private static void ScriptBefore(out long __state)
+        {
+            __state = Stopwatch.GetTimestamp();
+        }
+
+        private static void ScriptAfter(MethodBase __originalMethod, long __state)
+        {
+            double ms = (Stopwatch.GetTimestamp() - __state) * 1000.0 / Stopwatch.Frequency;
+            string name;
+            if (!ScriptNames.TryGetValue(__originalMethod, out name))
+                ScriptNames[__originalMethod] = name = __originalMethod.DeclaringType.FullName + "." + __originalMethod.Name;
+            double sum;
+            ScriptMs.TryGetValue(name, out sum);
+            ScriptMs[name] = sum + ms;
+            int calls;
+            ScriptCalls.TryGetValue(name, out calls);
+            ScriptCalls[name] = calls + 1;
+        }
+
+        private static void PatchScripts()
+        {
+            scriptPatches = new Harmony("com.yourname.armorfragments.frameprofiler");
+            HarmonyMethod before = new HarmonyMethod(typeof(FrameProfiler).GetMethod("ScriptBefore", BindingFlags.Static | BindingFlags.NonPublic));
+            HarmonyMethod after = new HarmonyMethod(typeof(FrameProfiler).GetMethod("ScriptAfter", BindingFlags.Static | BindingFlags.NonPublic));
+            string[] names = { "Update", "LateUpdate", "FixedUpdate" };
+            int patched = 0;
+            foreach (Assembly assembly in AppDomain.CurrentDomain.GetAssemblies())
+            {
+                string assemblyName = assembly.GetName().Name;
+                if (assemblyName.StartsWith("UnityEngine") || assemblyName.StartsWith("System") || assemblyName.StartsWith("mscorlib") ||
+                    assemblyName.StartsWith("Mono") || assemblyName.StartsWith("0Harmony") || assemblyName.StartsWith("BepInEx") ||
+                    assemblyName.StartsWith("Unity.") || assemblyName.StartsWith("netstandard") || assemblyName.StartsWith("MonoMod") ||
+                    assemblyName.StartsWith("Mono.")) continue;
+                Type[] types;
+                try { types = assembly.GetTypes(); }
+                catch (ReflectionTypeLoadException e) { types = Array.FindAll(e.Types, x => x != null); }
+                foreach (Type type in types)
+                {
+                    if (type.IsGenericTypeDefinition || !typeof(MonoBehaviour).IsAssignableFrom(type)) continue;
+                    foreach (string name in names)
+                    {
+                        MethodInfo method = type.GetMethod(name, BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly,
+                                                           null, Type.EmptyTypes, null);
+                        if (method == null || method.IsAbstract || method.GetMethodBody() == null) continue;
+                        try { scriptPatches.Patch(method, before, after); patched++; }
+                        catch { }
+                    }
+                }
+            }
+            ArmorFragmentsPlugin.Log.LogInfo("[FRAME] timing " + patched + " Update/LateUpdate/FixedUpdate methods of scripts");
+        }
 
         public static void Install()
         {
@@ -56,6 +118,8 @@ namespace ArmorFragments
             last = -1;
             PlayerLoop.SetPlayerLoop(root);
             installed = true;
+            try { PatchScripts(); }
+            catch (Exception e) { ArmorFragmentsPlugin.Log.LogWarning("[FRAME] the scripts could not be timed: " + e.Message); }
             ArmorFragmentsPlugin.Log.LogInfo("[FRAME] profiler on: " + labels.Length + " steps of the player loop are timed; frames over " + SlowMs + " ms are logged");
         }
 
@@ -63,6 +127,9 @@ namespace ArmorFragments
         {
             if (!installed) return;
             installed = false;
+            try { if (scriptPatches != null) scriptPatches.UnpatchSelf(); }
+            catch { }
+            scriptPatches = null;
             PlayerLoopSystem root = PlayerLoop.GetCurrentPlayerLoop();
             if (root.subSystemList == null) return;
             PlayerLoopSystem[] groups = root.subSystemList;
@@ -90,6 +157,8 @@ namespace ArmorFragments
             {
                 double frameMs = (now - frameStart) * 1000.0 / Stopwatch.Frequency;
                 if (frameMs > SlowMs && now - lastLog > 2 * Stopwatch.Frequency) Report(frameMs);
+                ScriptMs.Clear();
+                ScriptCalls.Clear();
                 Array.Clear(sums, 0, sums.Length);
                 Array.Clear(counts, 0, counts.Length);
                 frameStart = now;
@@ -115,7 +184,15 @@ namespace ArmorFragments
                 if (k > 0) text.Append(", ");
                 text.Append(labels[i]).Append(' ').Append(sums[i].ToString("F0")).Append(" ms (x").Append(counts[i]).Append(')');
             }
-            ArmorFragmentsPlugin.Log.LogInfo("[FRAME] " + frameMs.ToString("F0") + " ms: " + text);
+            List<KeyValuePair<string, double>> scripts = new List<KeyValuePair<string, double>>(ScriptMs);
+            scripts.Sort((a, b) => b.Value.CompareTo(a.Value));
+            StringBuilder who = new StringBuilder();
+            for (int k = 0; k < scripts.Count && k < 5; k++)
+            {
+                if (k > 0) who.Append(", ");
+                who.Append(scripts[k].Key).Append(' ').Append(scripts[k].Value.ToString("F0")).Append(" ms (x").Append(ScriptCalls[scripts[k].Key]).Append(')');
+            }
+            ArmorFragmentsPlugin.Log.LogInfo("[FRAME] " + frameMs.ToString("F0") + " ms: " + text + " | scripts: " + who);
         }
     }
 }
