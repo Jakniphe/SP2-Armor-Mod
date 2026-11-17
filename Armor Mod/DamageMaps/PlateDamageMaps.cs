@@ -1023,7 +1023,9 @@ namespace ArmorFragments
             VehicleMaps.ReleaseStaging();
             Infos.Clear();
             NoInfo.Clear();
+            // RELEASE-STRIP-BEGIN
             testPending = false;
+            // RELEASE-STRIP-END
         }
 
         // ---- Test impacts (panel) ----------------------------------------------------------------
