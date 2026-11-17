@@ -347,6 +347,37 @@ internal static class Test
         Check(deepest < -0.002f, "a plate with nothing around it is marked as before (" + (deepest * 1000f).ToString("F2") + " mm)");
     }
 
+    // A heavy blow bends the plate it hits: a broad shallow dish on the struck face and a bulge on the other; a light one does not.
+    private static void FlexTest()
+    {
+        Console.WriteLine("\n== A HEAVY BLOW BENDS THE PLATE ==");
+        float heavyDepth = 0f, lightDepth = 0f, heavyRadius = 0f;
+        PlateImpact heavy = new PlateImpact { Kind = DamageKind.Blocked, Front = true, U = 0.6f, V = 0.5f, Caliber = 0.075f, Strength = 0.95f, Thickness = 0.04f };
+        PlateImpact light = heavy; light.Strength = 0.2f;
+        PlateStamps.FlexOf(heavy, 1.2f, 1.0f, out heavyRadius, out heavyDepth);
+        PlateStamps.FlexOf(light, 1.2f, 1.0f, out heavyRadius, out lightDepth);
+        PlateStamps.FlexOf(heavy, 1.2f, 1.0f, out heavyRadius, out heavyDepth);
+        Check(heavyDepth > 0.004f && lightDepth < 0.0008f, "a heavy blow bends the plate by several mm, a light one hardly at all (" +
+              (heavyDepth * 1000f).ToString("F1") + " and " + (lightDepth * 1000f).ToString("F2") + " mm)");
+        Check(heavyRadius >= 0.3f && heavyRadius <= 0.5f, "the dish is wide (radius " + (heavyRadius * 100f).ToString("F0") + " cm, at most half the plate)");
+
+        PlateCpu cpu = new PlateCpu { Width = 256, Height = 224, PxU = 200f, PxV = 200f };
+        cpu.TileX[0] = 0; cpu.TileY[0] = 0; cpu.TileX[1] = 256; cpu.TileY[1] = 0;
+        PlateStamps.FlexScale = 1f;
+        PlateStamps.AddFlex(cpu, heavy);
+        int middle = (int)(0.5f * 200f + PlateCpu.Border) * cpu.Width + (int)(0.6f * 200f + PlateCpu.Border);
+        float inFront = cpu.Faces[0].Height[middle], behind = cpu.Faces[1].Height[middle];
+        Check(inFront < -0.003f && behind > 0.002f, "the struck face is dished in (" + (inFront * 1000f).ToString("F1") + " mm) and the other bulges out (" + (behind * 1000f).ToString("F1") + " mm)");
+        int farAway = (int)(0.5f * 200f + PlateCpu.Border) * cpu.Width + (int)(1.15f * 200f + PlateCpu.Border);
+        Check(Math.Abs(cpu.Faces[0].Height[farAway]) < 1e-6f, "far from the blow the plate is flat");
+
+        PlateStamps.FlexScale = 0f;
+        PlateCpu off = new PlateCpu { Width = 256, Height = 224, PxU = 200f, PxV = 200f };
+        PlateStamps.AddFlex(off, heavy);
+        Check(off.Faces[0] == null || off.Faces[0].X1 < 0, "with the setting off nothing bends");
+        PlateStamps.FlexScale = 1f;
+    }
+
     // The sides of a thick block as plates: every corner of the block falls inside the side's rectangle, the axes are perpendicular and right-handed.
     private static void SideTest()
     {
@@ -388,6 +419,7 @@ internal static class Test
         MipTest();
         SideTest();
         ClearTest();
+        FlexTest();
         Console.WriteLine(failures == 0 ? "\nALL CHECKS PASSED" : "\n" + failures + " CHECK(S) FAILED");
         return failures == 0 ? 0 : 1;
     }

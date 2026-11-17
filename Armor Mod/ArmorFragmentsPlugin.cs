@@ -95,6 +95,7 @@ namespace ArmorFragments
         internal static ConfigEntry<bool> KeepPlatesApart;          // local: armor plates keep their own renderer in flight
         internal static ConfigEntry<bool> DamageMapsEnabled;        // local: marks on the plates
         internal static ConfigEntry<bool> DamageMapsPaintDamage;    // local: marks scorch the paint and flake it off, showing steel (marked plates are drawn with the Lit shader)
+        internal static ConfigEntry<bool> DamageMapsFlex;           // local: a heavy blow bends the plate it hits, and the armor plates joined to it, a little
         internal static ConfigEntry<bool> DamageMapsAvoidOverlap;   // local: marks do not push a plate's metal through the armor plates it overlaps
         internal static ConfigEntry<bool> DamageMapsSteelGloss;     // local: bare steel is metallic and shiny (a metallic/smoothness map next to the paint), scorched paint is dull
         internal static ConfigEntry<bool> ImpactEffectsEnabled;            // local: sparks, flash, smoke and paint dust where a shell hits armor
@@ -415,6 +416,9 @@ namespace ArmorFragments
                 "steel (and a bright rim round holes). Plates with marks are then drawn with the Lit shader in their paint's color (a plate with a pattern " +
                 "or a texture loses it). Takes effect for the next vehicle that gets marks (the panel's Clear button starts over).")
             ;
+            DamageMapsFlex = Config.Bind("DamageMaps", "Flex", true,
+                "A heavy blow bends the whole plate it hits (a broad dish on the struck face, a bulge on the other) and, a little, the armor plates joined " +
+                "to it, the less the further they are. Only a look, and only for heavy hits (a big shell against a plate that stops it).");
             DamageMapsAvoidOverlap = Config.Bind("DamageMaps", "AvoidOverlap", true,
                 "Where armor plates overlap or are clipped into each other, the marks of a hit stay inside the room there is: a dent cannot run through " +
                 "the plate behind it and metal pushed out cannot come through the plate in front. Costs a few physics queries the first time a plate with " +
@@ -441,7 +445,7 @@ namespace ArmorFragments
             DamageMapsWeakenArmor = Config.Bind("DamageMaps", "WeakenArmor", true,
                 "The marks count: a hole lets shells and fragments through, a dent makes the plate thinner there. " +
                 "(Not synchronized between players yet: each computer keeps the marks of the shots it worked out.)");
-            DamageMapsDensity = Config.Bind("DamageMaps", "PixelsPerMeter", 256f,
+            DamageMapsDensity = Config.Bind("DamageMaps", "PixelsPerMeter", 512f,
                 new ConfigDescription("How detailed the maps are: pixels per meter of plate. More = finer marks, more memory.",
                     new AcceptableValueRange<float>(64f, 1024f)));
             DamageMapsMaxAtlas = Config.Bind("DamageMaps", "MaxAtlasSize", 2048,

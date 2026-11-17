@@ -480,6 +480,7 @@ namespace ArmorFragments
                 Owner = maps, Plate = plate, Impacts = impacts, DeliverAt = Time.time + Mathf.Max(delay, 0f),
                 Height = ArmorFragmentsPlugin.DamageMapsRelief.Value != 0 || maps.Gloss,
                 Damage = ArmorFragmentsPlugin.ImpactCameraDamageView.Value,
+                Everything = plate.TakeFull(),   // its tiles were just given out: they are filled with its paint and flat normals first
                 ClearPatches = PlateClearance.Prepare(plate, impacts),   // plates that overlap this one: the marks stay inside the room there is
             };
             WantGeometry(job, plate);
@@ -506,7 +507,62 @@ namespace ArmorFragments
                                                      "): this impact gets the quick marks");
                 }
             }
+            PlateStamps.FlexScale = ArmorFragmentsPlugin.DamageMapsFlex.Value ? 1f : 0f;
             DamageWorker.Enqueue(job);
+            FlexNeighbors(part, maps, plate, impacts);
+        }
+
+        // A heavy blow bends the plates it is joined to a little too: each armor plate that touches the hit one gets a dish of its own, at the place
+        // nearest the hit, smaller the further it is (none beyond 30 cm, none that would be under 0.8 mm deep). Only a look; nothing is recorded.
+        private static void FlexNeighbors(PartScript part, VehicleMaps maps, PlateVisual plate, PlateImpact[] impacts)
+        {
+            if (!ArmorFragmentsPlugin.DamageMapsFlex.Value) return;
+            foreach (PlateImpact impact in impacts)
+            {
+                if (impact.Kind != DamageKind.Blocked && impact.Kind != DamageKind.Penetrated) continue;
+                PlateGeometry g = plate.Info.Geometry;
+                float radius, depth;
+                PlateStamps.FlexOf(impact, g.SizeU, g.SizeV, out radius, out depth);
+                if (depth * 0.5f < 0.0008f) continue;
+
+                System.Collections.Generic.List<Collider> neighbors = PlateClearance.NeighborsOf(plate);
+                if (neighbors.Count == 0) continue;
+                Vector3 hit = part.transform.TransformPoint(g.Origin + g.T1 * impact.U + g.T2 * impact.V);
+                Vector3 struck = part.transform.TransformDirection(g.N * (impact.Front ? 1f : -1f));
+
+                Dictionary<PartScript, Vector3> nearest = new Dictionary<PartScript, Vector3>();
+                Dictionary<PartScript, float> distance = new Dictionary<PartScript, float>();
+                foreach (Collider c in neighbors)
+                {
+                    if (c == null || !c.gameObject.activeInHierarchy) continue;
+                    PartScript other = c.GetComponentInParent<PartScript>();
+                    if (other == null || other == part) continue;
+                    Vector3 q = c.ClosestPoint(hit);
+                    float d = (q - hit).magnitude;
+                    float known;
+                    if (d < 0.3f && (!distance.TryGetValue(other, out known) || d < known)) { distance[other] = d; nearest[other] = q; }
+                }
+
+                foreach (KeyValuePair<PartScript, Vector3> pair in nearest)
+                {
+                    PartScript other = pair.Key;
+                    float share = 0.5f * (1f - distance[other] / 0.3f);
+                    float neighborDepth = depth * share;
+                    if (neighborDepth < 0.0008f) continue;
+                    PlateInfo info = InfoOf(other);
+                    if (info == null) continue;
+
+                    Vector2 at = info.Geometry.ToPlane(other.transform.InverseTransformPoint(pair.Value));
+                    Vector3 normal = other.transform.TransformDirection(info.Geometry.N);
+                    PlateImpact flex = new PlateImpact
+                    {
+                        Kind = DamageKind.Flex, Axis = 0, Front = Vector3.Dot(normal, struck) >= 0f,
+                        U = at.x, V = at.y, Caliber = radius * 0.6f, Depth = neighborDepth, Strength = impact.Strength,
+                        Thickness = info.ThicknessM, Seed = unchecked(other.Part.Id * 7919 + (++counter) * 104729),
+                    };
+                    ShowOn(other, new[] { flex }, 0f, 0);   // a Flex asks for no flexing of its own neighbors
+                }
+            }
         }
 
         private static VehicleMaps VehicleFor(AircraftScript aircraft)

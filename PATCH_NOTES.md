@@ -172,3 +172,8 @@ Also
 - Sparks, a flash, paint dust and smoke where a shell hits armor: a fountain of sparks for a hit, a stream of long sparks along a ricochet, a hot spray and dark smoke out of the back of a penetration, a fireball for an HE shell. "Impact effects" and "Impact effects amount" in the panel.
 - A ricochet now skids a band of paint off the plate: wide and bright where it touched, thinning out with fine lines along the way, with a scorched spot where it hit.
 - The steel that shows through the paint is metallic and shiny (brightest where a shell skidded or cut through, duller where it was torn), and scorched paint is dull ("Shiny steel, dull soot"; one more 21 MB atlas per vehicle).
+
+0.10.0 (finer marks, bending)
+- The detail of the marks no longer depends on how many armor plates the vehicle has: each plate gets its own piece of the vehicle's texture the first time it is hit (up to 768 pixels per meter, less if the texture is filling up). Before, a vehicle with many plates shared one texture and every mark came out at about 120 pixels per meter.
+- A heavy blow bends the whole plate it hits, and a little the armor plates joined to it ("Heavy hits bend plates").
+- Marks no longer push a plate's metal through the armor plates that overlap it ("Marks stay inside overlapping plates").

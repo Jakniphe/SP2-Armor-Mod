@@ -71,37 +71,20 @@ namespace ArmorFragments
                     if (info.Sides[axis - 1] != null) all.Add(info.ForAxis(axis));
             }
 
-            // The tiles: as dense as the setting says, less dense if they do not fit in the biggest atlas (2048 x 2048 unless the setting allows more).
+            // The atlas is as big as all the plates would need at the setting's density (at most the biggest the setting allows: 2048 x 2048 unless it says
+            // more), but the tiles are NOT handed out now: a plate gets its own (as dense as the setting says, less if the atlas is filling up) the first time
+            // it is marked, so the detail of a plate does not depend on how many plates the vehicle has.
             float density = Mathf.Max(ArmorFragmentsPlugin.DamageMapsDensity.Value, 16f);
             int maxAtlas = Mathf.Clamp(Mathf.ClosestPowerOfTwo(ArmorFragmentsPlugin.DamageMapsMaxAtlas.Value), 1024, 4096);
-            int size = 0;
-            List<int[]> tiles = null;
-            for (int attempt = 0; attempt < 8; attempt++)
+            long area = 0;
+            foreach (PlateInfo info in all)
             {
-                long area = 0;
-                List<int[]> sizes = new List<int[]>();
-                foreach (PlateInfo info in all)
-                {
-                    // Multiples of Align, so the tiles line up with every mip level of the atlas.
-                    // The sides of thick blocks get half the density (they are small and seen at a slant, and the vehicle's atlas must not get
-                    // coarser for everything else because of them).
-                    float own = info.Geometry.Axis == 0 ? density : density * 0.5f;
-                    int w = (Mathf.CeilToInt(info.Geometry.SizeU * own) + 2 * PlateCpu.Border + PlateCpu.Align - 1) / PlateCpu.Align * PlateCpu.Align;
-                    int h = (Mathf.CeilToInt(info.Geometry.SizeV * own) + 2 * PlateCpu.Border + PlateCpu.Align - 1) / PlateCpu.Align * PlateCpu.Align;
-                    sizes.Add(new[] { w, h });
-                    area += 2L * w * h;
-                }
-                int candidate = 64;
-                while (candidate < maxAtlas && (long)candidate * candidate < (area * 13L) / 10L + 4096) candidate *= 2;
-                for (int atlas = candidate; atlas <= maxAtlas && tiles == null; atlas *= 2)
-                {
-                    List<int[]> placed = Pack(sizes, atlas);
-                    if (placed != null) { size = atlas; tiles = placed; }
-                }
-                if (tiles != null) break;
-                density *= 0.7f;
+                int w, h;
+                TileSize(info.Geometry, density, out w, out h);
+                area += 2L * w * h;
             }
-            if (tiles == null) { LastFailure = "the plates do not fit in an atlas"; return null; }
+            int size = 512;
+            while (size < maxAtlas && (long)size * size < (area * 13L) / 10L + 4096) size *= 2;
 
             VehicleMaps maps = new VehicleMaps(aircraft, theme) { AtlasSize = size, LastUsed = Time.time, Density = density, PaintMode = ArmorFragmentsPlugin.DamageMapsPaintDamage.Value };
             maps.Gloss = maps.PaintMode && ArmorFragmentsPlugin.DamageMapsSteelGloss.Value;
@@ -111,7 +94,6 @@ namespace ArmorFragments
             for (int i = 0; i < all.Count; i++)
             {
                 PlateInfo info = all[i];
-                int w = tiles[i][2], h = tiles[i][3];
                 Vector3 paint;
                 Vector2 surface;
                 if (!paints.TryGetValue(info.Part, out paint))
@@ -122,20 +104,14 @@ namespace ArmorFragments
                     surfaces[info.Part] = new Vector2(Mathf.Clamp01(metallic), Mathf.Clamp01(smoothness));
                 }
                 surface = surfaces[info.Part];
-                PlateCpu cpu = new PlateCpu
+                PlateCpu cpu = new PlateCpu   // no tiles yet (Width = 0): AllocateTiles gives them
                 {
                     Paint = paint,
                     PaintMetallic = surface.x,
                     PaintSmooth = surface.y,
                     PaintMode = maps.PaintMode,
-                    Width = w,
-                    Height = h,
                     Thickness = info.ThicknessM,
-                    PxU = (w - 2 * PlateCpu.Border) / info.Geometry.SizeU,
-                    PxV = (h - 2 * PlateCpu.Border) / info.Geometry.SizeV,
                 };
-                cpu.TileX[0] = tiles[i][0]; cpu.TileY[0] = tiles[i][1];
-                cpu.TileX[1] = tiles[i][4]; cpu.TileY[1] = tiles[i][5];
                 PlateVisual visual = new PlateVisual { Info = info, Cpu = cpu, Owner = maps };
                 int side = info.Geometry.Axis;
                 if (side == 0)
@@ -144,7 +120,7 @@ namespace ArmorFragments
                 }
                 else
                 {
-                    PlateVisual main = maps.Plates[info.Part];   // the plate's own tiles come first in the list
+                    PlateVisual main = maps.Plates[info.Part];   // the plate's own comes first in the list
                     visual.Main = main;
                     main.Sides[side - 1] = visual;
                 }
@@ -155,7 +131,7 @@ namespace ArmorFragments
             FillTexture(maps.Normal, 128, 128, 255, 255);   // flat normals
 
             ArmorFragmentsPlugin.Log.LogInfo("[DMAP] atlas " + size + "x" + size + " for " + infos.Count + " armor plate(s) of '" +
-                                             aircraft.name + "', " + density.ToString("F0") + " px/m, up to " + (4L * size * size * 4 / (1024 * 1024)) +
+                                             aircraft.name + "', tiles given out as plates are marked (" + density.ToString("F0") + " px/m wanted), up to " + (4L * size * size * 4 / (1024 * 1024)) +
                                              " MB of video memory once all its atlases exist (the normal atlas took " +
                                              PerfMonitor.Since(atlasAt).ToString("F1") + " ms)");
             return maps;
@@ -198,33 +174,85 @@ namespace ArmorFragments
             }
         }
 
-        // Shelf packing: each plate needs two tiles of its size (front, back). Returns x, y of the front and back tiles
-        // with the size in front: {x1, y1, w, h, x2, y2}. Null if they do not fit.
-        private static List<int[]> Pack(List<int[]> sizes, int atlas)
-        {
-            int[] order = new int[sizes.Count];
-            for (int i = 0; i < order.Length; i++) order[i] = i;
-            Array.Sort(order, (a, b) => sizes[b][1].CompareTo(sizes[a][1]));
+        // ---- The atlas's tiles, given out as plates are marked ----------------------------------------------------
 
-            int[][] result = new int[sizes.Count][];
-            int x = 0, y = SentinelSize, shelf = 0;
-            foreach (int index in order)
+        public const int MaxTileSide = 1024;   // a plate's tile is never more than this many pixels on a side (a long plate is less dense, not huge)
+        public const float MinDensity = 48f;   // the least dense a tile may get when the atlas is filling up
+        private int packX, packY = SentinelSize, packShelf;
+
+        // The size of one tile (front or back) of a plate at a density: multiples of Align, so it lines up with every mip level.
+        private static void TileSize(PlateGeometry g, float density, out int w, out int h)
+        {
+            float own = g.Axis == 0 ? density : density * 0.5f;   // the sides of thick blocks are small and seen at a slant: half the density
+            float limit = (MaxTileSide - 2 * PlateCpu.Border - PlateCpu.Align) / Mathf.Max(g.SizeU, g.SizeV, 0.01f);
+            own = Mathf.Min(own, limit);
+            w = (Mathf.CeilToInt(g.SizeU * own) + 2 * PlateCpu.Border + PlateCpu.Align - 1) / PlateCpu.Align * PlateCpu.Align;
+            h = (Mathf.CeilToInt(g.SizeV * own) + 2 * PlateCpu.Border + PlateCpu.Align - 1) / PlateCpu.Align * PlateCpu.Align;
+        }
+
+        // Shelf packing, one tile at a time.
+        private bool TryAllocateTile(int w, int h, out int x, out int y)
+        {
+            x = 0; y = 0;
+            if (w > AtlasSize || h > AtlasSize) return false;
+            int px = packX, py = packY, shelf = packShelf;
+            if (px + w > AtlasSize) { py += shelf; px = 0; shelf = 0; }
+            if (py + h > AtlasSize) return false;
+            x = px; y = py;
+            packX = px + w; packY = py; packShelf = Math.Max(shelf, h);
+            return true;
+        }
+
+        // Gives one plate (or one side) its two tiles at this density. False if the atlas has no room for them.
+        private bool TryAllocateOne(PlateVisual plate, float density)
+        {
+            PlateGeometry g = plate.Info.Geometry;
+            int w, h;
+            TileSize(g, density, out w, out h);
+            int x0, y0, x1, y1;
+            if (!TryAllocateTile(w, h, out x0, out y0) || !TryAllocateTile(w, h, out x1, out y1)) return false;
+
+            PlateCpu c = plate.Cpu;
+            c.Width = w; c.Height = h;
+            c.PxU = (w - 2 * PlateCpu.Border) / g.SizeU;
+            c.PxV = (h - 2 * PlateCpu.Border) / g.SizeV;
+            c.TileX[0] = x0; c.TileY[0] = y0;
+            c.TileX[1] = x1; c.TileY[1] = y1;
+            c.Get(0); c.Get(1);          // both faces exist, so the first job can hand over the whole of each tile (its paint, its flat normals)
+            plate.NeedsFull = true;
+            return true;
+        }
+
+        // The tiles of a plate and of its sides, the first time the plate is marked. The plate's own is as dense as the setting says and goes less
+        // dense, a step at a time, while the atlas has no room; a side that finds no room stays without marks. False: not even the plate's own fits.
+        public bool AllocateTiles(PlateVisual main)
+        {
+            if (main.Cpu.Width > 0) return true;
+            float density = Mathf.Clamp(ArmorFragmentsPlugin.DamageMapsDensity.Value, 16f, 768f);   // finer than that and a few plates would fill the atlas
+            // No plate takes more than a sixth of the atlas (its two faces): a big plate is less dense so that the others still have room.
+            for (int guard = 0; guard < 24 && density > MinDensity; guard++)
             {
-                int w = sizes[index][0], h = sizes[index][1];
-                int[] at = new int[6];
-                at[2] = w; at[3] = h;
-                for (int face = 0; face < 2; face++)
-                {
-                    if (x + w > atlas) { y += shelf; x = 0; shelf = 0; }
-                    if (y + h > atlas || w > atlas) return null;
-                    at[face == 0 ? 0 : 4] = x;
-                    at[face == 0 ? 1 : 5] = y;
-                    x += w;
-                    if (h > shelf) shelf = h;
-                }
-                result[index] = at;
+                int tw, th;
+                TileSize(main.Info.Geometry, density, out tw, out th);
+                if (2L * tw * th <= (long)AtlasSize * AtlasSize / 6) break;
+                density *= 0.85f;
             }
-            return new List<int[]>(result);
+            float got = 0f;
+            for (float d = density; d >= MinDensity * 0.7f; d *= 0.7f)
+            {
+                if (TryAllocateOne(main, d)) { got = d; break; }
+            }
+            if (got <= 0f) return false;
+            foreach (PlateVisual side in main.Sides)
+            {
+                if (side == null) continue;
+                for (float d = got; d >= MinDensity * 0.7f; d *= 0.7f)
+                    if (TryAllocateOne(side, d)) break;
+            }
+            ArmorFragmentsPlugin.Log.LogInfo("[DMAP] tiles for plate '" + main.Info.Part.Part.Name + "': " + main.Cpu.PxU.ToString("F0") + " x " + main.Cpu.PxV.ToString("F0") +
+                                             " px/m (" + main.Cpu.Width + " x " + main.Cpu.Height + " a face), the atlas is " +
+                                             (100L * packY / AtlasSize) + "% used");
+            return true;
         }
 
         // The plate, ready to be stamped: its UV0 and material set. Null if it cannot be shown (merged into its group's mesh...).
@@ -232,7 +260,9 @@ namespace ArmorFragments
         public PlateVisual PlateFor(PartScript part, int axis)
         {
             PlateVisual main = PlateFor(part);
-            return main == null || axis == 0 ? main : main.Sides[axis - 1];
+            if (main == null || axis == 0) return main;
+            PlateVisual side = main.Sides[axis - 1];
+            return side != null && side.Cpu.Width > 0 ? side : null;   // a side that found no room in the atlas has no marks
         }
 
         // Every plate with tiles: the blocks' own and their sides.
@@ -302,6 +332,7 @@ namespace ArmorFragments
             foreach (PlateVisual plate in AllPlates())
             {
                 PlateCpu c = plate.Cpu;
+                if (c.Width <= 0) continue;   // no tiles yet
                 byte[] row = new byte[c.Width * 4];
                 FillPattern(row, patternOf(c));
                 for (int face = 0; face < 2; face++)
@@ -601,6 +632,8 @@ namespace ArmorFragments
         public bool Failed;
         public bool HasHole;
         public Material Lit;
+        public bool NeedsFull;   // its tiles were just given out: the next job hands over the whole of them
+        public bool TakeFull() { bool wanted = NeedsFull; NeedsFull = false; return wanted; }
         public System.Collections.Generic.List<Collider> Neighbors;   // the other armor plates' colliders that reach this plate (PlateClearance)
         public ClearGrid[] ClearKnown;                                // what the main thread has measured of the room around it, per face
         public bool[][] ClearDone;
@@ -852,6 +885,13 @@ namespace ArmorFragments
                 return false;
             }
 
+            if (!Owner.AllocateTiles(this))
+            {
+                Failed = true;
+                ArmorFragmentsPlugin.Log.LogWarning("[DMAP] no room is left in the vehicle's atlas for plate '" + Info.Part.Part.Name + "': it gets no marks (raise MaxAtlasSize or lower PixelsPerMeter)");
+                return false;
+            }
+
             Mesh mesh = Info.Mesh;
             originalMaterials = map.OriginalMaterials;
             originalExclude = map.ExcludeFromMeshCombine;
@@ -903,7 +943,7 @@ namespace ArmorFragments
                 for (int k = -1; k < 2; k++)
                 {
                     PlateVisual candidate = k < 0 ? this : Sides[k];
-                    if (candidate == null) continue;
+                    if (candidate == null || candidate.Cpu.Width <= 0) continue;
                     float f = Vector3.Dot(n, candidate.Info.Geometry.N);
                     if (Mathf.Abs(f) >= best && (owner == null || Mathf.Abs(f) > best + 1e-4f)) { owner = candidate; best = Mathf.Abs(f); facing = f; }
                 }

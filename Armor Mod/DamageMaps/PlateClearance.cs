@@ -130,7 +130,7 @@ namespace ArmorFragments
         }
 
         // The colliders of the other armor plates of the vehicle that reach the marked plate (found once).
-        private static List<Collider> NeighborsOf(PlateVisual plate)
+        internal static List<Collider> NeighborsOf(PlateVisual plate)
         {
             if (plate.Neighbors != null) return plate.Neighbors;
             List<Collider> found = new List<Collider>();

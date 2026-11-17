@@ -12,6 +12,7 @@ namespace ArmorFragments
         Pit,         // a fragment stopped in the plate
         SmallHole,   // a fragment went through
         Burst,       // a high-explosive shell went off on the plate: a wide, shallow dish
+        Flex,        // a heavy blow somewhere nearby bent this plate a little: a broad, shallow dish (Caliber = its radius, Depth = how deep)
     }
 
     // What one stamp needs, in plate coordinates (meters).
@@ -23,6 +24,7 @@ namespace ArmorFragments
         public float U, V;         // where
         public float DirU, DirV;   // the shell's direction along the plate (for a ricochet: the way it bounced off)
         public float Angle;        // degrees from the normal (0 = head-on)
+        public float Depth;        // meters: only for Flex (how deep the dish is)
         public float Caliber;      // meters (a fragment: its diameter)
         public float Strength;     // 0..1: how hard the hit was compared with what the plate could take
         public float Thickness;    // meters
@@ -240,8 +242,64 @@ namespace ArmorFragments
                     break;
                 }
             }
+            AddFlex(cpu, impact);
             LimitDepth(cpu, impact.Thickness);
             PaintImpact(cpu, impact);
+        }
+
+        // ---- Flexing: a heavy blow bends the whole plate a little ----
+
+        public static float FlexScale = 1f;   // 0 = off (the setting); read by the worker, written by the main thread
+
+        // The dish a blow makes in the plate round the hit: wide (a few calibers, at most half the plate), and as deep as the blow is hard (the square
+        // of its strength, so only the heavy ones show), never more than half the plate's thickness; a plate that is punched through bends a good deal less.
+        public static void FlexOf(PlateImpact impact, float sizeU, float sizeV, out float radius, out float depth)
+        {
+            float caliber = Mathf.Max(impact.Caliber, 0.002f);
+            float strength = Mathf.Clamp01(impact.Strength);
+            float scale = impact.Kind == DamageKind.Penetrated ? 0.4f : 1f;
+            radius = Mathf.Clamp(caliber * (4f + 4f * strength), 0.12f, Mathf.Max(0.12f, 0.5f * Mathf.Min(sizeU, sizeV)));
+            depth = Mathf.Min(0.5f * impact.Thickness, caliber * 0.10f * strength * strength * scale);
+        }
+
+        // The struck face is pushed in over a broad area, and the other one out by about as much (the plate is bent, not dented). Used for the plate
+        // that was hit (blocked or penetrated) and for the plates round it (kind Flex, which says its own radius and depth).
+        public static void AddFlex(PlateCpu c, PlateImpact impact)
+        {
+            float radius, depth;
+            if (impact.Kind == DamageKind.Flex) { radius = impact.Caliber; depth = impact.Depth; }
+            else if (impact.Kind == DamageKind.Blocked || impact.Kind == DamageKind.Penetrated)
+            {
+                float sizeU = (c.Width - 2 * PlateCpu.Border) / c.PxU, sizeV = (c.Height - 2 * PlateCpu.Border) / c.PxV;
+                FlexOf(impact, sizeU, sizeV, out radius, out depth);
+            }
+            else return;
+            depth *= FlexScale;
+            if (depth < 0.0002f || radius <= 0f) return;
+
+            int entry = impact.Front ? 0 : 1;
+            Dish(c, c.Get(entry), impact.U, impact.V, radius, -depth);
+            Dish(c, c.Get(1 - entry), impact.U, impact.V, radius, depth * 0.6f);
+        }
+
+        // A smooth dish: 'height' at the middle, falling to nothing at the radius, with no rim.
+        private static void Dish(PlateCpu c, PlateCpu.Face f, float cu, float cv, float radius, float height)
+        {
+            int x0, y0, x1, y1;
+            if (!Region(c, cu, cv, radius, out x0, out y0, out x1, out y1)) return;
+            for (int y = y0; y < y1; y++)
+            {
+                for (int x = x0; x < x1; x++)
+                {
+                    float dx = (x + 0.5f - PlateCpu.Border) / c.PxU - cu;
+                    float dy = (y + 0.5f - PlateCpu.Border) / c.PxV - cv;
+                    float rho = Mathf.Sqrt(dx * dx + dy * dy) / radius;
+                    if (rho >= 1f) continue;
+                    float bowl = 1f - rho * rho;
+                    f.Height[y * c.Width + x] += height * bowl * bowl;
+                }
+            }
+            Dirty(f, x0, y0, x1, y1, false);
         }
 
         // ---- Paint: scorching and flaked-off paint (the look of a mark, apart from its shape) ----
