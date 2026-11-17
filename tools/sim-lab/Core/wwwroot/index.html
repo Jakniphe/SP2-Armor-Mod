@@ -104,7 +104,7 @@
         <label style="font-size:12.5px; display:flex; gap:6px; align-items:center">Depth exaggeration
           <input type="range" id="view3dExag" min="1" max="30" step="1" value="4" style="width:130px"> <b id="view3dExagText">4×</b></label>
         <button data-view3d="reset">Reset view</button>
-        <button data-view3d="top">Top</button>
+        <button data-view3d="front">Front</button>
         <button data-view3d="side">Side (section)</button>
         <button data-view3d="back">Back</button>
       </div>
@@ -119,7 +119,7 @@
 // ---- The plate in three dimensions: a small WebGL viewer (no libraries). Left drag rotates, right drag or shift+drag pans, the wheel zooms.
 const View3D = (() => {
   let canvas, gl, program, vao, indexCount = 0, sets = [], current = 0, ready = false, dirty = false, framed = false;
-  const cam = { yaw: 0.5, pitch: 0.75, dist: 1, target: [0, 0, 0] };
+  const cam = { yaw: 0.55, pitch: 0.22, dist: 1, target: [0, 0, 0] };   // the plate stands upright: y is up, its front faces +z
   let scale = 1;
 
   const vertexSource = `#version 300 es
@@ -164,11 +164,11 @@ const View3D = (() => {
 
   function eyePosition() {
     const cp = Math.cos(cam.pitch);
-    return [cam.target[0] + cam.dist * cp * Math.sin(cam.yaw), cam.target[1] - cam.dist * cp * Math.cos(cam.yaw), cam.target[2] + cam.dist * Math.sin(cam.pitch)];
+    return [cam.target[0] + cam.dist * cp * Math.sin(cam.yaw), cam.target[1] + cam.dist * Math.sin(cam.pitch), cam.target[2] + cam.dist * cp * Math.cos(cam.yaw)];
   }
   function basis() {
     const eye = eyePosition();
-    const f = norm(sub(cam.target, eye)), s = norm(cross(f, [0, 0, 1]));
+    const f = norm(sub(cam.target, eye)), s = norm(cross(f, [0, 1, 0]));
     return { eye, right: s, up: cross(s, f) };
   }
 
@@ -297,7 +297,7 @@ const View3D = (() => {
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
     gl.enable(gl.DEPTH_TEST);
     const { eye } = basis();
-    const view = lookAt(eye, cam.target, [0, 0, 1]);
+    const view = lookAt(eye, cam.target, [0, 1, 0]);
     const projection = perspective(0.7, canvas.width / canvas.height, cam.dist * 0.01, cam.dist * 60);
     gl.useProgram(program);
     gl.uniformMatrix4fv(gl.getUniformLocation(program, 'uViewProj'), false, new Float32Array(multiply(projection, view)));
@@ -310,10 +310,10 @@ const View3D = (() => {
 
   function frame() { cam.dist = scale * 0.9; cam.target = [0, 0, 0]; }
   function view(name) {
-    if (name === 'top') { cam.yaw = 0; cam.pitch = 1.5; }
-    else if (name === 'side') { cam.yaw = 0; cam.pitch = 0; }
-    else if (name === 'back') { cam.yaw = 0.5; cam.pitch = -0.75; }
-    else { cam.yaw = 0.5; cam.pitch = 0.75; }
+    if (name === 'front') { cam.yaw = 0; cam.pitch = 0; }
+    else if (name === 'side') { cam.yaw = Math.PI / 2; cam.pitch = 0; }
+    else if (name === 'back') { cam.yaw = Math.PI - 0.55; cam.pitch = 0.22; }
+    else { cam.yaw = 0.55; cam.pitch = 0.22; }
     request();
   }
 
