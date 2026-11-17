@@ -97,6 +97,7 @@ namespace ArmorFragments
         internal static ConfigEntry<bool> DamageMapsPaintDamage;    // local: marks scorch the paint and flake it off, showing steel (marked plates are drawn with the Lit shader)
         internal static ConfigEntry<bool> DamageMapsSteelGloss;     // local: bare steel is metallic and shiny (a metallic/smoothness map next to the paint), scorched paint is dull
         internal static ConfigEntry<bool> ImpactEffectsEnabled;            // local: sparks, flash, smoke and paint dust where a shell hits armor
+        internal static ConfigEntry<bool> ImpactEffectsLitSmoke;    // local: smoke and dust are drawn with the URP lit particle shader (lit by the scene)
         internal static ConfigEntry<float> ImpactEffectsAmount;     // local: how many sparks and how much smoke (1 = normal)
         internal static ConfigEntry<bool> DamageMapsShareMarks;     // local: send the marks of my shots to the other players, and draw theirs
         internal static ConfigEntry<bool> DamageMapsSimulatedShots; // local: the simulated shot leaves (visual only) marks too
@@ -420,6 +421,9 @@ namespace ArmorFragments
             ImpactEffectsEnabled = Config.Bind("Effects", "Impacts", true,
                 "Where a shell hits armor: a flash, sparks, paint dust and smoke (a skid of sparks for a ricochet, a spray out the back for a penetration, a " +
                 "fireball for an HE shell). Only for the shells the mod resolves.");
+            ImpactEffectsLitSmoke = Config.Bind("Effects", "LitSmoke", true,
+                "Smoke and paint dust are drawn with the URP lit particle shader, so the sun, the sky and the shadows light them (the flash, sparks and " +
+                "embers glow on their own). If the build has no such shader they fall back to the plain one. Takes effect after F6 or a restart.");
             ImpactEffectsAmount = Config.Bind("Effects", "Amount", 1f,
                 "How many sparks and how much smoke the impact effects make (1 = normal, 0.3 to 2).");
             DamageMapsShareMarks = Config.Bind("DamageMaps", "ShareMarks", true,

@@ -31,7 +31,7 @@ namespace ArmorFragments
 
         private static GameObject root;
         private static ParticleSystem sparks, flash, smoke, dust, embers;
-        private static Material puffMaterial, sparkMaterial;
+        private static Material puffMaterial, sparkMaterial, litMaterial;
         private static Texture2D puffTexture, sparkTexture;
         private static bool failed;
 
@@ -335,6 +335,7 @@ namespace ArmorFragments
                 sparkTexture = SoftDisc(16, 3.5f);
                 puffMaterial = new Material(shader) { name = "ArmorFragments puff", mainTexture = puffTexture };
                 sparkMaterial = new Material(shader) { name = "ArmorFragments spark", mainTexture = sparkTexture };
+                litMaterial = MakeLitMaterial();   // smoke and dust: lit by the scene (null = they use the plain see-through one)
 
                 root = new GameObject("ArmorFragments impact effects");
                 root.layer = ImpactCamera.RayLayer;   // the main camera and the impact camera both draw it
@@ -346,11 +347,12 @@ namespace ArmorFragments
                               Curve(1f, 0.7f, 0.15f), Fade(new Color(1f, 0.95f, 0.75f), new Color(1f, 0.45f, 0.1f)));
                 embers = Make("embers", puffMaterial, ParticleSystemRenderMode.Billboard, 300, 0.5f, 0.6f, 0.9f,
                               Curve(1f, 0.8f, 0.2f), Fade(new Color(1f, 0.8f, 0.35f), new Color(0.8f, 0.15f, 0.05f)));
-                dust = Make("dust", puffMaterial, ParticleSystemRenderMode.Billboard, 400, 0.25f, 1.6f, 0.9f,
+                dust = Make("dust", litMaterial ?? puffMaterial, ParticleSystemRenderMode.Billboard, 400, 0.25f, 1.6f, 0.9f,
                             Curve(0.6f, 1f, 1.5f), Fade(Color.white, Color.white));
-                smoke = Make("smoke", puffMaterial, ParticleSystemRenderMode.Billboard, 300, -0.02f, 1.4f, 0.9f,
+                smoke = Make("smoke", litMaterial ?? puffMaterial, ParticleSystemRenderMode.Billboard, 300, -0.02f, 1.4f, 0.9f,
                              Curve(0.45f, 1f, 1.6f), Fade(Color.white, Color.white));
-                ArmorFragmentsPlugin.Log.LogInfo("[FX] impact effects ready (shader '" + shader.name + "')");
+                ArmorFragmentsPlugin.Log.LogInfo("[FX] impact effects ready: flash, sparks and embers glow with '" + shader.name + "'; smoke and dust use '" +
+                                                 (litMaterial != null ? litMaterial.shader.name + "' (lit by the scene)" : shader.name + "' (not lit)"));
                 return true;
             }
             catch (System.Exception e)
@@ -360,6 +362,43 @@ namespace ArmorFragments
                 Shutdown();
                 return false;
             }
+        }
+
+        // The URP particle shaders that take the scene's light, best first. Smoke and dust are matter that the sun and the sky light (and the
+        // shadow of a vehicle darkens); the flash, the sparks and the embers are glowing, so they stay with the self-lit see-through shader.
+        private static readonly string[] LitShaderNames =
+        {
+            "Universal Render Pipeline/Particles/Lit",
+            "Universal Render Pipeline/Particles/Simple Lit",
+        };
+
+        private static Material MakeLitMaterial()
+        {
+            if (!ArmorFragmentsPlugin.ImpactEffectsLitSmoke.Value) return null;
+            foreach (string name in LitShaderNames)
+            {
+                Shader shader = Shader.Find(name);
+                if (shader == null || !shader.isSupported) continue;
+                Material material = new Material(shader) { name = "ArmorFragments puff (lit)" };
+                if (!material.HasProperty("_BaseMap")) { Object.Destroy(material); continue; }
+                material.SetTexture("_BaseMap", puffTexture);
+                material.SetColor("_BaseColor", Color.white);   // the color comes from each particle
+                if (material.HasProperty("_Metallic")) material.SetFloat("_Metallic", 0f);
+                if (material.HasProperty("_Smoothness")) material.SetFloat("_Smoothness", 0f);
+                // Alpha blended, no depth writes: what the shader's own inspector sets for "Transparent / Alpha".
+                material.SetFloat("_Surface", 1f);
+                material.SetFloat("_Blend", 0f);
+                material.SetFloat("_SrcBlend", 5f);   // SrcAlpha
+                material.SetFloat("_DstBlend", 10f);  // OneMinusSrcAlpha
+                material.SetFloat("_ZWrite", 0f);
+                material.SetFloat("_Cull", 0f);
+                material.EnableKeyword("_SURFACE_TYPE_TRANSPARENT");
+                material.SetOverrideTag("RenderType", "Transparent");
+                material.renderQueue = (int)UnityEngine.Rendering.RenderQueue.Transparent;
+                return material;
+            }
+            ArmorFragmentsPlugin.Log.LogInfo("[FX] none of the URP lit particle shaders is in this build: smoke and dust are not lit by the scene");
+            return null;
         }
 
         // A soft round sprite (white, alpha falling off from the middle): puffs and sparks are drawn with it.
@@ -461,6 +500,8 @@ namespace ArmorFragments
             sparks = flash = smoke = dust = embers = null;
             if (puffMaterial != null) Object.Destroy(puffMaterial);
             if (sparkMaterial != null) Object.Destroy(sparkMaterial);
+            if (litMaterial != null) Object.Destroy(litMaterial);
+            litMaterial = null;
             if (puffTexture != null) Object.Destroy(puffTexture);
             if (sparkTexture != null) Object.Destroy(sparkTexture);
             puffMaterial = sparkMaterial = null;

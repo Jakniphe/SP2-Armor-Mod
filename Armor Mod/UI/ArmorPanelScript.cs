@@ -380,6 +380,8 @@ namespace ArmorFragments.UI
                 "The steel that shows through the paint is metallic and shiny (brightest where a shell skidded or cut through) and scorched paint is dull. Needs 'Scorched and flaked paint'. Applies to the next vehicle that gets marks.");
             ToggleSetting(ArmorFragmentsPlugin.ImpactEffectsEnabled, "Impact effects",
                 "A flash, sparks, paint dust and smoke where a shell hits armor.");
+            ToggleSetting(ArmorFragmentsPlugin.ImpactEffectsLitSmoke, "Smoke and dust lit by the scene",
+                "Smoke and paint dust use the URP lit particle shader (sun, sky and shadows light them). Takes effect after F6 or a restart.");
             FloatSetting(ArmorFragmentsPlugin.ImpactEffectsAmount, "Impact effects amount",
                 "How many sparks and how much smoke (1 = normal).", 0.1f, "x");
             ToggleSetting(ArmorFragmentsPlugin.DamageMapsShareMarks, "Share marks with other players",

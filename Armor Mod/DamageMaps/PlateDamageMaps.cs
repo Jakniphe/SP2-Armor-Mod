@@ -259,6 +259,10 @@ namespace ArmorFragments
                                     float shellMass = 0f, float speed = 0f, float keptEnergy = 1f, bool visualOnly = false, float deflection = 0f,
                                     ShellProfile profile = default(ShellProfile))
         {
+            // A real shell has already arrived: its marks and effects come now, not when the (slowed) picture of its ray gets there. Only the
+            // simulated shot, which is a replay, waits for its ray.
+            delay = RealTime(delay, visualOnly);
+
             // The sparks and smoke come with the hit, whether or not the plate can be marked (a simulated shot is imaginary: no effects).
             if (!visualOnly && part != null && part.Aircraft != null && part.Aircraft.LoadContext == CraftLoadContext.Flight)
                 ImpactEffects.Play(part, kind, point, normalFacing, direction, caliberMeters, strength, angle,
@@ -318,6 +322,7 @@ namespace ArmorFragments
         // A mark that another player's game worked out (MarksSync): drawn here the same way, and recorded in the armor model of this game.
         public static void OnRemoteImpact(PartScript part, PlateImpact impact, float delay)
         {
+            delay = RealTime(delay, false);
             if (part == null || part.Aircraft == null || part.Aircraft.LoadContext != CraftLoadContext.Flight) return;
             PlateInfo remoteInfo = InfoOf(part);
             if (remoteInfo != null) PlayRemoteEffects(part, remoteInfo, impact, delay);
@@ -326,6 +331,13 @@ namespace ArmorFragments
             if (info == null) return;
             if (Weakens) Record(part, info, impact);
             if (Visuals) Show(part, new[] { impact }, delay);
+        }
+
+        // When a mark or an effect shows: at once for a real shot (its time is the real one: the shell is already there), after the ray's own
+        // time for the simulated shot, which is drawn to be watched.
+        private static float RealTime(float delay, bool simulated)
+        {
+            return simulated || ShotSimulator.Active ? delay : 0f;
         }
 
         // The sparks and smoke of another player's hit: its place and direction are rebuilt from the plate coordinates the message carries.
@@ -368,6 +380,7 @@ namespace ArmorFragments
         public static void OnFragment(PartScript part, bool passed, Vector3 point, Vector3 normalFacing, Vector3 direction,
                                       float diameterMeters, float strength, float delay)
         {
+            delay = RealTime(delay, false);
             if (!Visuals || part == null || part.Aircraft == null || part.Aircraft.LoadContext != CraftLoadContext.Flight) return;
 
             PlateInfo info = InfoOf(part);
