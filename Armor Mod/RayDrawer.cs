@@ -163,7 +163,7 @@ namespace ArmorFragments
             if (!available) return;
 
             GameObject go = new GameObject("ArmorFragmentRay");
-            go.layer = ImpactCamera.RayLayer;
+            go.layer = ImpactCamera.RaysLayer;
             LineRenderer lr = go.AddComponent<LineRenderer>();
             lr.useWorldSpace = true;
             lr.positionCount = 0;
@@ -232,7 +232,7 @@ namespace ArmorFragments
 
             GameObject go = GameObject.CreatePrimitive(PrimitiveType.Sphere);
             go.name = "ArmorFragmentBubble";
-            go.layer = ImpactCamera.RayLayer;
+            go.layer = ImpactCamera.RaysLayer;
 
             // The primitive comes with a collider; remove it NOW or later rays would hit it.
             Collider col = go.GetComponent<Collider>();

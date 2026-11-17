@@ -23,6 +23,25 @@ namespace ArmorFragments
         // The mod's rays and bubbles live here ('Mod Layer 1': empty, and drawn by the main camera too).
         public const int RayLayer = 28;
 
+        // The ghost layer (the X-ray's, and the damage view's): the impact camera draws it and the main camera does not while the impact camera is open.
+        public static int GhostLayerValue
+        {
+            get { return Mathf.Clamp(ArmorFragmentsPlugin.ImpactCameraGhostLayer.Value, 0, 31); }
+        }
+
+        // The layer of the sparks, smoke and dust: the main camera draws it and the impact camera never does (it shows the replay of the shot, not the air).
+        public static int EffectsLayer
+        {
+            get { return GhostLayerValue == 30 ? 29 : 30; }
+        }
+
+        // The layer the rays and the balls are drawn on. The simulated shot is watched on the main screen (RayLayer: both cameras draw it); the
+        // rays of a real shot exist for the impact camera only, so they go on the ghost layer, which the main camera is not drawing while it is open.
+        public static int RaysLayer
+        {
+            get { return IsActive && !ShotSimulator.Active && GhostLayerValue != RayLayer ? GhostLayerValue : RayLayer; }
+        }
+
         // Layers that are never drawn for the vehicle: default (world props, our own leftovers), water,
         // UI, gizmos, explosion effects, terrain.
         private const int ExcludedLayers = (1 << 0) | (1 << 4) | (1 << 5) | (1 << 10) | (1 << 19) | (1 << 20);
@@ -137,7 +156,7 @@ namespace ArmorFragments
 
             slowTicksLogged = 0;
             long perfStart = System.Diagnostics.Stopwatch.GetTimestamp();
-            int mask = LayersOf(aircraft) | (1 << RayLayer);
+            int mask = (LayersOf(aircraft) & ~(1 << EffectsLayer)) | (1 << RayLayer) | (1 << GhostLayerValue);
             double layersMs = PerfMonitor.Since(perfStart);
             CreateTexture(ArmorFragmentsPlugin.ImpactCameraResolution.Value);
             CreateCamera(mask);
@@ -159,6 +178,7 @@ namespace ArmorFragments
                     HideFromMainCamera(candidate.GhostLayer);
                 }
             }
+            HideFromMainCamera(GhostLayerValue);   // the rays of this shot are on that layer too: only this camera shows them
             double xrayMs = PerfMonitor.Since(perfStart) - layersMs - cameraMs;
 
             active = true;
@@ -545,14 +565,14 @@ namespace ArmorFragments
         // Its copies are on the ghost layer, so that layer is added to what this camera draws and kept out of the main camera's.
         private static void UpdateDamageView()
         {
+            HideFromMainCamera(GhostLayerValue);   // every frame, in case the game reset the main camera's layers (the rays are on it)
             bool wanted = ArmorFragmentsPlugin.ImpactCameraDamageView.Value;
             if (!wanted)
             {
                 if (overlay == null) return;
                 overlay.Dispose();
                 overlay = null;
-                if (xray == null) RestoreMainCamera();   // nothing else keeps the ghost layer hidden from the main camera
-                return;
+                return;   // the ghost layer stays hidden from the main camera until the impact camera closes (the rays are on it)
             }
 
             int layer = Mathf.Clamp(ArmorFragmentsPlugin.ImpactCameraGhostLayer.Value, 0, 31);

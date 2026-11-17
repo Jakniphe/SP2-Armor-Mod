@@ -338,7 +338,7 @@ namespace ArmorFragments
                 litMaterial = MakeLitMaterial();   // smoke and dust: lit by the scene (null = they use the plain see-through one)
 
                 root = new GameObject("ArmorFragments impact effects");
-                root.layer = ImpactCamera.RayLayer;   // the main camera and the impact camera both draw it
+                root.layer = ImpactCamera.EffectsLayer;   // the main camera draws it; the impact camera never does
                 Object.DontDestroyOnLoad(root);
 
                 flash = Make("flash", puffMaterial, ParticleSystemRenderMode.Billboard, 40, 0f, 0f, 0f,
@@ -441,7 +441,7 @@ namespace ArmorFragments
                                            float velocityScale, AnimationCurve size, Gradient color)
         {
             GameObject go = new GameObject(name);
-            go.layer = ImpactCamera.RayLayer;
+            go.layer = ImpactCamera.EffectsLayer;
             go.transform.SetParent(root.transform, false);
             ParticleSystem system = go.AddComponent<ParticleSystem>();
 
