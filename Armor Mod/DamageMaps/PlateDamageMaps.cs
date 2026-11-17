@@ -393,7 +393,9 @@ namespace ArmorFragments
             if (Refused.Contains(aircraft)) return null;
 
             // Not too many at once: the vehicle that has been quiet longest gives its atlas back.
-            int most = Mathf.Max(ArmorFragmentsPlugin.DamageMapsMaxVehicles.Value, 1);
+            // At least two: with one, the vehicle you shoot and your own (which also gets marks, from fragments or when you leave it) took the
+            // atlas from each other over and over, and every time a vehicle gave its atlas back its plates lost their marks.
+            int most = Mathf.Max(ArmorFragmentsPlugin.DamageMapsMaxVehicles.Value, 2);
             while (Vehicles.Count >= most)
             {
                 AircraftScript oldest = null;
