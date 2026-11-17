@@ -302,7 +302,7 @@ namespace SimLab
         {
             int w = Math.Min(n, limit), x0 = (n - w) / 2, y0 = (n - w) / 2;
             byte[] f = new byte[w * w * 2], b = new byte[w * w * 2], h = new byte[w * w];
-            byte[] fc = frontColor != null ? new byte[w * w * 3] : null, bc = backColor != null ? new byte[w * w * 3] : null;
+            byte[] fc = frontColor != null ? new byte[w * w * 5] : null, bc = backColor != null ? new byte[w * w * 5] : null;   // r, g, b, metallic, smoothness
             for (int j = 0; j < w; j++)
             {
                 for (int i = 0; i < w; i++)
@@ -313,10 +313,10 @@ namespace SimLab
                     f[2 * dst] = (byte)(fv & 0xFF); f[2 * dst + 1] = (byte)((fv >> 8) & 0xFF);
                     b[2 * dst] = (byte)(bv & 0xFF); b[2 * dst + 1] = (byte)((bv >> 8) & 0xFF);
                     h[dst] = hole[src];
-                    for (int k = 0; k < 3; k++)
+                    for (int k = 0; k < 5; k++)
                     {
-                        if (fc != null) fc[3 * dst + k] = frontColor[3 * src + k];
-                        if (bc != null) bc[3 * dst + k] = backColor[3 * src + k];
+                        if (fc != null) fc[5 * dst + k] = frontColor[5 * src + k];
+                        if (bc != null) bc[5 * dst + k] = backColor[5 * src + k];
                     }
                 }
             }
@@ -387,7 +387,7 @@ namespace SimLab
             if (agrees) SimBridge.Apply(cpu, impact, sim, s.Cracks, s.Smooth); else PlateStamps.Apply(cpu, impact);
 
             front = new float[n * n]; back = new float[n * n]; hole = new byte[n * n];
-            frontColor = new byte[n * n * 3]; backColor = new byte[n * n * 3];
+            frontColor = new byte[n * n * 5]; backColor = new byte[n * n * 5];   // r, g, b, metallic, smoothness
             for (int i = 0; i < hole.Length; i++) hole[i] = 255;
             PlateCpu.Face f0 = cpu.Faces[0], f1 = cpu.Faces[1];
             for (int j = 0; j < n; j++)
@@ -398,8 +398,10 @@ namespace SimLab
                     int dst = j * n + i;
                     if (f0 != null) { front[dst] = f0.Height[at]; if (f0.Mask[at] < 128) hole[dst] = 0; }
                     if (f1 != null) { back[dst] = f1.Height[at]; if (f1.Mask[at] < 128) hole[dst] = 0; }
-                    PlateStamps.PixelColor(cpu, f0, at, out frontColor[3 * dst], out frontColor[3 * dst + 1], out frontColor[3 * dst + 2]);
-                    PlateStamps.PixelColor(cpu, f1, at, out backColor[3 * dst], out backColor[3 * dst + 1], out backColor[3 * dst + 2]);
+                    PlateStamps.PixelColor(cpu, f0, at, out frontColor[5 * dst], out frontColor[5 * dst + 1], out frontColor[5 * dst + 2]);
+                    PlateStamps.PixelColor(cpu, f1, at, out backColor[5 * dst], out backColor[5 * dst + 1], out backColor[5 * dst + 2]);
+                    PlateStamps.PixelSurface(cpu, f0, at, out frontColor[5 * dst + 3], out frontColor[5 * dst + 4]);   // what the Lit shader gets from the metallic map
+                    PlateStamps.PixelSurface(cpu, f1, at, out backColor[5 * dst + 3], out backColor[5 * dst + 4]);
                 }
             }
         }

@@ -113,6 +113,9 @@ namespace ArmorFragments
                                 byte rim = (byte)Mathf.RoundToInt(255f * (1f - d / rimWidth));
                                 if (rim > faceIn.Bare[idx]) faceIn.Bare[idx] = rim;
                                 if (rim > faceOut.Bare[idx]) faceOut.Bare[idx] = rim;
+                                byte shine = (byte)(rim * 0.9f);   // the rim is rubbed bright where the shell cut through
+                                if (shine > faceIn.Shine[idx]) faceIn.Shine[idx] = shine;
+                                if (shine > faceOut.Shine[idx]) faceOut.Shine[idx] = shine;
                             }
                             float value = Mathf.Clamp(128f + d / pixel * 128f, 0f, 255f);
                             if (value < 255f)

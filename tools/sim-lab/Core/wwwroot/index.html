@@ -124,13 +124,13 @@ const View3D = (() => {
   let scale = 1;
 
   const vertexSource = `#version 300 es
-    in vec3 aPos; in vec3 aNormal; in vec3 aColor;
+    in vec3 aPos; in vec3 aNormal; in vec3 aColor; in vec2 aSurf;
     uniform mat4 uViewProj;
-    out vec3 vN; out vec3 vC; out vec3 vW;
-    void main() { vW = aPos; vN = aNormal; vC = aColor; gl_Position = uViewProj * vec4(aPos, 1.0); }`;
+    out vec3 vN; out vec3 vC; out vec3 vW; out vec2 vS;
+    void main() { vW = aPos; vN = aNormal; vC = aColor; vS = aSurf; gl_Position = uViewProj * vec4(aPos, 1.0); }`;
   const fragmentSource = `#version 300 es
     precision highp float;
-    in vec3 vN; in vec3 vC; in vec3 vW;
+    in vec3 vN; in vec3 vC; in vec3 vW; in vec2 vS;   // vS: metallic, smoothness
     uniform vec3 uEye; uniform vec3 uLight;
     out vec4 outColor;
     void main() {
@@ -138,10 +138,16 @@ const View3D = (() => {
       vec3 n = normalize(vN);
       if (dot(n, v) < 0.0) n = -n;                       // both sides of the metal are lit
       vec3 l = normalize(uLight);
-      float diffuse = max(dot(n, l), 0.0) * 0.52 + max(dot(n, v), 0.0) * 0.12;
-      float spec = pow(max(dot(n, normalize(l + v)), 0.0), 48.0) * 0.22;
+      float metal = vS.x, gloss = vS.y;
+      float diffuse = (max(dot(n, l), 0.0) * 0.52 + max(dot(n, v), 0.0) * 0.12) * (1.0 - 0.7 * metal);
+      float shininess = mix(10.0, 220.0, gloss * gloss);
+      float spec = pow(max(dot(n, normalize(l + v)), 0.0), shininess) * mix(0.10, 1.1, gloss) * (0.4 + 0.6 * metal);
+      vec3 specColor = mix(vec3(1.0), vC, metal);          // a metal's highlight takes the metal's color
       float ambient = 0.20 + 0.10 * n.z;
-      outColor = vec4(min(vC * (ambient + diffuse) + vec3(spec), vec3(1.0)), 1.0);
+      vec3 r = reflect(-v, n);                              // a sky to reflect: lighter overhead, darker toward the ground
+      vec3 env = mix(vec3(0.20, 0.22, 0.25), vec3(0.85, 0.92, 1.0), clamp(r.y * 0.5 + 0.5, 0.0, 1.0));
+      vec3 mirror = env * vC * metal * (0.25 + 0.9 * gloss);
+      outColor = vec4(min(vC * (ambient + diffuse) + specColor * spec + mirror, vec3(1.0)), 1.0);
     }`;
 
   // ---- Small matrix helpers (column-major, as WebGL wants) ----
@@ -194,7 +200,7 @@ const View3D = (() => {
     const zf = (i, j) => t / 2 + F[j * n + i] * 1e-5 * exaggeration;
     const zb = (i, j) => -t / 2 - B[j * n + i] * 1e-5 * exaggeration;
 
-    const positions = [], normals = [], colors = [], indices = [];
+    const positions = [], normals = [], colors = [], surfs = [], indices = [];
     const frontColor = [0.66, 0.68, 0.72], backColor = [0.56, 0.58, 0.63], edgeColor = [0.48, 0.50, 0.55], holeColor = [0.84, 0.64, 0.42];
 
     // Surfaces: a vertex per pixel on each side, normals from the neighbors.
@@ -209,8 +215,8 @@ const View3D = (() => {
           positions.push(px(i), py(j), z(i, j));
           normals.push(nn[0], nn[1], nn[2]);
           const own = side === 0 ? FC : BC;
-          if (own) { const k = 3 * (j * n + i); colors.push(own[k] / 255, own[k + 1] / 255, own[k + 2] / 255); }
-          else { const col = side === 0 ? frontColor : backColor; colors.push(col[0], col[1], col[2]); }
+          if (own) { const k = 5 * (j * n + i); colors.push(own[k] / 255, own[k + 1] / 255, own[k + 2] / 255); surfs.push(own[k + 3] / 255, own[k + 4] / 255); }
+          else { const col = side === 0 ? frontColor : backColor; colors.push(col[0], col[1], col[2]); surfs.push(0.1, 0.4); }
         }
       }
     }
@@ -237,7 +243,7 @@ const View3D = (() => {
     const wall = (i1, j1, i2, j2, nx, ny, color) => {
       const p = [[px(i1), py(j1), zf(i1, j1)], [px(i2), py(j2), zf(i2, j2)], [px(i2), py(j2), zb(i2, j2)], [px(i1), py(j1), zb(i1, j1)]];
       const base = positions.length / 3;
-      for (const q of p) { positions.push(q[0], q[1], q[2]); normals.push(nx, ny, 0); colors.push(color[0], color[1], color[2]); }
+      for (const q of p) { positions.push(q[0], q[1], q[2]); normals.push(nx, ny, 0); colors.push(color[0], color[1], color[2]); surfs.push(0.7, 0.45); }
       indices.push(base, base + 1, base + 2, base, base + 2, base + 3);
     };
     for (let j = 0; j < n - 1; j++) {
@@ -269,6 +275,7 @@ const View3D = (() => {
     upload(gl.getAttribLocation(program, 'aPos'), positions, 3);
     upload(gl.getAttribLocation(program, 'aNormal'), normals, 3);
     upload(gl.getAttribLocation(program, 'aColor'), colors, 3);
+    upload(gl.getAttribLocation(program, 'aSurf'), surfs, 2);
     const indexBuffer = gl.createBuffer();
     gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, indexBuffer);
     gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new Uint32Array(indices), gl.STATIC_DRAW);

@@ -95,6 +95,9 @@ namespace ArmorFragments
         internal static ConfigEntry<bool> KeepPlatesApart;          // local: armor plates keep their own renderer in flight
         internal static ConfigEntry<bool> DamageMapsEnabled;        // local: marks on the plates
         internal static ConfigEntry<bool> DamageMapsPaintDamage;    // local: marks scorch the paint and flake it off, showing steel (marked plates are drawn with the Lit shader)
+        internal static ConfigEntry<bool> DamageMapsSteelGloss;     // local: bare steel is metallic and shiny (a metallic/smoothness map next to the paint), scorched paint is dull
+        internal static ConfigEntry<bool> ImpactEffectsEnabled;            // local: sparks, flash, smoke and paint dust where a shell hits armor
+        internal static ConfigEntry<float> ImpactEffectsAmount;     // local: how many sparks and how much smoke (1 = normal)
         internal static ConfigEntry<bool> DamageMapsShareMarks;     // local: send the marks of my shots to the other players, and draw theirs
         internal static ConfigEntry<bool> DamageMapsSimulatedShots; // local: the simulated shot leaves (visual only) marks too
         internal static ConfigEntry<bool> DamageMapsWeakenArmor;    // global: holes let shots through, dents thin the plate
@@ -197,6 +200,7 @@ namespace ArmorFragments
             AmmoRackXRay.Tick(); PerfMonitor.Lap("AmmoRackXRay");
             ImpactCamera.Tick(); PerfMonitor.Lap("ImpactCamera");
             PlateDamageMaps.Tick(); PerfMonitor.Lap("PlateDamageMaps");
+            ImpactEffects.Tick(); PerfMonitor.Lap("ImpactEffects");
             PerfMonitor.End();
         }
 
@@ -409,6 +413,15 @@ namespace ArmorFragments
                 "steel (and a bright rim round holes). Plates with marks are then drawn with the Lit shader in their paint's color (a plate with a pattern " +
                 "or a texture loses it). Takes effect for the next vehicle that gets marks (the panel's Clear button starts over).")
             ;
+            DamageMapsSteelGloss = Config.Bind("DamageMaps", "SteelGloss", true,
+                "With paint damage on, the steel that shows through is metallic and shiny (rubbed bright where a shell skidded or cut through, duller where " +
+                "the metal was torn) and scorched paint is dull. Uses the plate's bump atlas as a metallic/smoothness map (one more atlas per vehicle, " +
+                "about 21 MB). Takes effect for the next vehicle that gets marks.");
+            ImpactEffectsEnabled = Config.Bind("Effects", "Impacts", true,
+                "Where a shell hits armor: a flash, sparks, paint dust and smoke (a skid of sparks for a ricochet, a spray out the back for a penetration, a " +
+                "fireball for an HE shell). Only for the shells the mod resolves.");
+            ImpactEffectsAmount = Config.Bind("Effects", "Amount", 1f,
+                "How many sparks and how much smoke the impact effects make (1 = normal, 0.3 to 2).");
             DamageMapsShareMarks = Config.Bind("DamageMaps", "ShareMarks", true,
                 "In multiplayer, the marks of the shells you shoot at another player's vehicle are sent to the other players who have the mod " +
                 "(and to the player who was shot), and theirs are drawn on your screen and your vehicle. Players without the mod see nothing of it.");

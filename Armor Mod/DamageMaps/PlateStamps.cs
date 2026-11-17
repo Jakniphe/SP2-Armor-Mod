@@ -74,12 +74,14 @@ namespace ArmorFragments
             public byte[] Mask;
             public byte[] Soot;   // 0..255: how scorched the paint is (the blast and the heat of a hit)
             public byte[] Bare;   // 0..255: how much of the paint has flaked off, showing the steel
+            public byte[] Shine;  // 0..255: how much of that steel was rubbed bright (a scrape, the rim of a hole): it is smoother and brighter than torn metal
             public int X0 = int.MaxValue, Y0 = int.MaxValue, X1 = -1, Y1 = -1;   // what changed since the last flush
             public bool HoleDirty;
         }
 
         public bool PaintMode;          // marks also change the color (the plate is drawn from the hole atlas, which carries its whole color)
         public Vector3 Paint = new Vector3(0.5f, 0.5f, 0.5f);   // the plate's paint (sRGB, 0..1): what the colors of its marks start from
+        public float PaintMetallic, PaintSmooth = 0.4f;         // the paint's own metallic and smoothness (what the steel and the soot are told apart from)
         public float Thickness;         // the plate's own thickness (meters, before any dent thinned it): what the depth limit is a share of
         public int Width, Height;       // the tile's size in pixels, the same for both faces
         public float PxU, PxV;          // pixels per meter inside the border
@@ -92,7 +94,7 @@ namespace ArmorFragments
             Face face = Faces[index];
             if (face == null)
             {
-                face = new Face { Height = new float[Width * Height], Mask = new byte[Width * Height], Soot = new byte[Width * Height], Bare = new byte[Width * Height] };
+                face = new Face { Height = new float[Width * Height], Mask = new byte[Width * Height], Soot = new byte[Width * Height], Bare = new byte[Width * Height], Shine = new byte[Width * Height] };
                 for (int i = 0; i < face.Mask.Length; i++) face.Mask[i] = 255;
                 Faces[index] = face;
             }
@@ -203,14 +205,13 @@ namespace ArmorFragments
                 }
                 case DamageKind.Ricochet:
                 {
+                    // The shell skids along the plate: a wide band of paint rubbed off to bright metal, in fine lines along the way, brightest and
+                    // widest where it touched and thinning out as it lifted away; scorched and chipped where it hit, and a dark smear where it left.
                     float length = Mathf.Clamp(caliber * (1.5f + 8f * (impact.Angle / 90f) * (impact.Angle / 90f)), 0.02f, 1f);
-                    float step = Mathf.Max(caliber * 0.35f, 0.004f);
-                    int count = Mathf.Clamp(Mathf.CeilToInt(length / step), 1, 80);
-                    for (int i = 0; i <= count; i++)
-                    {
-                        float t = (float)i / count;
-                        Splash(cpu, cpu.Get(entry), impact.U + dir.x * length * t, impact.V + dir.y * length * t, caliber * 0.9f, 0.18f, caliber * 0.5f, 1f - 0.5f * t, impact.Seed + i);
-                    }
+                    float endU = impact.U + dir.x * length, endV = impact.V + dir.y * length;
+                    Scrape(cpu, cpu.Get(entry), impact.U, impact.V, endU, endV, caliber, strength, impact.Seed);
+                    Splash(cpu, cpu.Get(entry), impact.U, impact.V, caliber * 1.1f, 0.30f + 0.30f * strength, caliber * 0.8f, 1f, impact.Seed + 2);
+                    Splash(cpu, cpu.Get(entry), endU, endV, caliber * 0.8f, 0.22f, 0f, 0f, impact.Seed + 3);
                     break;
                 }
                 case DamageKind.Burst:
@@ -260,10 +261,79 @@ namespace ArmorFragments
                         chip = Mathf.Clamp01(chip * 1.5f) * chipAmount;
                         int value = Mathf.RoundToInt(chip * 255f);
                         if (value > f.Bare[at]) f.Bare[at] = (byte)value;
+                        int shiny = Mathf.RoundToInt(chip * 70f);   // torn metal: a little shiny
+                        if (shiny > f.Shine[at]) f.Shine[at] = (byte)shiny;
                     }
                 }
             }
             Dirty(f, x0, y0, x1, y1, true);
+        }
+
+        // A skid: the paint rubbed off along the line from (u0, v0) to (u1, v1) in a band that is widest at the start and thins out, with fine
+        // lines along the way (noise stretched in the direction of travel) and a ragged edge. What is rubbed bare is also rubbed bright (Shine).
+        private static void Scrape(PlateCpu c, PlateCpu.Face f, float u0, float v0, float u1, float v1, float caliber, float strength, int seed)
+        {
+            float width = caliber * (0.55f + 0.25f * strength);   // half the band's width where it starts
+            float dxs = u1 - u0, dys = v1 - v0;
+            float length = Mathf.Max(Mathf.Sqrt(dxs * dxs + dys * dys), 0.0001f);
+            float sx = dxs / length, sy = dys / length;
+            float margin = width * 1.8f;
+            int x0 = Mathf.Max(PlateCpu.Border, Mathf.FloorToInt(PlateCpu.Border + (Mathf.Min(u0, u1) - margin) * c.PxU));
+            int x1 = Mathf.Min(c.Width - PlateCpu.Border, Mathf.CeilToInt(PlateCpu.Border + (Mathf.Max(u0, u1) + margin) * c.PxU));
+            int y0 = Mathf.Max(PlateCpu.Border, Mathf.FloorToInt(PlateCpu.Border + (Mathf.Min(v0, v1) - margin) * c.PxV));
+            int y1 = Mathf.Min(c.Height - PlateCpu.Border, Mathf.CeilToInt(PlateCpu.Border + (Mathf.Max(v0, v1) + margin) * c.PxV));
+            if (x1 <= x0 || y1 <= y0) return;
+
+            float pixel = 1f / Mathf.Min(c.PxU, c.PxV);
+            float lineWidth = Mathf.Max(width * 0.10f, 1.6f * pixel);   // lines finer than a pixel would only be noise
+            for (int y = y0; y < y1; y++)
+            {
+                for (int x = x0; x < x1; x++)
+                {
+                    float px = (x + 0.5f - PlateCpu.Border) / c.PxU - u0;
+                    float py = (y + 0.5f - PlateCpu.Border) / c.PxV - v0;
+                    float s = px * sx + py * sy;                  // along the way
+                    float a = Mathf.Abs(-px * sy + py * sx);      // across it
+                    if (s < -0.6f * width || s > length + 0.3f * width) continue;
+
+                    float t = Mathf.Clamp01(s / length);
+                    float half = width * (1f - 0.55f * t) * (0.8f + 0.4f * ValueNoise(s / (width * 1.5f), 7.3f, seed + 21));   // wobbling edge
+                    if (a > half * 1.25f) continue;
+
+                    float lines = ValueNoise(s / (width * 2.5f), a / lineWidth, seed + 5);
+                    float body = Mathf.Clamp01((1f - a / half) * 2.2f + 0.15f);
+                    float amount = Mathf.Clamp01(body * (0.45f + 0.9f * lines)) * (1f - 0.5f * t);
+                    if (s < 0f) amount *= Mathf.Clamp01(1f + s / (0.6f * width));   // taper in front of where it touched
+
+                    int at = y * c.Width + x;
+                    int bare = Mathf.RoundToInt(amount * 255f);
+                    if (bare > f.Bare[at]) f.Bare[at] = (byte)bare;
+                    int shine = Mathf.RoundToInt(amount * 235f);
+                    if (shine > f.Shine[at]) f.Shine[at] = (byte)shine;
+                }
+            }
+            Dirty(f, x0, y0, x1, y1, true);
+        }
+
+        // How shiny and how metal one pixel is: the paint's own values, changed toward bright steel where it flaked (more where the metal was
+        // rubbed bright than where it was torn), and toward dull where it is scorched. Metallic in 0..255, smoothness in 0..255 (what the Lit
+        // shader reads from the red and alpha channels of the map).
+        public static void PixelSurface(PlateCpu c, PlateCpu.Face f, int index, out byte metallic, out byte smoothness)
+        {
+            float bare = f != null && f.Bare != null ? f.Bare[index] / 255f : 0f;
+            float soot = f != null && f.Soot != null ? f.Soot[index] / 255f : 0f;
+            float shine = f != null && f.Shine != null ? f.Shine[index] / 255f : 0f;
+            float m = c.PaintMetallic, s = c.PaintSmooth;
+            if (bare > 0f || soot > 0f)
+            {
+                m = Mathf.Lerp(m, 0.8f, bare);
+                s = Mathf.Lerp(s, 0.28f + 0.55f * shine, bare);
+                float k = Mathf.Clamp01(soot) * 0.92f * (1f - 0.65f * bare);   // the same as the color: soot clings less to steel
+                m *= 1f - k;
+                s = Mathf.Lerp(s, 0.06f, k);
+            }
+            metallic = (byte)Mathf.Clamp(Mathf.RoundToInt(m * 255f), 0, 255);
+            smoothness = (byte)Mathf.Clamp(Mathf.RoundToInt(s * 255f), 0, 255);
         }
 
         // Smooth noise in 0..1 on a lattice of one unit (the same for the same seed).
@@ -290,7 +360,8 @@ namespace ArmorFragments
                 r = (byte)Mathf.RoundToInt(c.Paint.x * 255f); g = (byte)Mathf.RoundToInt(c.Paint.y * 255f); b = (byte)Mathf.RoundToInt(c.Paint.z * 255f);
                 return;
             }
-            float v = 0.92f + 0.16f * Hash(index);   // bare steel is never quite even
+            float shine = f != null && f.Shine != null ? f.Shine[index] / 255f : 0f;
+            float v = (0.92f + 0.16f * Hash(index)) * (1f + 0.3f * shine);   // bare steel is never quite even; rubbed bright it is lighter
             float rr = Mathf.Lerp(c.Paint.x, 0.66f * v, bare), gg = Mathf.Lerp(c.Paint.y, 0.67f * v, bare), bb = Mathf.Lerp(c.Paint.z, 0.71f * v, bare);
             float s = Mathf.Clamp01(soot) * 0.92f * (1f - 0.65f * bare);   // soot clings less to bare steel
             rr = rr * (1f - s) + 0.07f * s; gg = gg * (1f - s) + 0.062f * s; bb = bb * (1f - s) + 0.055f * s;
@@ -490,7 +561,7 @@ namespace ArmorFragments
         // and, if asked, the bump map and the damage view). 'everything' marks the whole of every face that has any damage as changed
         // (what a stream that has just been switched on needs, to catch up).
         public static void Flush(PlateCpu c, PlateVisual plate, VehicleMaps owner, float deliverAt, List<Delivery> output,
-                                 bool height = false, bool damage = false, bool everything = false, bool paint = false)
+                                 bool height = false, bool damage = false, bool everything = false, bool paint = false, bool gloss = false)
         {
             for (int index = 0; index < 2; index++)
             {
@@ -549,7 +620,10 @@ namespace ArmorFragments
                         {
                             int at = ((y - y0) * w + (x - x0)) * 4;
                             float level = Mathf.Clamp01(0.5f + f.Height[y * c.Width + x] / HeightRange);
-                            bump[at] = 128; bump[at + 1] = (byte)Mathf.RoundToInt(level * 255f); bump[at + 2] = 128; bump[at + 3] = 255;
+                            bump[at + 1] = (byte)Mathf.RoundToInt(level * 255f); bump[at + 2] = 128;
+                            // The map is also the Lit shader's metallic/smoothness map (red and alpha) when the steel gloss is on.
+                            if (gloss) PixelSurface(c, f, y * c.Width + x, out bump[at], out bump[at + 3]);
+                            else { bump[at] = 128; bump[at + 3] = 255; }
                         }
                     }
                     AddDelivery(output, new Delivery

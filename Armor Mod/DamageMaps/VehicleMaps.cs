@@ -28,6 +28,7 @@ namespace ArmorFragments
         public Texture2D DamageAtlas;   // the impact camera's damage view (made when that is switched on)
         public float Density;           // pixels per meter of the tiles
         public bool PaintMode;          // marks change the plate's color too (the hole atlas then carries the plate's whole color, baked when it is made)
+        public bool Gloss;              // and its metallic/smoothness (the bump atlas then carries them in its red and alpha channels, baked when it is made)
         public Material Clone;       // the game's part material with the normal atlas
         public float LastUsed;
         public bool Disposed;
@@ -103,21 +104,29 @@ namespace ArmorFragments
             if (tiles == null) { LastFailure = "the plates do not fit in an atlas"; return null; }
 
             VehicleMaps maps = new VehicleMaps(aircraft, theme) { AtlasSize = size, LastUsed = Time.time, Density = density, PaintMode = ArmorFragmentsPlugin.DamageMapsPaintDamage.Value };
+            maps.Gloss = maps.PaintMode && ArmorFragmentsPlugin.DamageMapsSteelGloss.Value;
+            maps.heightPending = maps.Gloss;   // the bump atlas is made (in a frame of its own) as soon as the vehicle is used
             Dictionary<PartScript, Vector3> paints = new Dictionary<PartScript, Vector3>();
+            Dictionary<PartScript, Vector2> surfaces = new Dictionary<PartScript, Vector2>();
             for (int i = 0; i < all.Count; i++)
             {
                 PlateInfo info = all[i];
                 int w = tiles[i][2], h = tiles[i][3];
                 Vector3 paint;
+                Vector2 surface;
                 if (!paints.TryGetValue(info.Part, out paint))
                 {
                     Color color; float metallic, smoothness;
                     ReadPaint(theme, info.Part, out color, out metallic, out smoothness);
                     paints[info.Part] = paint = new Vector3(color.r, color.g, color.b);
+                    surfaces[info.Part] = new Vector2(Mathf.Clamp01(metallic), Mathf.Clamp01(smoothness));
                 }
+                surface = surfaces[info.Part];
                 PlateCpu cpu = new PlateCpu
                 {
                     Paint = paint,
+                    PaintMetallic = surface.x,
+                    PaintSmooth = surface.y,
                     PaintMode = maps.PaintMode,
                     Width = w,
                     Height = h,
@@ -274,21 +283,36 @@ namespace ArmorFragments
         // sides of thin plates point to, as bare gray). Written straight into the texture's memory; the mip levels are made after.
         private void BakePaint()
         {
-            Unity.Collections.NativeArray<byte> raw = Alpha.GetRawTextureData<byte>();
+            BakeTiles(Alpha, c => new[] { (byte)Mathf.RoundToInt(c.Paint.x * 255f), (byte)Mathf.RoundToInt(c.Paint.y * 255f), (byte)Mathf.RoundToInt(c.Paint.z * 255f), (byte)255 },
+                      new byte[] { 150, 152, 158, 255 });
+        }
+
+        // The bump atlas as the metallic/smoothness map: each tile starts as its plate's paint (metallic in red, smoothness in alpha, flat height in green),
+        // and the flat corner as bare steel.
+        private void BakeSurface()
+        {
+            BakeTiles(Height, c => new[] { (byte)Mathf.RoundToInt(c.PaintMetallic * 255f), (byte)128, (byte)128, (byte)Mathf.RoundToInt(c.PaintSmooth * 255f) },
+                      new byte[] { 190, 128, 128, 110 });
+        }
+
+        // Writes one pixel pattern over every plate's two tiles (and another over the flat corner), straight into the texture's memory; the mip levels are made after.
+        private void BakeTiles(Texture2D target, Func<PlateCpu, byte[]> patternOf, byte[] corner)
+        {
+            Unity.Collections.NativeArray<byte> raw = target.GetRawTextureData<byte>();
             foreach (PlateVisual plate in AllPlates())
             {
                 PlateCpu c = plate.Cpu;
                 byte[] row = new byte[c.Width * 4];
-                FillPattern(row, (byte)Mathf.RoundToInt(c.Paint.x * 255f), (byte)Mathf.RoundToInt(c.Paint.y * 255f), (byte)Mathf.RoundToInt(c.Paint.z * 255f), 255);
+                FillPattern(row, patternOf(c));
                 for (int face = 0; face < 2; face++)
                     for (int y = 0; y < c.Height; y++)
                         Unity.Collections.NativeSliceExtensions.Slice(raw, ((c.TileY[face] + y) * AtlasSize + c.TileX[face]) * 4, c.Width * 4).CopyFrom(row);
             }
-            byte[] gray = new byte[PlateCpu.Align * 4];
-            FillPattern(gray, 150, 152, 158, 255);
+            byte[] flat = new byte[PlateCpu.Align * 4];
+            FillPattern(flat, corner);
             for (int y = 0; y < PlateCpu.Align; y++)
-                Unity.Collections.NativeSliceExtensions.Slice(raw, y * AtlasSize * 4, PlateCpu.Align * 4).CopyFrom(gray);
-            Alpha.Apply(true, false);
+                Unity.Collections.NativeSliceExtensions.Slice(raw, y * AtlasSize * 4, PlateCpu.Align * 4).CopyFrom(flat);
+            target.Apply(true, false);
         }
 
         // The hole atlas: white everywhere (the color comes from the material) with the mask in its alpha, 255 = solid.
@@ -308,6 +332,7 @@ namespace ArmorFragments
             if (Height != null) return;
             Height = new Texture2D(AtlasSize, AtlasSize, TextureFormat.RGBA32, PlateCpu.MipLevels, true) { wrapMode = TextureWrapMode.Clamp, name = "ArmorFragments damage heights" };
             FillTexture(Height, 128, 128, 128, 255);
+            if (Gloss) BakeSurface();
             if (heightPending)
             {
                 heightPending = false;
@@ -367,6 +392,41 @@ namespace ArmorFragments
             if (bump) ReportParallax(material);
         }
 
+        // A holed/marked plate's Lit material reads the bump atlas as its metallic/smoothness map (steel shiny and metal, scorched paint dull).
+        // Until the atlas exists the material keeps the paint's own values.
+        public void ConfigureGloss(Material material)
+        {
+            if (!Gloss) return;
+            if (Height == null) { heightPending = true; return; }
+            material.SetTexture("_MetallicGlossMap", Height);
+            material.SetFloat("_Smoothness", 1f);   // the shader multiplies the map's alpha by it
+            SetKeyword(material, "_METALLICSPECGLOSSMAP", true);
+            ReportGloss(material);
+        }
+
+        private static bool glossReported;
+
+        // Once: does the Lit shader of this build have the keyword for the metallic map? (If its variant was stripped the map is accepted and ignored.)
+        private static void ReportGloss(Material material)
+        {
+            if (glossReported) return;
+            glossReported = true;
+            try
+            {
+                Shader shader = material.shader;
+                bool declared = false;
+                foreach (UnityEngine.Rendering.LocalKeyword keyword in shader.keywordSpace.keywords)
+                    if (keyword.name == "_METALLICSPECGLOSSMAP") declared = true;
+                ArmorFragmentsPlugin.Log.LogInfo("[GLOSS] shader '" + shader.name + "': _MetallicGlossMap slot " + material.HasProperty("_MetallicGlossMap") +
+                    ", keyword _METALLICSPECGLOSSMAP declared " + declared + ", on " + material.IsKeywordEnabled("_METALLICSPECGLOSSMAP") +
+                    ". If 'declared' is false the steel is not shiny (its variant is not in the build).");
+            }
+            catch (Exception e)
+            {
+                ArmorFragmentsPlugin.Log.LogInfo("[GLOSS] could not inspect the shader: " + e.Message);
+            }
+        }
+
         private static readonly HashSet<string> ParallaxReported = new HashSet<string>();
 
         // Once per shader: does it have the bump map's slot, the amplitude, and the keyword that switches the parallax on? (If the shader has
@@ -403,7 +463,7 @@ namespace ArmorFragments
             if (Disposed) return;
             if (Clone != null) ConfigureRelief(Clone);
             foreach (PlateVisual plate in Plates.Values)
-                if (plate.Lit != null) ConfigureRelief(plate.Lit);
+                if (plate.Lit != null) { ConfigureRelief(plate.Lit); ConfigureGloss(plate.Lit); }
         }
 
         // A rectangle computed by the worker goes into the atlas. Returns the milliseconds it took.
@@ -894,6 +954,7 @@ namespace ArmorFragments
             material.SetFloat("_Metallic", metallic);
             material.SetFloat("_Smoothness", smoothness);
             Owner.ConfigureRelief(material);
+            Owner.ConfigureGloss(material);
             material.SetFloat("_AlphaClip", 1f);
             material.SetFloat("_Cutoff", 0.5f);
             material.EnableKeyword("_ALPHATEST_ON");
@@ -1111,7 +1172,7 @@ namespace ArmorFragments
                     if (stopping) continue;    // nobody is left to take what this job makes
 
                     List<Delivery> output = new List<Delivery>();
-                    PlateStamps.Flush(job.Plate.Cpu, job.Plate, job.Owner, job.DeliverAt, output, job.Height, job.Damage, job.Everything, job.Owner.PaintMode);
+                    PlateStamps.Flush(job.Plate.Cpu, job.Plate, job.Owner, job.DeliverAt, output, job.Height, job.Damage, job.Everything, job.Owner.PaintMode, job.Owner.Gloss);
                     foreach (Delivery d in output) Done.Enqueue(d);
 
                     // Real geometry: the plate's mesh is rewritten once the last job queued for it is done (the later jobs would

@@ -167,3 +167,8 @@ Also
 - Fix: the frame rate no longer collapses after visiting the designer and returning to flight.
 - Fix: ammo racks are recognized again after reloading the mod (F6), and armor plates stay out of the game's mesh merge so they can carry marks.
 - Added an impact camera, a vehicle X-ray and a lab app (tools/sim-lab) for studying the simulation.
+
+0.10.0 (impact look)
+- Sparks, a flash, paint dust and smoke where a shell hits armor: a fountain of sparks for a hit, a stream of long sparks along a ricochet, a hot spray and dark smoke out of the back of a penetration, a fireball for an HE shell. "Impact effects" and "Impact effects amount" in the panel.
+- A ricochet now skids a band of paint off the plate: wide and bright where it touched, thinning out with fine lines along the way, with a scorched spot where it hit.
+- The steel that shows through the paint is metallic and shiny (brightest where a shell skidded or cut through, duller where it was torn), and scorched paint is dull ("Shiny steel, dull soot"; one more 21 MB atlas per vehicle).

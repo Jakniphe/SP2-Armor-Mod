@@ -259,6 +259,11 @@ namespace ArmorFragments
                                     float shellMass = 0f, float speed = 0f, float keptEnergy = 1f, bool visualOnly = false, float deflection = 0f,
                                     ShellProfile profile = default(ShellProfile))
         {
+            // The sparks and smoke come with the hit, whether or not the plate can be marked (a simulated shot is imaginary: no effects).
+            if (!visualOnly && part != null && part.Aircraft != null && part.Aircraft.LoadContext == CraftLoadContext.Flight)
+                ImpactEffects.Play(part, kind, point, normalFacing, direction, caliberMeters, strength, angle,
+                                   armor != null ? armor.Thickness * 0.001f : 0.02f, delay);
+
             if (visualOnly ? !Visuals : !Visuals && !Weakens) return;
             if (part == null || part.Aircraft == null || part.Aircraft.LoadContext != CraftLoadContext.Flight) return;
 
@@ -313,12 +318,33 @@ namespace ArmorFragments
         // A mark that another player's game worked out (MarksSync): drawn here the same way, and recorded in the armor model of this game.
         public static void OnRemoteImpact(PartScript part, PlateImpact impact, float delay)
         {
-            if (!Visuals && !Weakens) return;
             if (part == null || part.Aircraft == null || part.Aircraft.LoadContext != CraftLoadContext.Flight) return;
-            PlateInfo info = InfoOf(part);
+            PlateInfo remoteInfo = InfoOf(part);
+            if (remoteInfo != null) PlayRemoteEffects(part, remoteInfo, impact, delay);
+            if (!Visuals && !Weakens) return;
+            PlateInfo info = remoteInfo;
             if (info == null) return;
             if (Weakens) Record(part, info, impact);
             if (Visuals) Show(part, new[] { impact }, delay);
+        }
+
+        // The sparks and smoke of another player's hit: its place and direction are rebuilt from the plate coordinates the message carries.
+        private static void PlayRemoteEffects(PartScript part, PlateInfo info, PlateImpact impact, float delay)
+        {
+            if (!ArmorFragmentsPlugin.ImpactEffectsEnabled.Value) return;
+            PlateGeometry g = info.GeometryOf(impact.Axis);
+            Vector3 normalLocal = impact.Front ? g.N : -g.N;
+            Vector3 local = g.Origin + g.T1 * impact.U + g.T2 * impact.V + normalLocal * (g.Depth * 0.5f);
+            Vector3 planar = g.T1 * impact.DirU + g.T2 * impact.DirV;
+            planar = planar.sqrMagnitude > 0.0001f ? planar.normalized : g.T1;
+            float angle = Mathf.Clamp(impact.Angle, 0f, 85f) * Mathf.Deg2Rad;
+            // The way the shell went (into the plate), or for a ricochet the way it bounced (away from it).
+            Vector3 into = impact.Kind == DamageKind.Ricochet ? normalLocal : -normalLocal;
+            Vector3 directionLocal = (planar * Mathf.Sin(angle) + into * Mathf.Cos(angle)).normalized;
+
+            Transform t = part.transform;
+            ImpactEffects.Play(part, impact.Kind, t.TransformPoint(local), t.TransformDirection(normalLocal), t.TransformDirection(directionLocal),
+                               impact.Caliber, impact.Strength, impact.Angle, impact.Thickness, delay);
         }
 
         // Why a shell left no mark on a plate, told once per plate and reason (so the log does not stay silent).
@@ -439,7 +465,7 @@ namespace ArmorFragments
             DamageWorker.Job job = new DamageWorker.Job
             {
                 Owner = maps, Plate = plate, Impacts = impacts, DeliverAt = Time.time + Mathf.Max(delay, 0f),
-                Height = ArmorFragmentsPlugin.DamageMapsRelief.Value != 0,
+                Height = ArmorFragmentsPlugin.DamageMapsRelief.Value != 0 || maps.Gloss,
                 Damage = ArmorFragmentsPlugin.ImpactCameraDamageView.Value,
             };
             WantGeometry(job, plate);
@@ -691,7 +717,7 @@ namespace ArmorFragments
                     DamageWorker.Job job = new DamageWorker.Job
                     {
                         Owner = maps, Plate = plate, Impacts = new PlateImpact[0], DeliverAt = Time.time,
-                        Height = ArmorFragmentsPlugin.DamageMapsRelief.Value != 0, Damage = ArmorFragmentsPlugin.ImpactCameraDamageView.Value,
+                        Height = ArmorFragmentsPlugin.DamageMapsRelief.Value != 0 || maps.Gloss, Damage = ArmorFragmentsPlugin.ImpactCameraDamageView.Value,
                         Everything = turnedOff,   // without geometry the holes need the hole atlas again
                     };
                     WantGeometry(job, plate);
@@ -752,7 +778,7 @@ namespace ArmorFragments
                     DamageWorker.Job job = new DamageWorker.Job
                     {
                         Owner = maps, Plate = plate, Impacts = new PlateImpact[0], DeliverAt = Time.time,
-                        Height = relief != 0, Damage = view, Everything = true,
+                        Height = relief != 0 || maps.Gloss, Damage = view, Everything = true,
                     };
                     WantGeometry(job, plate);
                     DamageWorker.Enqueue(job);

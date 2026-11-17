@@ -376,6 +376,12 @@ namespace ArmorFragments.UI
                 "Shots leave dents, holes, grooves and pits on armor plates.");
             ToggleSetting(ArmorFragmentsPlugin.DamageMapsPaintDamage, "Scorched and flaked paint",
                 "Marks scorch the paint and knock it off, showing steel. Marked plates are drawn with the Lit shader in their paint's color. Applies to the next vehicle that gets marks (Clear starts over).");
+            ToggleSetting(ArmorFragmentsPlugin.DamageMapsSteelGloss, "Shiny steel, dull soot",
+                "The steel that shows through the paint is metallic and shiny (brightest where a shell skidded or cut through) and scorched paint is dull. Needs 'Scorched and flaked paint'. Applies to the next vehicle that gets marks.");
+            ToggleSetting(ArmorFragmentsPlugin.ImpactEffectsEnabled, "Impact effects",
+                "A flash, sparks, paint dust and smoke where a shell hits armor.");
+            FloatSetting(ArmorFragmentsPlugin.ImpactEffectsAmount, "Impact effects amount",
+                "How many sparks and how much smoke (1 = normal).", 0.1f, "x");
             ToggleSetting(ArmorFragmentsPlugin.DamageMapsShareMarks, "Share marks with other players",
                 "In multiplayer, send the marks of your shots to the other players who have the mod, and draw theirs. Players without the mod see nothing.");
             ToggleSetting(ArmorFragmentsPlugin.DamageMapsSimulatedShots, "Marks on simulated shots",
