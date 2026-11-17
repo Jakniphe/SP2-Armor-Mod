@@ -1042,6 +1042,37 @@ namespace ArmorFragments
             material.renderQueue = (int)RenderQueue.AlphaTest;
             Lit = material;
             SetMaterial(material);
+            CopyDecalLayer();
+        }
+
+        // The game's part shader gets the decals (emblems, text) that project onto a part from the mesh: the decal target's id is stored in the
+        // mesh's UV1.y, as the bits of the rendering-layer mask the decal projectors are set to (DecalTargetScript.InitializeRenderer). The Lit shader
+        // reads the renderer's own rendering-layer mask instead, so a plate switched to it lost its emblems. The mask is copied to the renderer.
+        private uint originalLayerMask;
+        private bool changedLayerMask;
+
+        private void CopyDecalLayer()
+        {
+            try
+            {
+                Renderer renderer = Info.Map.Renderer;
+                Mesh mesh = Info.Mesh;
+                if (renderer == null || mesh == null || changedLayerMask) return;
+                List<Vector3> uv1 = new List<Vector3>();
+                mesh.GetUVs(1, uv1);
+                if (uv1.Count == 0) return;
+                uint mask = unchecked((uint)BitConverter.SingleToInt32Bits(uv1[0].y));
+                if (mask == 0) return;
+                originalLayerMask = renderer.renderingLayerMask;
+                renderer.renderingLayerMask = mask;
+                changedLayerMask = true;
+                ArmorFragmentsPlugin.Log.LogInfo("[DMAP] plate '" + Info.Part.Part.Name + "': its decals (emblems) are kept: the renderer's rendering layer 0x" +
+                                                 originalLayerMask.ToString("X") + " -> 0x" + mask.ToString("X"));
+            }
+            catch (Exception e)
+            {
+                ArmorFragmentsPlugin.Log.LogWarning("[DMAP] could not copy the decal layer of a plate: " + e.Message);
+            }
         }
 
         // Back to the game's own look (restore) and free what was made.
@@ -1066,6 +1097,11 @@ namespace ArmorFragments
             catch (Exception e)
             {
                 ArmorFragmentsPlugin.Log.LogWarning("[DMAP] a plate could not be restored: " + e.Message);
+            }
+            if (changedLayerMask)
+            {
+                try { if (Info.Map.Renderer != null) Info.Map.Renderer.renderingLayerMask = originalLayerMask; } catch (Exception) { }
+                changedLayerMask = false;
             }
             if (Lit != null) UnityEngine.Object.Destroy(Lit);
             Lit = null;
