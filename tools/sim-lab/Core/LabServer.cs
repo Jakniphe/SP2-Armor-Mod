@@ -27,6 +27,9 @@ namespace SimLab
         public float Mass { get; set; } = 0;            // kg; 0 = what the game gives a shell of that caliber
         public float Speed { get; set; } = 800;         // m/s
         public float ShellHardness { get; set; } = 100; // %
+        public string Nose { get; set; } = "ap";        // the shape of the shell's nose: legacy (the old hemisphere), ap, aphe, he, or custom
+        public float NoseLength { get; set; } = 1.4f;   // custom: the nose's length in shell radii
+        public float NoseFullness { get; set; } = 1.95f;// custom: its exponent (1 = cone, 2 = ellipse, more = blunter)
         public float Angle { get; set; } = 0;           // degrees from the plate's normal
         public float Azimuth { get; set; } = 0;         // degrees: the way the shell goes along the plate
         public int Quality { get; set; } = 1;           // 0 low, 1 medium, 2 high
@@ -197,6 +200,7 @@ namespace SimLab
                 ThicknessM = s.Thickness * 0.001f, PlateHardness = s.Hardness, PlateBrittleness = s.Brittleness / 100f,
                 ResistanceJPerM3 = ArmorFragmentsPlugin.ArmorResistance.Value * 1e7f,
                 Ricochet = ricochet, KeptEnergy = kept, EnergyScale = s.EnergyScale, Quality = s.Quality, Seed = s.Seed,
+                Profile = ProfileOf(s),
                 // a shell that goes through is turned toward the plate's normal by the energy model's own number
                 DeflectionDeg = verdict == "Penetrated" ? EnergyModel.DeflectionDegrees(armor, shell, s.Angle) : 0f,
             };
@@ -303,7 +307,7 @@ namespace SimLab
             {
                 Kind = kind, Front = true, U = sim.Size * 0.5f, V = sim.Size * 0.5f,
                 DirU = input.DirU, DirV = input.DirV, Angle = s.Angle, Caliber = input.CaliberM,
-                Strength = strength, Thickness = input.ThicknessM, Seed = s.Seed,
+                Strength = strength, Thickness = input.ThicknessM, Seed = s.Seed, Profile = input.Profile,
             });
 
             front = new float[n * n]; back = new float[n * n]; hole = new byte[n * n];
@@ -336,7 +340,7 @@ namespace SimLab
                 Kind = kind, Front = true, U = plate * 0.5f, V = plate * 0.5f, DirU = input.DirU, DirV = input.DirV, Angle = s.Angle,
                 Caliber = input.CaliberM, Strength = strength, Thickness = input.ThicknessM, Seed = s.Seed,
                 ShellMass = input.ShellMassKg, Speed = input.SpeedMS, PlateHardness = input.PlateHardness,
-                PlateBrittleness = input.PlateBrittleness, KeptEnergy = kept, Deflection = input.DeflectionDeg,
+                PlateBrittleness = input.PlateBrittleness, KeptEnergy = kept, Deflection = input.DeflectionDeg, Profile = input.Profile,
             };
             if (agrees) SimBridge.Apply(cpu, impact, sim, s.Cracks, s.Smooth); else PlateStamps.Apply(cpu, impact);
 
@@ -393,6 +397,19 @@ namespace SimLab
             return rows;
         }
 
+        // The nose profile the scenario asks for (the mod picks it by the kind of ammunition; the lab lets it be chosen, or made up).
+        private static ShellProfile ProfileOf(Scenario s)
+        {
+            switch ((s.Nose ?? "ap").ToLowerInvariant())
+            {
+                case "legacy": return default(ShellProfile);
+                case "aphe": return Ammunition.ProfileOf(AmmoKind.APHE);
+                case "he": return Ammunition.ProfileOf(AmmoKind.HE);
+                case "custom": return ShellProfile.Procedural(s.NoseLength, s.NoseFullness);
+                default: return Ammunition.ProfileOf(AmmoKind.AP);
+            }
+        }
+
         private static ImpactSimResult Quick(Scenario s)
         {
             float mass = s.Mass > 0f ? s.Mass : EnergyModel.ShellMassForCaliber(s.Caliber);
@@ -403,7 +420,7 @@ namespace SimLab
                 DirU = (float)Math.Cos(az), DirV = (float)Math.Sin(az), ThicknessM = s.Thickness * 0.001f,
                 PlateHardness = s.Hardness, PlateBrittleness = s.Brittleness / 100f,
                 ResistanceJPerM3 = ArmorFragmentsPlugin.ArmorResistance.Value * 1e7f,
-                EnergyScale = s.EnergyScale, Quality = s.Quality, Seed = s.Seed,
+                EnergyScale = s.EnergyScale, Quality = s.Quality, Seed = s.Seed, Profile = ProfileOf(s),
             }, PoolFor(s.Threads));
         }
 
@@ -414,6 +431,7 @@ namespace SimLab
                 Thickness = s.Thickness, Hardness = s.Hardness, Brittleness = s.Brittleness, Caliber = s.Caliber, Mass = s.Mass,
                 Speed = s.Speed, ShellHardness = s.ShellHardness, Angle = s.Angle, Azimuth = s.Azimuth, Quality = s.Quality,
                 Threads = s.Threads, Seed = s.Seed, EnergyScale = s.EnergyScale,
+                Nose = s.Nose, NoseLength = s.NoseLength, NoseFullness = s.NoseFullness,
             };
         }
 
@@ -427,9 +445,10 @@ namespace SimLab
             for (int i = 2; i + 1 < args.Length; i += 2)
             {
                 string key = args[i].TrimStart('-');
-                float value = float.Parse(args[i + 1], System.Globalization.CultureInfo.InvariantCulture);
                 var property = typeof(Scenario).GetProperty(key, System.Reflection.BindingFlags.IgnoreCase | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance);
                 if (property == null) { Console.WriteLine("unknown " + key); return 2; }
+                if (property.PropertyType == typeof(string)) { property.SetValue(s, args[i + 1]); continue; }
+                float value = float.Parse(args[i + 1], System.Globalization.CultureInfo.InvariantCulture);
                 if (property.PropertyType == typeof(int)) property.SetValue(s, (int)value); else property.SetValue(s, value);
             }
             string json = System.Text.Json.JsonSerializer.Serialize(RunScenario(s, true));

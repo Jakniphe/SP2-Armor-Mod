@@ -62,6 +62,9 @@
       <div class="row"><label>Mass <small>kg (0 = what the game gives that caliber)</small><input type="range" id="massR" min="0" max="60" step="0.1"></label><input type="number" id="mass" step="0.1"></div>
       <div class="row"><label>Speed <small>m/s</small><input type="range" id="speedR" min="50" max="2000" step="10"></label><input type="number" id="speed"></div>
       <div class="row"><label>Shell hardness <small>%</small><input type="range" id="shellHardnessR" min="10" max="300" step="5"></label><input type="number" id="shellHardness"></div>
+      <div class="row full"><label>Nose shape <small>how the metal is pushed aside; what the shell pays for it does not change</small>
+        <select id="nose"><option value="ap">AP: pointed and round (ogive)</option><option value="aphe">APHE: fuller</option><option value="he">HE: short and nearly flat</option><option value="legacy">The old hemisphere</option><option value="custom">Your own (procedural)</option></select></label></div>
+      <div class="row"><label>Nose length <small>shell radii (custom)</small><input type="number" id="noseLength" step="0.05" min="0.05"></label><label>Fullness <small>1 cone, 2 ellipse, 3+ blunt (custom)</small><input type="number" id="noseFullness" step="0.05" min="1"></label></div>
     </section>
     <section>
       <h2>Shot</h2>
@@ -116,6 +119,9 @@ function read() {
   const s = {};
   ids.forEach(id => s[id] = parseFloat($(id).value) || 0);
   s.quality = parseInt($('quality').value);
+  s.nose = $('nose').value;
+  s.noseLength = parseFloat($('noseLength').value) || 1.4;
+  s.noseFullness = parseFloat($('noseFullness').value) || 1.95;
   s.gpu = $('gpu').checked;
   s.cracks = $('cracks').checked;
   s.smooth = $('smooth').checked;
@@ -125,6 +131,9 @@ function read() {
 function write(s) {
   ids.forEach(id => { $(id).value = s[id]; $(id + 'R').value = s[id]; });
   $('quality').value = s.quality;
+  $('nose').value = s.nose || 'ap';
+  $('noseLength').value = s.noseLength || 1.4;
+  $('noseFullness').value = s.noseFullness || 1.95;
   $('gpu').checked = s.gpu !== false;
   $('cracks').checked = s.cracks !== false;
   $('smooth').checked = s.smooth !== false;
@@ -239,6 +248,7 @@ async function scaling() {
   write(Object.assign({}, defaults, saved));
   sel.addEventListener('change', () => { if (sel.value) { $('caliber').value = $('caliberR').value = sel.value; store(); } });
   $('quality').addEventListener('change', store);
+  ['nose', 'noseLength', 'noseFullness'].forEach(id => { $(id).addEventListener('change', store); $(id).addEventListener('input', store); });
   $('gpu').addEventListener('change', store);
   $('cracks').addEventListener('change', store);
   $('smooth').addEventListener('change', store);

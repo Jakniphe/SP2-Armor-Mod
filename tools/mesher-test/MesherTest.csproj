@@ -14,6 +14,7 @@
     <Compile Include="Test.cs" />
     <Compile Include="..\..\Armor Mod\DamageMaps\PlateMesher.cs" />
     <Compile Include="..\..\Armor Mod\DamageMaps\PlateStamps.cs" />
+    <Compile Include="..\..\Armor Mod\Sim\ShellProfile.cs" />
     <Compile Include="..\..\Armor Mod\DamageMaps\PlateGeometry.cs" />
     <Reference Include="UnityEngine.CoreModule">
       <HintPath>$(GameManaged)\UnityEngine.CoreModule.dll</HintPath>

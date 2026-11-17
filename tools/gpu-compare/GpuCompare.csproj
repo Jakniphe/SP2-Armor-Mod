@@ -1,4 +1,4 @@
-<Project Sdk="Microsoft.NET.Sdk">
+﻿<Project Sdk="Microsoft.NET.Sdk">
   <!-- Runs the real impact simulation (CPU, the card's current kernels, and a variant under test) side by side. Windows, needs OpenCL.dll. -->
   <PropertyGroup>
     <OutputType>Exe</OutputType>
@@ -12,6 +12,7 @@
   <ItemGroup>
     <Compile Include="Program.cs" />
     <Compile Include="..\..\Armor Mod\Sim\ImpactSim.cs" />
+    <Compile Include="..\..\Armor Mod\Sim\ShellProfile.cs" />
     <Compile Include="..\..\Armor Mod\Sim\SimPool.cs" />
     <Compile Include="..\..\Armor Mod\Sim\ClRuntime.cs" />
     <Compile Include="..\..\Armor Mod\Sim\ClSolver.cs" />

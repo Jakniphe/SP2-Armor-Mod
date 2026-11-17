@@ -22,6 +22,7 @@ namespace ArmorFragments.Sim
         public int Quality;            // 0 low, 1 medium, 2 high
         public int Columns;            // the grid's columns per side; 0 = the quality's own (40, 64 or 96). The game picks a smaller one when the quality's would take too long
         public int Seed;
+        public ShellProfile Profile;   // the shape of the shell's nose (unset = the old hemisphere); it changes how the metal is pushed aside, never what it costs
         public int TimeLimitMs;        // give up after this long (0 = no limit)
         public Action<float> Progress; // told how far along it is (0..1) as it goes (the lab's progress bar); null = nobody asks
         public Func<bool> Cancelled;   // asked once a step: true = stop now (the result then says TimedOut). Null = never
@@ -91,6 +92,7 @@ namespace ArmorFragments.Sim
         private float ax0, ay0, az0;   // the direction it started with (the tunnel it digs is along this)
         private float tipS;            // how far its tip has gone along that line
         private float radius, bodyLength;
+        private float noseLen, noseP;  // the nose's profile (see ShellProfile): its length in meters (0 = the old hemisphere) and its exponent
 
         // ---- Material -----------------------------------------------------------------------------
         private float yieldStrain, breakStrain, ductility, plasticRate;
@@ -200,6 +202,8 @@ namespace ArmorFragments.Sim
             count = n * n * k;
             particleRadius = 0.35f * Math.Min(h, hz);
             bodyLength = radius * 2.5f;
+            noseLen = input.Profile.IsSet ? Math.Min(input.Profile.NoseLength * radius, 0.9f * (radius + bodyLength)) : 0f;
+            noseP = Math.Max(input.Profile.Fullness, 1f);
 
             float hardness = Math.Max(input.PlateHardness, 10f) / 100f;
             float brittle = Math.Min(Math.Max(input.PlateBrittleness, 0f), 1f);
@@ -490,6 +494,7 @@ namespace ArmorFragments.Sim
             g[ClSolver.PTx0] = tx0; g[ClSolver.PTy0] = ty0; g[ClSolver.PTz0] = tz0;
             g[ClSolver.PAx0] = ax0; g[ClSolver.PAy0] = ay0; g[ClSolver.PAz0] = az0;
             g[ClSolver.PRadius] = radius; g[ClSolver.PBody] = bodyLength; g[ClSolver.PParticle] = particleRadius;
+            g[ClSolver.PNoseLen] = noseLen; g[ClSolver.PNoseP] = noseP;
             g[ClSolver.PH] = h; g[ClSolver.PDt] = dt; g[ClSolver.PDamp] = damp;
             g[ClSolver.PHasShell] = hasShell ? 1f : 0f; g[ClSolver.PBackOpen] = backOpen ? 1f : 0f;
             g[ClSolver.PBreak] = breakStrain; g[ClSolver.PYield] = yieldStrain; g[ClSolver.PRate] = plasticRate;
@@ -622,6 +627,7 @@ namespace ArmorFragments.Sim
         // The particle is inside the shell: it goes to the surface of the capsule.
         private void PushOne(int idx)
         {
+            if (noseLen > 0f) { PushShaped(idx); return; }
             float x = qx[idx], y = qy[idx], z = qz[idx];
 
             // The nearest point of the capsule's axis, from the back of its body to the center of its nose.
@@ -641,6 +647,43 @@ namespace ArmorFragments.Sim
             else { ux = -ay; uy = ax; uz = 0f; if (ux * ux + uy * uy < 1e-6f) ux = 1f; }
 
             float move = Math.Min(reach - d, 1.2f * h);
+            qx[idx] = x + ux * move;
+            qy[idx] = y + uy * move;
+            qz[idx] = z + uz * move;
+        }
+
+        // The same for a shell with a nose profile (ShellProfile): a body of revolution, the radius at each distance behind the tip given by the
+        // profile and the metal pushed out along the surface's normal (sideways and forward on the nose). The same arithmetic is in the kernel.
+        private void PushShaped(int idx)
+        {
+            float x = qx[idx], y = qy[idx], z = qz[idx];
+            float rx = x - (cx + ax * radius), ry = y - (cy + ay * radius), rz = z - (cz + az * radius);
+            float s = rx * ax + ry * ay + rz * az;     // along the way it moves: behind the tip is negative
+            float a = -s;                              // how far behind the tip
+            float total = radius + bodyLength;
+            if (a < -particleRadius || a > total + particleRadius) return;
+
+            float lx = rx - ax * s, ly = ry - ay * s, lz = rz - az * s;
+            float d = MathF.Sqrt(lx * lx + ly * ly + lz * lz);
+            float ac = Math.Min(Math.Max(a, 0f), total);
+            float r, slope;
+            if (ac >= noseLen) { r = radius; slope = 0f; }
+            else
+            {
+                float u = (noseLen - ac) / noseLen;
+                float inner = Math.Max(1f - MathF.Pow(u, noseP), 1e-6f);
+                r = radius * MathF.Pow(inner, 1f / noseP);
+                slope = Math.Min(radius * MathF.Pow(inner, 1f / noseP - 1f) * MathF.Pow(u, noseP - 1f) / noseLen, 8f);
+            }
+            if (d >= r + particleRadius) return;
+
+            float norm = MathF.Sqrt(1f + slope * slope);
+            float ux, uy, uz;
+            if (d > 1e-6f) { ux = lx / d; uy = ly / d; uz = lz / d; }
+            else { ux = -ay; uy = ax; uz = 0f; if (ux * ux + uy * uy < 1e-6f) ux = 1f; }
+            ux = (ux + ax * slope) / norm; uy = (uy + ay * slope) / norm; uz = (uz + az * slope) / norm;
+
+            float move = Math.Min((r + particleRadius - d) / norm, 1.2f * h);
             qx[idx] = x + ux * move;
             qy[idx] = y + uy * move;
             qz[idx] = z + uz * move;

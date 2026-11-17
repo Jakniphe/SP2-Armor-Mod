@@ -256,7 +256,8 @@ namespace ArmorFragments
         //   visualOnly: a simulated shot's mark: drawn, but not recorded in the armor model (no hole to shoot through, no thinner plate)
         public static void OnImpact(PartScript part, ArmorTag armor, DamageKind kind, Vector3 point, Vector3 normalFacing,
                                     Vector3 direction, float caliberMeters, float strength, float angle, float delay,
-                                    float shellMass = 0f, float speed = 0f, float keptEnergy = 1f, bool visualOnly = false, float deflection = 0f)
+                                    float shellMass = 0f, float speed = 0f, float keptEnergy = 1f, bool visualOnly = false, float deflection = 0f,
+                                    ShellProfile profile = default(ShellProfile))
         {
             if (visualOnly ? !Visuals : !Visuals && !Weakens) return;
             if (part == null || part.Aircraft == null || part.Aircraft.LoadContext != CraftLoadContext.Flight) return;
@@ -301,6 +302,7 @@ namespace ArmorFragments
                 PlateBrittleness = armor != null ? armor.Brittleness / 100f : 0.5f,
                 KeptEnergy = keptEnergy,
                 Deflection = deflection,
+                Profile = profile,
             };
 
             if (Weakens && !visualOnly) Record(part, info, impact);   // a simulated shot only draws: it never changes the armor model

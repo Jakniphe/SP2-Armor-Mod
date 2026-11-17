@@ -19,7 +19,8 @@ namespace ArmorFragments.Sim
         public const int PMass = 26, PSpeed0 = 27, PEnergy0 = 28, PCost = 29, PThickness = 30, PHz = 31, PDepthLimit = 32, PSkimLength = 33,
                          PRicochet = 34, PKept = 35, PDu = 36, PDv = 37, PEps = 38, PMinSettle = 39;
         public const int PEnergy = 40, PShellActive = 41, PStopped = 42, PExited = 43, PBounced = 44, PSkimming = 45, PSkimLeft = 46,
-                         PDeepest = 47, PSteps = 48, PSettle = 49, PStoppedSteps = 50, PShellSteps = 51, PLastCount = 52, PDone = 53, PMoving = 54, PDeflect = 55;
+                         PDeepest = 47, PSteps = 48, PSettle = 49, PStoppedSteps = 50, PShellSteps = 51, PLastCount = 52, PDone = 53, PMoving = 54, PDeflect = 55,
+                         PNoseLen = 56, PNoseP = 57;
         public const int PCx = 0, PCy = 1, PCz = 2, PAx = 3, PAy = 4, PAz = 5, PTipS = 6, PTx0 = 7, PTy0 = 8, PTz0 = 9, PAx0 = 10, PAy0 = 11,
                          PAz0 = 12, PRadius = 13, PBody = 14, PParticle = 15, PH = 16, PDt = 17, PDamp = 18, PHasShell = 19, PBackOpen = 20,
                          PBreak = 21, PYield = 22, PRate = 23, PDuctility = 24, PReach2 = 25;
@@ -86,6 +87,8 @@ __constant int OZ[18] = {0,0,0,0,1,-1,0,0,0,0,1,-1,1,-1,1,-1,1,-1};
 #define P_DONE 53
 #define P_MOVING 54
 #define P_DEFLECT 55
+#define P_NOSELEN 56
+#define P_NOSEP 57
 
 #define MAX_ACTIVE 600.0f
 #define SETTLE_STEPS 24.0f
@@ -103,6 +106,40 @@ inline float3 push_one(float3 q, __constant float* P)
 {
     float ax = P[P_AX], ay = P[P_AY], az = P[P_AZ];
     float bodyLength = P[P_BODY], radius = P[P_RADIUS];
+    float noseLen = P[P_NOSELEN];
+    if (noseLen > 0.0f)
+    {
+        // A shell with a nose profile: a body of revolution (the same arithmetic as ImpactSim.PushShaped).
+        float3 axis = (float3)(ax, ay, az);
+        float3 tip = (float3)(P[P_CX] + ax * radius, P[P_CY] + ay * radius, P[P_CZ] + az * radius);
+        float3 rel = q - tip;
+        float s = dot(rel, axis);
+        float a = -s;
+        float total = radius + bodyLength;
+        float pr = P[P_PARTICLE];
+        if (a < -pr || a > total + pr) return q;
+        float3 lat = rel - axis * s;
+        float d = length(lat);
+        float ac = fmin(fmax(a, 0.0f), total);
+        float r, slope;
+        if (ac >= noseLen) { r = radius; slope = 0.0f; }
+        else
+        {
+            float p = P[P_NOSEP];
+            float u = (noseLen - ac) / noseLen;
+            float inner = fmax(1.0f - pow(u, p), 1e-6f);
+            r = radius * pow(inner, 1.0f / p);
+            slope = fmin(radius * pow(inner, 1.0f / p - 1.0f) * pow(u, p - 1.0f) / noseLen, 8.0f);
+        }
+        if (d >= r + pr) return q;
+        float norm = sqrt(1.0f + slope * slope);
+        float3 outward;
+        if (d > 1e-6f) outward = lat / d;
+        else { outward = (float3)(-ay, ax, 0.0f); if (outward.x * outward.x + outward.y * outward.y < 1e-6f) outward.x = 1.0f; }
+        outward = (outward + axis * slope) / norm;
+        float shift = fmin((r + pr - d) / norm, 1.2f * P[P_H]);
+        return q + outward * shift;
+    }
     float bx = P[P_CX] - ax * bodyLength, by = P[P_CY] - ay * bodyLength, bz = P[P_CZ] - az * bodyLength;
     float along = (q.x - bx) * ax + (q.y - by) * ay + (q.z - bz) * az;
     along = fmin(fmax(along, 0.0f), bodyLength);

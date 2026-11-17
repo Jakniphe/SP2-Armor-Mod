@@ -11,6 +11,7 @@ namespace ArmorFragments
         Penetrated,  // a hole in, a bigger torn one out the back
         Pit,         // a fragment stopped in the plate
         SmallHole,   // a fragment went through
+        Burst,       // a high-explosive shell went off on the plate: a wide, shallow dish
     }
 
     // What one stamp needs, in plate coordinates (meters).
@@ -34,6 +35,7 @@ namespace ArmorFragments
         public float PlateBrittleness; // 0..1
         public float KeptEnergy;       // ricochet: the share of its energy the shell keeps
         public float Deflection;       // degrees: how far the plate turns a shell that goes through it (the energy model's number)
+        public ShellProfile Profile;   // the shape of the shell's nose (how the metal is pushed aside; whether it tears into petals or shears out a plug)
     }
 
     // The atlases a vehicle's plates are drawn into (one rectangle at a time).
@@ -140,6 +142,13 @@ namespace ArmorFragments
                            Mathf.Max(caliber * 0.5f, minPixel), caliber * (0.05f + 0.12f * strength));
                     break;
                 }
+                case DamageKind.Burst:
+                {
+                    // A shell that goes off on the plate dishes it over a wide area (the blast, not a point): wide, shallow, with a low rim.
+                    float radius = Mathf.Max(caliber * (0.9f + 0.7f * strength), minPixel);
+                    Bowl(cpu, cpu.Get(entry), impact.U, impact.V, radius, caliber * (0.03f + 0.07f * strength), elong, dir, 0.18f);
+                    break;
+                }
                 case DamageKind.Pit:
                 {
                     float radius = Mathf.Max(caliber * 0.65f, minPixel);
@@ -158,14 +167,15 @@ namespace ArmorFragments
             LimitDepth(cpu, impact.Thickness);
         }
 
-        // Marks add up (a shot on an old dent digs a new one on top), but a plate cannot be dented deeper than it is thick, nor bulge further
-        // out than that: the heights are held between -0.6 and +0.5 of the thickness (the energy model never takes more than 60% of a plate
-        // away for a dent either). Only what changed since the last handing over is looked at, so it costs next to nothing.
+        // Marks add up (a shot on an old dent digs a new one on top), but a plate cannot be dented deeper than it is thick: the heights are held
+        // between -0.6 of the thickness (the energy model never takes more than 60% of a plate away for a dent either) and +1.5 (metal pushed out
+        // the back, or bent into petals, can stand well proud of a thin plate). Only what changed since the last handing over is looked at, so
+        // it costs next to nothing.
         public static void LimitDepth(PlateCpu c, float thickness)
         {
             thickness = Mathf.Max(thickness, c.Thickness);   // a thinned plate (the impact carries its thickness left) still has its own depth
             if (thickness < 0.0005f) return;
-            float low = -0.6f * thickness, high = 0.5f * thickness;
+            float low = -0.6f * thickness, high = 1.5f * thickness;
             for (int index = 0; index < 2; index++)
             {
                 PlateCpu.Face f = c.Faces[index];

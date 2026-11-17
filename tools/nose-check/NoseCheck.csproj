@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- The nose profiles (ShellProfile) in the real impact simulation: the card against the processor for each nose, and that the nose does not
+       change what the shell pays for the metal (the same outcome, the same energy left, the same particles charged). Windows, needs OpenCL.dll. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>disable</Nullable>
+    <PlatformTarget>x64</PlatformTarget>
+    <Optimize>true</Optimize>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="Program.cs" />
+    <Compile Include="..\..\Armor Mod\Sim\ImpactSim.cs" />
+    <Compile Include="..\..\Armor Mod\Sim\ShellProfile.cs" />
+    <Compile Include="..\..\Armor Mod\Sim\SimPool.cs" />
+    <Compile Include="..\..\Armor Mod\Sim\ClRuntime.cs" />
+    <Compile Include="..\..\Armor Mod\Sim\ClSolver.cs" />
+  </ItemGroup>
+</Project>

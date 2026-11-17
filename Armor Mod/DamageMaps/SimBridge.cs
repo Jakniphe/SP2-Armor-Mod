@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using ArmorFragments.Sim;
 using UnityEngine;
 
@@ -35,6 +35,7 @@ namespace ArmorFragments
                 EnergyScale = 1f,
                 Quality = quality,
                 Seed = impact.Seed,
+                Profile = impact.Profile,
                 TimeLimitMs = timeLimitMs,
             };
         }
@@ -73,6 +74,13 @@ namespace ArmorFragments
             float pixel = 1f / Mathf.Max(cpu.PxU, cpu.PxV);
             float grooveDepth = Mathf.Clamp(0.04f * impact.Caliber, 0.0004f, 0.002f);   // meters at a full crack
             float ragged = smooth ? 0.10f + 0.20f * Mathf.Clamp01(impact.PlateBrittleness) : 0f;
+
+            // How the plate fails where a shell goes through: tearing into petals that fold outward, or shearing out a plug with a clean edge.
+            bool through = impact.Kind == DamageKind.Penetrated && sim.HoleRadiusM > 0f;
+            float plug = through ? PlugShare(impact) : 0.5f;
+            float petalAmount = Mathf.Clamp01((0.5f - plug) * 2f), plugAmount = Mathf.Clamp01((plug - 0.5f) * 2f);
+            ragged *= 1f + 0.8f * petalAmount - 0.8f * plugAmount;
+            float edgeShift = through ? impact.Caliber * (0.05f * plugAmount - 0.06f * petalAmount) : 0f;   // plug: a hole of the full caliber; petals: smaller (they fold in)
             for (int y = y0; y < y1; y++)
             {
                 for (int x = x0; x < x1; x++)
@@ -97,7 +105,7 @@ namespace ArmorFragments
                         hole = false;
                         if (distance != null)
                         {
-                            float d = Sample(distance, n, i, j, fx, fy) - ragged * Noise(x, y, impact.Seed) * sim.Cell;
+                            float d = Sample(distance, n, i, j, fx, fy) - ragged * Noise(x, y, impact.Seed) * sim.Cell - edgeShift;
                             float value = Mathf.Clamp(128f + d / pixel * 128f, 0f, 255f);
                             if (value < 255f)
                             {
@@ -123,7 +131,85 @@ namespace ArmorFragments
             }
             PlateStamps.Dirty(faceIn, x0, y0, x1, y1, anyHole);
             PlateStamps.Dirty(faceOut, x0, y0, x1, y1, anyHole);
+            if (through && anyHole) ShapeExit(cpu, faceIn, faceOut, impact, sim, petalAmount, plugAmount);
             PlateStamps.LimitDepth(cpu, impact.Thickness);
+        }
+
+        // 0 = it tears into petals, 1 = it shears out a plug. A pointed nose, a thin ductile plate: petals. A flat nose, a thick or brittle
+        // plate: a plug (the plate fails in a cylinder as wide as the shell).
+        public static float PlugShare(PlateImpact impact)
+        {
+            float blunt = impact.Profile.Bluntness;
+            float thick = Mathf.Clamp01(impact.Thickness / Mathf.Max(impact.Caliber, 0.001f));
+            return Mathf.Clamp01(0.4f * blunt + 0.3f * thick + 0.3f * Mathf.Clamp01(impact.PlateBrittleness));
+        }
+
+        // The back of a hole the shell made: petals bent outward around it, or a clean shear lip. Worked out from the hole itself (its middle
+        // and its radius, from the simulation's columns), so it follows whatever shape the simulation gave it.
+        private static void ShapeExit(PlateCpu cpu, PlateCpu.Face faceIn, PlateCpu.Face faceOut, PlateImpact impact, ImpactSimResult sim,
+                                      float petalAmount, float plugAmount)
+        {
+            if (petalAmount < 0.05f && plugAmount < 0.05f) return;
+            int n = sim.N;
+            double su = 0, sv = 0;
+            int cells = 0;
+            for (int j = 0; j < n; j++)
+                for (int i = 0; i < n; i++)
+                {
+                    bool hole = sim.Solid != null ? sim.Solid[j * n + i] < 0.5f : sim.Hole[j * n + i] < 128;
+                    if (!hole) continue;
+                    su += impact.U + (i - (n - 1) * 0.5f) * sim.Cell;
+                    sv += impact.V + (j - (n - 1) * 0.5f) * sim.Cell;
+                    cells++;
+                }
+            if (cells < 3) return;
+            float cu = (float)(su / cells), cv = (float)(sv / cells);
+            float radius = Mathf.Sqrt(cells * sim.Cell * sim.Cell / Mathf.PI);
+
+            float reach = radius * (petalAmount > plugAmount ? 1.9f : 1.4f);
+            int x0 = Mathf.Max(PlateCpu.Border, Mathf.FloorToInt(PlateCpu.Border + (cu - reach) * cpu.PxU));
+            int x1 = Mathf.Min(cpu.Width - PlateCpu.Border, Mathf.CeilToInt(PlateCpu.Border + (cu + reach) * cpu.PxU));
+            int y0 = Mathf.Max(PlateCpu.Border, Mathf.FloorToInt(PlateCpu.Border + (cv - reach) * cpu.PxV));
+            int y1 = Mathf.Min(cpu.Height - PlateCpu.Border, Mathf.CeilToInt(PlateCpu.Border + (cv + reach) * cpu.PxV));
+            if (x1 <= x0 || y1 <= y0) return;
+
+            int petals = 5 + Math.Abs(impact.Seed % 4);
+            float phase = Hash(impact.Seed, 7, 3) * Mathf.PI;
+            float lift = Mathf.Min(impact.Caliber * 0.32f * petalAmount, 1.2f * impact.Thickness);
+            float lip = impact.Caliber * 0.06f * plugAmount;
+            for (int y = y0; y < y1; y++)
+            {
+                for (int x = x0; x < x1; x++)
+                {
+                    int idx = y * cpu.Width + x;
+                    if (faceOut.Mask[idx] < 128) continue;   // the hole itself
+                    float dx = (x + 0.5f - PlateCpu.Border) / cpu.PxU - cu, dy = (y + 0.5f - PlateCpu.Border) / cpu.PxV - cv;
+                    float rho = Mathf.Sqrt(dx * dx + dy * dy);
+                    if (rho > reach) continue;
+
+                    if (petalAmount > 0.05f)
+                    {
+                        // Petals: lobes around the hole, rising from its edge, highest a little way out, with a slit between each pair.
+                        float lobe = 0.5f + 0.5f * Mathf.Cos(petals * (Mathf.Atan2(dy, dx) - phase));
+                        lobe = Mathf.Pow(lobe, 0.8f);
+                        float away = Mathf.Max(rho - radius, 0f) / (0.9f * radius);
+                        float rise = away * Mathf.Exp(1f - away);
+                        float height = lift * lobe * rise;
+                        if (lobe < 0.08f) height -= 0.15f * lift * (1f - lobe / 0.08f) * Mathf.Min(away * 2f, 1f);   // the slit
+                        faceOut.Height[idx] += height;
+                    }
+                    else
+                    {
+                        // A plug leaves a clean lip around the hole on the way out, and a faint one on the way in.
+                        float ring = (rho - 1.08f * radius) / (0.12f * radius);
+                        float bump = lip * Mathf.Exp(-ring * ring);
+                        faceOut.Height[idx] += bump;
+                        if (faceIn.Mask[idx] >= 128) faceIn.Height[idx] += 0.4f * bump;
+                    }
+                }
+            }
+            PlateStamps.Dirty(faceOut, x0, y0, x1, y1, false);
+            if (plugAmount >= petalAmount) PlateStamps.Dirty(faceIn, x0, y0, x1, y1, false);
         }
 
         // The distance, in meters, from the middle of each of the simulation's columns to the edge of the hole (positive on the metal, negative

@@ -125,6 +125,10 @@ namespace ArmorFragments
             //    surface: it never gets in, the plate sheds nothing, and the fragments start outside the vehicle.
             if (shell.Explosive && (!shell.HasFuse || shell.FuseLeft <= 0f))
             {
+                if (LeavesMarks(simulated, applyDamage))
+                    PlateDamageMaps.OnImpact(armor, armorTag, DamageKind.Burst, point, Vector3.Dot(normal, direction) > 0f ? -normal : normal, direction,
+                                             shell.CaliberMm * 0.001f, Mathf.Clamp01(shell.FillerFraction * 6f), angle, leadTime,
+                                             0f, 0f, 1f, simulated, 0f, shell.Profile);
                 BurstOnSurface(shell, point, direction, normal, angle, applyDamage, simulated, leadTime,
                                shell.HasFuse ? "its fuse ran out at the plate" : "it burst on touching the plate (no fuse)");
                 return ImpactOutcome.Blocked;
@@ -166,7 +170,7 @@ namespace ArmorFragments
                 if (LeavesMarks(simulated, applyDamage))
                     PlateDamageMaps.OnImpact(armor, armorTag, DamageKind.Ricochet, point, n, reflected, shell.CaliberMm * 0.001f,
                                              1f - energyOut / Mathf.Max(shell.Energy, 1f), angle, leadTime,
-                                             shell.Mass, shell.Speed, energyOut / Mathf.Max(shell.Energy, 1f), simulated);
+                                             shell.Mass, shell.Speed, energyOut / Mathf.Max(shell.Energy, 1f), simulated, 0f, shell.Profile);
                 LastImpact.Record(tag + "Armor ricochet", angle, Mathf.Min(armorTolerated, 90f), 0, 1, 0f);
                 ArmorFragmentsPlugin.Log.LogInfo(
                     tag + "Armor ricochet: angle " + angle.ToString("F0") + " >= critical " +
@@ -201,7 +205,7 @@ namespace ArmorFragments
                 if (LeavesMarks(simulated, applyDamage))
                     PlateDamageMaps.OnImpact(armor, armorTag, DamageKind.Blocked, point, facingNormal, direction,
                                              shell.CaliberMm * 0.001f, Mathf.Clamp01(shellEnergy / Mathf.Max(absorbed, 1f)), angle, leadTime,
-                                             shell.Mass, shell.Speed, 1f, simulated);
+                                             shell.Mass, shell.Speed, 1f, simulated, 0f, shell.Profile);
 
                 // A shell with a fuse that the plate stops bursts where it stopped: on the plate's surface.
                 if (shell.HasFuse)
@@ -253,7 +257,7 @@ namespace ArmorFragments
             if (LeavesMarks(simulated, applyDamage))
                 PlateDamageMaps.OnImpact(armor, armorTag, DamageKind.Penetrated, point, facingNormal, direction,
                                          shell.CaliberMm * 0.001f, Mathf.Clamp01(absorbed / Mathf.Max(shellEnergy, 1f)), angle, leadTime,
-                                         shell.Mass, shell.Speed, 1f, simulated, EnergyModel.DeflectionDegrees(armorTag, shell, angle));
+                                         shell.Mass, shell.Speed, 1f, simulated, EnergyModel.DeflectionDegrees(armorTag, shell, angle), shell.Profile);
 
             // 4) The shell is not spent by the plate: what the plate did not take and did not turn into
             //    fragments goes on, bent a little toward the plate's normal. (An explosive shell with a fuse
