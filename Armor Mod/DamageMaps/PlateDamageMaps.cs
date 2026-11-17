@@ -603,6 +603,25 @@ namespace ArmorFragments
             }
         }
 
+        // For the performance report: how many plates carry real geometry, and how many vertices and triangles that is in all.
+        internal static string GeometryTotals()
+        {
+            int plates = 0, vertices = 0, triangles = 0, biggest = 0;
+            foreach (VehicleMaps maps in Vehicles.Values)
+            {
+                if (maps.Disposed) continue;
+                foreach (PlateVisual plate in maps.Plates.Values)
+                {
+                    if (!plate.HasGeometry) continue;
+                    plates++;
+                    vertices += plate.GeometryVertices;
+                    triangles += plate.GeometryTriangles;
+                    if (plate.GeometryTriangles > biggest) biggest = plate.GeometryTriangles;
+                }
+            }
+            return plates + " plates with geometry, " + (vertices / 1000) + "k vertices, " + (triangles / 1000) + "k triangles (the biggest " + (biggest / 1000) + "k)";
+        }
+
         // The vehicle's maps, if it has any (the impact camera's damage view draws from them).
         internal static VehicleMaps MapsFor(AircraftScript aircraft)
         {

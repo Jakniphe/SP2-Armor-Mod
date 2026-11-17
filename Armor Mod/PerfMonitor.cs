@@ -196,8 +196,28 @@ namespace ArmorFragments
                 CountActive<Rigidbody>() + ", lights " + CountActive<Light>() + ", cameras " + CountActive<Camera>() + ", decals " +
                 CountDecals() + "; time scale " + Time.timeScale.ToString("F2") + ", target fps " +
                 Application.targetFrameRate + ", vsync " + QualitySettings.vSyncCount + "; C# heap " + System.GC.GetTotalMemory(false) / (1024 * 1024) +
-                " MB; this count took " + Since(started).ToString("F1") + " ms";
+                " MB; real geometry: " + PlateDamageMaps.GeometryTotals() + "; " + FrameTimes() + "; this count took " + Since(started).ToString("F1") + " ms";
             ArmorFragmentsPlugin.Log.LogInfo(line);
+        }
+
+        // Where a frame goes, as Unity's own frame timing says (the main thread, the render thread, the graphics card). 0 = the game does not
+        // collect it (then only the sum is known).
+        private static readonly FrameTiming[] Timings = new FrameTiming[1];
+
+        private static string FrameTimes()
+        {
+            try
+            {
+                FrameTimingManager.CaptureFrameTimings();
+                if (FrameTimingManager.GetLatestTimings(1, Timings) < 1) return "no frame timing";
+                FrameTiming t = Timings[0];
+                return "last frame: main thread " + t.cpuMainThreadFrameTime.ToString("F1") + " ms, render thread " + t.cpuRenderThreadFrameTime.ToString("F1") +
+                       " ms, graphics card " + t.gpuFrameTime.ToString("F1") + " ms, whole " + t.cpuFrameTime.ToString("F1") + " ms";
+            }
+            catch (System.Exception e)
+            {
+                return "frame timing unavailable (" + e.Message + ")";
+            }
         }
 
         private static void Window(long from, long to, out int frames, out float average, out float worst)

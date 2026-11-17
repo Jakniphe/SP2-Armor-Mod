@@ -472,6 +472,17 @@ namespace ArmorFragments
             get { return geometry != null; }
         }
 
+        // Triangles and vertices of the plate's rewritten mesh now (0 if it has none): what the cameras have to draw for it.
+        public int GeometryTriangles
+        {
+            get { return geometry != null ? geometry.Triangles.Length / 3 : 0; }
+        }
+
+        public int GeometryVertices
+        {
+            get { return geometry != null ? geometry.Vertices.Length : 0; }
+        }
+
         // The biggest push of the geometry in the mesh, meters (how much a view could see of it).
         public float MaxHeight
         {
