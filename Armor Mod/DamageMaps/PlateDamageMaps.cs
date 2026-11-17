@@ -491,19 +491,19 @@ namespace ArmorFragments
 
             // The sides of a block got their tiles with it: they are filled with the block's paint now, hit or not (an untouched tile is white, shiny
             // metal in the atlas, and the block's side showed it).
-            if (plate.Main == null)
+            // (Whichever face was hit: a hit on a side must fill the block's big faces too, or the top of the block stays white.)
+            PlateVisual block = plate.Main ?? plate;
+            for (int k = -1; k < 2; k++)
             {
-                foreach (PlateVisual side in plate.Sides)
+                PlateVisual other = k < 0 ? block : block.Sides[k];
+                if (other == null || other == plate || other.Cpu.Width <= 0 || !other.TakeFull()) continue;
+                DamageWorker.Job fill = new DamageWorker.Job
                 {
-                    if (side == null || side.Cpu.Width <= 0 || !side.TakeFull()) continue;
-                    DamageWorker.Job fill = new DamageWorker.Job
-                    {
-                        Owner = maps, Plate = side, Impacts = new PlateImpact[0], DeliverAt = job.DeliverAt,
-                        Height = job.Height, Damage = job.Damage, Everything = true,
-                    };
-                    WantGeometry(fill, side);   // the block's mesh is built by whichever of its jobs is the last
-                    DamageWorker.Enqueue(fill);
-                }
+                    Owner = maps, Plate = other, Impacts = new PlateImpact[0], DeliverAt = job.DeliverAt,
+                    Height = job.Height, Damage = job.Damage, Everything = true,
+                };
+                WantGeometry(fill, other);   // the block's mesh is built by whichever of its jobs is the last
+                DamageWorker.Enqueue(fill);
             }
 
             // A shell's impact is simulated if the setting says so and the simulations are not piling up; the settings are taken
