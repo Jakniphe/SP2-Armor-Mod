@@ -123,6 +123,7 @@ namespace ArmorFragments
             }
             PlateStamps.Dirty(faceIn, x0, y0, x1, y1, anyHole);
             PlateStamps.Dirty(faceOut, x0, y0, x1, y1, anyHole);
+            PlateStamps.LimitDepth(cpu, impact.Thickness);
         }
 
         // The distance, in meters, from the middle of each of the simulation's columns to the edge of the hole (positive on the metal, negative

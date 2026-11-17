@@ -248,6 +248,60 @@ internal static class Test
         Check(uv1, "UV1 carried over to the new vertices");
     }
 
+
+    // The atlases' mip levels: a handed-over rectangle is aligned, and its smaller levels are the 2 x 2 averages of the bigger ones.
+    private static void MipTest()
+    {
+        Console.WriteLine("\n== MIP LEVELS ==");
+        PlateCpu cpu = new PlateCpu { Width = 96, Height = 64, PxU = 200f, PxV = 200f };
+        cpu.TileX[0] = 32; cpu.TileY[0] = 16; cpu.TileX[1] = 160; cpu.TileY[1] = 16;
+        PlateStamps.Apply(cpu, new PlateImpact { Kind = DamageKind.Blocked, Front = true, U = 0.15f, V = 0.1f, Caliber = 0.05f, Strength = 0.6f, Thickness = 0.02f, Seed = 3 });
+        List<Delivery> output = new List<Delivery>();
+        PlateStamps.Flush(cpu, null, null, 0f, output, true, true);
+        Check(output.Count >= 3, "normals, bump and damage view were handed over (" + output.Count + ")");
+        bool aligned = true, mips = true, unit = true, average = true;
+        foreach (Delivery d in output)
+        {
+            aligned &= d.X % 16 == 0 && d.Y % 16 == 0 && d.W % 16 == 0 && d.H % 16 == 0;
+            if (d.Mips == null || d.Mips.Length != 4) { mips = false; continue; }
+            int w = d.W, h = d.H;
+            for (int level = 0; level < 4; level++)
+            {
+                w >>= 1; h >>= 1;
+                mips &= d.Mips[level].Length == w * h * 4;
+            }
+            if (d.Kind == AtlasKind.Normal)
+            {
+                byte[] m = d.Mips[0];
+                for (int i = 0; i < m.Length; i += 4)
+                {
+                    float x = m[i] / 255f * 2f - 1f, y = m[i + 1] / 255f * 2f - 1f, z = m[i + 2] / 255f * 2f - 1f;
+                    float len = (float)Math.Sqrt(x * x + y * y + z * z);
+                    unit &= Math.Abs(len - 1f) < 0.03f;
+                }
+            }
+            else if (d.Kind == AtlasKind.Height)
+            {
+                int hw = d.W / 2;
+                int a = (4 * d.W + 6) * 4 + 1, b = a + 4, c = a + d.W * 4, e = c + 4;
+                int expected = (d.Bytes[a] + d.Bytes[b] + d.Bytes[c] + d.Bytes[e] + 2) >> 2;
+                average &= Math.Abs(d.Mips[0][(2 * hw + 3) * 4 + 1] - expected) <= 1;
+            }
+        }
+        Check(aligned, "the rectangles are multiples of 16 in position and size");
+        Check(mips, "four smaller levels, each half the size");
+        Check(unit, "the averaged normals are unit length again");
+        Check(average, "a smaller level's pixel is the average of the 2 x 2 above it");
+
+        // The depth limit: a dent cannot be deeper than 60% of the plate, nor a bulge more than 50% of it.
+        PlateCpu deep = new PlateCpu { Width = 32, Height = 32, PxU = 200f, PxV = 200f };
+        for (int i = 0; i < 5; i++)
+            PlateStamps.Apply(deep, new PlateImpact { Kind = DamageKind.Blocked, Front = true, U = 0.08f, V = 0.08f, Caliber = 0.04f, Strength = 1f, Thickness = 0.01f, Seed = i });
+        float lowest = 0f;
+        foreach (float v in deep.Faces[0].Height) lowest = Math.Min(lowest, v);
+        Check(lowest >= -0.0061f, "five shots on one spot dent it no deeper than 60% of the plate (" + (lowest * 1000f).ToString("F2") + " mm of 10)");
+    }
+
     private static int Main()
     {
         Run("shared diagonal, 8 mm", false, 0.008f, 120000);
@@ -256,6 +310,7 @@ internal static class Test
         Run("FINE 3 mm around the hole and the crack", false, 0.008f, 120000, 0.003f);
         Run("FINE 3 mm, split seam", true, 0.008f, 120000, 0.003f);
         Run("FINE 3 mm, small budget", false, 0.008f, 3000, 0.003f);
+        MipTest();
         Console.WriteLine(failures == 0 ? "\nALL CHECKS PASSED" : "\n" + failures + " CHECK(S) FAILED");
         return failures == 0 ? 0 : 1;
     }

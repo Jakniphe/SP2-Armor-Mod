@@ -257,6 +257,18 @@ namespace ArmorFragments
 
             if (Weakens && !visualOnly) Record(part, info, impact);   // a simulated shot only draws: it never changes the armor model
             if (Visuals) Show(part, new[] { impact }, delay);
+            if (!visualOnly && ArmorFragmentsPlugin.DamageMapsShareMarks.Value) MarksSync.Send(part, impact, delay);   // the other players see it too
+        }
+
+        // A mark that another player's game worked out (MarksSync): drawn here the same way, and recorded in the armor model of this game.
+        public static void OnRemoteImpact(PartScript part, PlateImpact impact, float delay)
+        {
+            if (!Visuals && !Weakens) return;
+            if (part == null || part.Aircraft == null || part.Aircraft.LoadContext != CraftLoadContext.Flight) return;
+            PlateInfo info = InfoOf(part);
+            if (info == null) return;
+            if (Weakens) Record(part, info, impact);
+            if (Visuals) Show(part, new[] { impact }, delay);
         }
 
         // Why a shell left no mark on a plate, told once per plate and reason (so the log does not stay silent).

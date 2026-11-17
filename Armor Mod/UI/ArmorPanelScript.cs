@@ -374,6 +374,8 @@ namespace ArmorFragments.UI
             builder.Header("Damage maps", collapsed: true);
             ToggleSetting(ArmorFragmentsPlugin.DamageMapsEnabled, "Marks on armor",
                 "Shots leave dents, holes, grooves and pits on armor plates.");
+            ToggleSetting(ArmorFragmentsPlugin.DamageMapsShareMarks, "Share marks with other players",
+                "In multiplayer, send the marks of your shots to the other players who have the mod, and draw theirs. Players without the mod see nothing.");
             ToggleSetting(ArmorFragmentsPlugin.DamageMapsSimulatedShots, "Marks on simulated shots",
                 "The simulated shot leaves its marks (and impact simulation) on the plates too. Only a look: they never weaken the armor, and Clear removes them.");
             ToggleSetting(ArmorFragmentsPlugin.KeepPlatesApart, "Keep armor plates out of the mesh merge",

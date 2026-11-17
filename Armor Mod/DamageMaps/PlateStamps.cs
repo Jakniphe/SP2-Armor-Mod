@@ -51,6 +51,7 @@ namespace ArmorFragments
         public PlateVisual Plate;
         public AtlasKind Kind;
         public int X, Y, W, H;
+        public byte[][] Mips;      // the same rectangle at half, quarter... size (levels 1..MipLevels-1), or null if it is not aligned for them
         public byte[] Bytes;       // W*H*4, RGBA: normals; (holes) white with the mask in the alpha; (height) the height in green; (damage) dark red and its opacity
         public float DeliverAt;    // Time.time from which it may be shown (the shell's ray has to arrive first)
     }
@@ -61,6 +62,8 @@ namespace ArmorFragments
     internal sealed class PlateCpu
     {
         public const int Border = 2;   // pixels around the plate's area that stay flat (so filtering never bleeds)
+        public const int MipLevels = 5;   // the atlases keep this many levels (1, 1/2, 1/4, 1/8, 1/16): marks stay steady from far away
+        public const int Align = 16;      // tiles and the rectangles handed over are multiples of this, so every level lines up
 
         public sealed class Face
         {
@@ -70,6 +73,7 @@ namespace ArmorFragments
             public bool HoleDirty;
         }
 
+        public float Thickness;         // the plate's own thickness (meters, before any dent thinned it): what the depth limit is a share of
         public int Width, Height;       // the tile's size in pixels, the same for both faces
         public float PxU, PxV;          // pixels per meter inside the border
         public readonly int[] TileX = new int[2];   // where each face's tile starts in the atlas
@@ -148,6 +152,33 @@ namespace ArmorFragments
                     Hole(cpu, cpu.Get(entry), impact.U, impact.V, radius, 1f, dir, 0.15f, impact.Seed);
                     Hole(cpu, cpu.Get(exit), impact.U, impact.V, radius * 1.1f, 1f, dir, 0.25f, impact.Seed + 1);
                     break;
+                }
+            }
+            LimitDepth(cpu, impact.Thickness);
+        }
+
+        // Marks add up (a shot on an old dent digs a new one on top), but a plate cannot be dented deeper than it is thick, nor bulge further
+        // out than that: the heights are held between -0.6 and +0.5 of the thickness (the energy model never takes more than 60% of a plate
+        // away for a dent either). Only what changed since the last handing over is looked at, so it costs next to nothing.
+        public static void LimitDepth(PlateCpu c, float thickness)
+        {
+            thickness = Mathf.Max(thickness, c.Thickness);   // a thinned plate (the impact carries its thickness left) still has its own depth
+            if (thickness < 0.0005f) return;
+            float low = -0.6f * thickness, high = 0.5f * thickness;
+            for (int index = 0; index < 2; index++)
+            {
+                PlateCpu.Face f = c.Faces[index];
+                if (f == null || f.X1 < 0) continue;
+                int x1 = Mathf.Min(f.X1, c.Width), y1 = Mathf.Min(f.Y1, c.Height);
+                for (int y = Mathf.Max(f.Y0, 0); y < y1; y++)
+                {
+                    int row = y * c.Width;
+                    for (int x = Mathf.Max(f.X0, 0); x < x1; x++)
+                    {
+                        float h = f.Height[row + x];
+                        if (h < low) f.Height[row + x] = low;
+                        else if (h > high) f.Height[row + x] = high;
+                    }
                 }
             }
         }
@@ -331,6 +362,13 @@ namespace ArmorFragments
                 // One more pixel around: the normal of a pixel depends on its neighbors.
                 int x0 = Mathf.Max(f.X0 - 1, 0), y0 = Mathf.Max(f.Y0 - 1, 0);
                 int x1 = Mathf.Min(f.X1 + 1, c.Width), y1 = Mathf.Min(f.Y1 + 1, c.Height);
+                // Aligned to the mip levels (tiles are multiples of Align wide and high in the game; elsewhere the rectangle just stays as it is).
+                if (c.Width % PlateCpu.Align == 0 && c.Height % PlateCpu.Align == 0)
+                {
+                    x0 -= x0 % PlateCpu.Align; y0 -= y0 % PlateCpu.Align;
+                    x1 = Mathf.Min((x1 + PlateCpu.Align - 1) / PlateCpu.Align * PlateCpu.Align, c.Width);
+                    y1 = Mathf.Min((y1 + PlateCpu.Align - 1) / PlateCpu.Align * PlateCpu.Align, c.Height);
+                }
                 int w = x1 - x0, h = y1 - y0;
 
                 byte[] normals = new byte[w * h * 4];
@@ -353,7 +391,7 @@ namespace ArmorFragments
                         normals[at + 3] = 255;
                     }
                 }
-                output.Add(new Delivery
+                AddDelivery(output, new Delivery
                 {
                     Owner = owner, Plate = plate, Kind = AtlasKind.Normal,
                     X = c.TileX[index] + x0, Y = c.TileY[index] + y0, W = w, H = h, Bytes = normals, DeliverAt = deliverAt,
@@ -371,7 +409,7 @@ namespace ArmorFragments
                             bump[at] = 128; bump[at + 1] = (byte)Mathf.RoundToInt(level * 255f); bump[at + 2] = 128; bump[at + 3] = 255;
                         }
                     }
-                    output.Add(new Delivery
+                    AddDelivery(output, new Delivery
                     {
                         Owner = owner, Plate = plate, Kind = AtlasKind.Height,
                         X = c.TileX[index] + x0, Y = c.TileY[index] + y0, W = w, H = h, Bytes = bump, DeliverAt = deliverAt,
@@ -398,7 +436,7 @@ namespace ArmorFragments
                             view[at + 3] = (byte)Mathf.RoundToInt(255f * (0.25f + 0.70f * level));
                         }
                     }
-                    output.Add(new Delivery
+                    AddDelivery(output, new Delivery
                     {
                         Owner = owner, Plate = plate, Kind = AtlasKind.Damage,
                         X = c.TileX[index] + x0, Y = c.TileY[index] + y0, W = w, H = h, Bytes = view, DeliverAt = deliverAt,
@@ -417,7 +455,7 @@ namespace ArmorFragments
                             mask[at + 3] = f.Mask[y * c.Width + x];
                         }
                     }
-                    output.Add(new Delivery
+                    AddDelivery(output, new Delivery
                     {
                         Owner = owner, Plate = plate, Kind = AtlasKind.Hole,
                         X = c.TileX[index] + x0, Y = c.TileY[index] + y0, W = w, H = h, Bytes = mask, DeliverAt = deliverAt,
@@ -427,6 +465,51 @@ namespace ArmorFragments
                 f.X0 = int.MaxValue; f.Y0 = int.MaxValue; f.X1 = -1; f.Y1 = -1;
                 f.HoleDirty = false;
             }
+        }
+
+        private static void AddDelivery(List<Delivery> output, Delivery d)
+        {
+            d.Mips = BuildMips(d.Bytes, d.W, d.H, d.Kind == AtlasKind.Normal);
+            output.Add(d);
+        }
+
+        // The rectangle at half size, quarter size... (a box average of each 2 x 2; normals are averaged and made unit length again, which
+        // is what a flatter, further-away surface looks like). Null if it does not halve evenly all the way down.
+        private static byte[][] BuildMips(byte[] source, int w, int h, bool normals)
+        {
+            int levels = PlateCpu.MipLevels - 1;
+            if (w % PlateCpu.Align != 0 || h % PlateCpu.Align != 0) return null;
+            byte[][] result = new byte[levels][];
+            byte[] from = source;
+            for (int level = 0; level < levels; level++)
+            {
+                int nw = w >> 1, nh = h >> 1;
+                byte[] to = new byte[nw * nh * 4];
+                for (int y = 0; y < nh; y++)
+                {
+                    for (int x = 0; x < nw; x++)
+                    {
+                        int a = ((2 * y) * w + 2 * x) * 4, b = a + 4, c = a + w * 4, d = c + 4;
+                        int at = (y * nw + x) * 4;
+                        if (normals)
+                        {
+                            float nx = (from[a] + from[b] + from[c] + from[d]) * 0.25f / 255f * 2f - 1f;
+                            float ny = (from[a + 1] + from[b + 1] + from[c + 1] + from[d + 1]) * 0.25f / 255f * 2f - 1f;
+                            float nz = (from[a + 2] + from[b + 2] + from[c + 2] + from[d + 2]) * 0.25f / 255f * 2f - 1f;
+                            float length = Mathf.Sqrt(nx * nx + ny * ny + nz * nz);
+                            if (length < 0.0001f) { nx = 0f; ny = 0f; nz = 1f; length = 1f; }
+                            to[at] = Encode(nx / length); to[at + 1] = Encode(ny / length); to[at + 2] = Encode(nz / length); to[at + 3] = 255;
+                        }
+                        else
+                        {
+                            for (int k = 0; k < 4; k++) to[at + k] = (byte)((from[a + k] + from[b + k] + from[c + k] + from[d + k] + 2) >> 2);
+                        }
+                    }
+                }
+                result[level] = to;
+                from = to; w = nw; h = nh;
+            }
+            return result;
         }
 
         private static bool HasHole(PlateCpu.Face f)

@@ -94,6 +94,7 @@ namespace ArmorFragments
         internal static ConfigEntry<float> DefaultFuse;
         internal static ConfigEntry<bool> KeepPlatesApart;          // local: armor plates keep their own renderer in flight
         internal static ConfigEntry<bool> DamageMapsEnabled;        // local: marks on the plates
+        internal static ConfigEntry<bool> DamageMapsShareMarks;     // local: send the marks of my shots to the other players, and draw theirs
         internal static ConfigEntry<bool> DamageMapsSimulatedShots; // local: the simulated shot leaves (visual only) marks too
         internal static ConfigEntry<bool> DamageMapsWeakenArmor;    // global: holes let shots through, dents thin the plate
         internal static ConfigEntry<float> DamageMapsDensity;       // local: pixels per meter of the maps
@@ -182,6 +183,7 @@ namespace ArmorFragments
             ModuleOutputs.Tick(); PerfMonitor.Lap("ModuleOutputs");
             AmmoRacks.Tick(); PerfMonitor.Lap("AmmoRacks");
             RackFireSync.Tick(); PerfMonitor.Lap("RackFireSync");
+            if (DamageMapsShareMarks.Value) MarksSync.Tick(); PerfMonitor.Lap("MarksSync");
             RackVisualizer.Tick(); PerfMonitor.Lap("RackVisualizer");
             FaceHighlight.Tick(); PerfMonitor.Lap("FaceHighlight");
             ArmorMass.Tick(); PerfMonitor.Lap("ArmorMass");
@@ -395,6 +397,9 @@ namespace ArmorFragments
                 "Needed for the damage maps: a merged plate cannot be changed. Takes effect when a flight starts.");
             DamageMapsEnabled = Config.Bind("DamageMaps", "Enabled", true,
                 "Shots leave marks on armor plates: dents, holes, grooves and pits, drawn into the plate's normal map and hole mask.");
+            DamageMapsShareMarks = Config.Bind("DamageMaps", "ShareMarks", true,
+                "In multiplayer, the marks of the shells you shoot at another player's vehicle are sent to the other players who have the mod " +
+                "(and to the player who was shot), and theirs are drawn on your screen and your vehicle. Players without the mod see nothing of it.");
             DamageMapsSimulatedShots = Config.Bind("DamageMaps", "SimulatedShots", false,
                 "The panel's simulated shot leaves its marks (dents, holes, grooves, pits, worked out like a real shot's, with the " +
                 "impact simulation) on the plates it hits. Only the look: they never weaken the armor or let anything through, " +

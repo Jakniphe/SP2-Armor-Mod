@@ -34,7 +34,7 @@ namespace ArmorFragments
         private bool heightPending;     // the relief setting wants the bump map and it is not made yet
         public readonly Dictionary<PartScript, PlateVisual> Plates = new Dictionary<PartScript, PlateVisual>();
 
-        private const int SentinelSize = 8;   // a flat corner of the atlas, for vertices that belong to no face (the sides)
+        private const int SentinelSize = PlateCpu.Align;   // a flat corner of the atlas, for vertices that belong to no face (the sides)
 
         private VehicleMaps(AircraftScript aircraft, ThemeScript theme)
         {
@@ -71,8 +71,9 @@ namespace ArmorFragments
                 List<int[]> sizes = new List<int[]>();
                 foreach (PlateInfo info in infos)
                 {
-                    int w = Mathf.CeilToInt(info.Geometry.SizeU * density) + 2 * PlateCpu.Border;
-                    int h = Mathf.CeilToInt(info.Geometry.SizeV * density) + 2 * PlateCpu.Border;
+                    // Multiples of Align, so the tiles line up with every mip level of the atlas.
+                    int w = (Mathf.CeilToInt(info.Geometry.SizeU * density) + 2 * PlateCpu.Border + PlateCpu.Align - 1) / PlateCpu.Align * PlateCpu.Align;
+                    int h = (Mathf.CeilToInt(info.Geometry.SizeV * density) + 2 * PlateCpu.Border + PlateCpu.Align - 1) / PlateCpu.Align * PlateCpu.Align;
                     sizes.Add(new[] { w, h });
                     area += 2L * w * h;
                 }
@@ -97,6 +98,7 @@ namespace ArmorFragments
                 {
                     Width = w,
                     Height = h,
+                    Thickness = info.ThicknessM,
                     PxU = (w - 2 * PlateCpu.Border) / info.Geometry.SizeU,
                     PxV = (h - 2 * PlateCpu.Border) / info.Geometry.SizeV,
                 };
@@ -106,7 +108,7 @@ namespace ArmorFragments
             }
 
             long atlasAt = System.Diagnostics.Stopwatch.GetTimestamp();
-            maps.Normal = new Texture2D(size, size, TextureFormat.RGBA32, false, true) { wrapMode = TextureWrapMode.Clamp, name = "ArmorFragments damage normals" };
+            maps.Normal = new Texture2D(size, size, TextureFormat.RGBA32, PlateCpu.MipLevels, true) { wrapMode = TextureWrapMode.Clamp, name = "ArmorFragments damage normals" };
             FillTexture(maps.Normal, 128, 128, 255, 255);   // flat normals
 
             ArmorFragmentsPlugin.Log.LogInfo("[DMAP] atlas " + size + "x" + size + " for " + infos.Count + " armor plate(s) of '" +
@@ -120,11 +122,23 @@ namespace ArmorFragments
         // memory row by row (the old way allocated, filled and uploaded 16 MB arrays, which cost tens of milliseconds in one frame).
         private static void FillTexture(Texture2D texture, byte r, byte g, byte b, byte a)
         {
-            int width = texture.width, height = texture.height;
+            // The raw data holds every mip level one after the other; one color all the way through is the same pattern, end to end.
+            int width = texture.width;
             byte[] row = new byte[width * 4];
             FillPattern(row, r, g, b, a);
             Unity.Collections.NativeArray<byte> raw = texture.GetRawTextureData<byte>();
-            for (int y = 0; y < height; y++) Unity.Collections.NativeSliceExtensions.Slice(raw, y * width * 4, width * 4).CopyFrom(row);
+            int total = raw.Length;
+            for (int at = 0; at < total; at += row.Length)
+            {
+                int n = Math.Min(row.Length, total - at);
+                if (n == row.Length) Unity.Collections.NativeSliceExtensions.Slice(raw, at, n).CopyFrom(row);
+                else
+                {
+                    byte[] rest = new byte[n];
+                    Buffer.BlockCopy(row, 0, rest, 0, n);
+                    Unity.Collections.NativeSliceExtensions.Slice(raw, at, n).CopyFrom(rest);
+                }
+            }
             texture.Apply(false, false);
         }
 
@@ -187,7 +201,7 @@ namespace ArmorFragments
         public void EnsureAlpha()
         {
             if (Alpha != null) return;
-            Alpha = new Texture2D(AtlasSize, AtlasSize, TextureFormat.RGBA32, false, false) { wrapMode = TextureWrapMode.Clamp, name = "ArmorFragments damage holes" };
+            Alpha = new Texture2D(AtlasSize, AtlasSize, TextureFormat.RGBA32, PlateCpu.MipLevels, false) { wrapMode = TextureWrapMode.Clamp, name = "ArmorFragments damage holes" };
             FillTexture(Alpha, 255, 255, 255, 255);   // no holes
         }
 
@@ -195,7 +209,7 @@ namespace ArmorFragments
         public void EnsureHeight()
         {
             if (Height != null) return;
-            Height = new Texture2D(AtlasSize, AtlasSize, TextureFormat.RGBA32, false, true) { wrapMode = TextureWrapMode.Clamp, name = "ArmorFragments damage heights" };
+            Height = new Texture2D(AtlasSize, AtlasSize, TextureFormat.RGBA32, PlateCpu.MipLevels, true) { wrapMode = TextureWrapMode.Clamp, name = "ArmorFragments damage heights" };
             FillTexture(Height, 128, 128, 128, 255);
             if (heightPending)
             {
@@ -223,7 +237,7 @@ namespace ArmorFragments
         public void EnsureDamage()
         {
             if (DamageAtlas != null) return;
-            DamageAtlas = new Texture2D(AtlasSize, AtlasSize, TextureFormat.RGBA32, false, false) { wrapMode = TextureWrapMode.Clamp, name = "ArmorFragments damage view" };
+            DamageAtlas = new Texture2D(AtlasSize, AtlasSize, TextureFormat.RGBA32, PlateCpu.MipLevels, false) { wrapMode = TextureWrapMode.Clamp, name = "ArmorFragments damage view" };
             FillTexture(DamageAtlas, 0, 0, 0, 0);
         }
 
@@ -313,12 +327,26 @@ namespace ArmorFragments
             int bucket = 16;
             while (bucket < Mathf.Max(d.W, d.H)) bucket *= 2;
             Texture2D staging = Staging(d.Kind, bucket);
-            byte[] padded = Padded(bucket, d.Kind, bucket * bucket * bytesPerPixel);
-            for (int row = 0; row < d.H; row++)
-                Buffer.BlockCopy(d.Bytes, row * d.W * bytesPerPixel, padded, row * bucket * bytesPerPixel, d.W * bytesPerPixel);
-            staging.SetPixelData(padded, 0);
+            // Level 0, then the smaller levels the worker made (when the rectangle is aligned for them).
+            int levels = d.Mips != null && d.X % PlateCpu.Align == 0 && d.Y % PlateCpu.Align == 0 ? PlateCpu.MipLevels : 1;
+            int w = d.W, h = d.H;
+            for (int level = 0; level < levels; level++)
+            {
+                byte[] source = level == 0 ? d.Bytes : d.Mips[level - 1];
+                int stride = bucket >> level;
+                byte[] padded = Padded(stride, d.Kind, stride * stride * bytesPerPixel);
+                for (int row = 0; row < h; row++)
+                    Buffer.BlockCopy(source, row * w * bytesPerPixel, padded, row * stride * bytesPerPixel, w * bytesPerPixel);
+                staging.SetPixelData(padded, level);
+                w >>= 1; h >>= 1;
+            }
             staging.Apply(false, false);
-            Graphics.CopyTexture(staging, 0, 0, 0, 0, d.W, d.H, target, 0, 0, d.X, d.Y);
+            w = d.W; h = d.H;
+            for (int level = 0; level < levels; level++)
+            {
+                Graphics.CopyTexture(staging, 0, level, 0, 0, w, h, target, 0, level, d.X >> level, d.Y >> level);
+                w >>= 1; h >>= 1;
+            }
 
             if (d.Kind == AtlasKind.Hole && d.Plate != null && !d.Plate.UsesGeometry) d.Plate.EnsureLit();   // real geometry has real holes
             return watch.Elapsed.TotalMilliseconds;
@@ -334,7 +362,7 @@ namespace ArmorFragments
             if (StagingTextures.TryGetValue(key, out texture) && texture != null) return texture;
             // Same format as the atlas it feeds (CopyTexture needs it): normals and heights are linear data, the hole mask and the
             // damage view's colors are not.
-            texture = new Texture2D(bucket, bucket, TextureFormat.RGBA32, false, kind == AtlasKind.Normal || kind == AtlasKind.Height);
+            texture = new Texture2D(bucket, bucket, TextureFormat.RGBA32, PlateCpu.MipLevels, kind == AtlasKind.Normal || kind == AtlasKind.Height);
             texture.name = "ArmorFragments damage staging";
             StagingTextures[key] = texture;
             return texture;

@@ -39,7 +39,7 @@ It prints the address (http://localhost:5057) and opens the page.
 - **Plate map** (pixels per meter; the game gives 120 to a vehicle with many plates): the grid is never finer than the map can show, as in the game (the Grid line says when the map limited it), and the "as the game draws it" pictures use that density. **Cracks in the marks** and **Smooth, ragged hole edges** are the mod's `SimCracks` and `SimSmoothEdges`.
 
 ## What the lab does NOT show
-The real geometry (the finer mesh around holes: `tools/mesher-test` checks that offline), the atlases and the game's own rendering, decals and textures. Those need the game.
+The real geometry (the finer mesh around holes: `tools/mesher-test` checks that offline), the atlases (their mip levels too: `tools/mesher-test` checks that the levels are aligned and averaged correctly), the marks sent to other players, and the game's own rendering, decals and textures. Those need the game. What the lab does show of the newest changes: the depth limit (a dent never goes deeper than 60% of the plate, however many shots) is in the maps it draws.
 
 ## From a terminal
     dotnet run --project tools/sim-lab/Web -- --cli out --thickness 20 --speed 800 --angle 30
