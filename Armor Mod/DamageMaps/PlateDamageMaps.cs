@@ -1028,6 +1028,7 @@ namespace ArmorFragments
 
         // ---- Test impacts (panel) ----------------------------------------------------------------
 
+        // RELEASE-STRIP-BEGIN
         private static bool testPending;
         private static DamageKind testKind;
         private static float testAt;
@@ -1088,6 +1089,7 @@ namespace ArmorFragments
                 ArmorFragmentsPlugin.Log.LogError(Tag + "test failed: " + e);
             }
         }
+        // RELEASE-STRIP-END
     }
 
     // In flight a group of parts merges the meshes of its parts into one when it initializes. A plate that is merged has

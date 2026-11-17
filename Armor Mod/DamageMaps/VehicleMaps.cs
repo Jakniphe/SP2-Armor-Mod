@@ -1374,10 +1374,12 @@ namespace ArmorFragments
                 if (stopping) return false;   // cut short by Shutdown: not a slow run, nothing to tune or report
                 bool onGpu = gpu != null;
                 LearnCost(impact, input, result, onGpu);
+                // RELEASE-STRIP-BEGIN
                 PerfMonitor.Events.Enqueue(new PerfMonitor.SimEvent
                 {
                     Start = startedAt, End = System.Diagnostics.Stopwatch.GetTimestamp(), Gpu = onGpu, Particles = result.Particles, Ms = result.Ms,
                 });
+                // RELEASE-STRIP-END
 
                 LastSimMs = (int)result.Ms;
                 LastSimQuality = quality;

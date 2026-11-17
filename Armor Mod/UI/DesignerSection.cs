@@ -106,6 +106,7 @@ namespace ArmorFragments.UI
             part = null;
         }
 
+        // RELEASE-STRIP-BEGIN
         // After a hot reload the designer's panel already exists (the game builds it once), so the patch on its creation never runs for
         // this copy of the plugin: add the section to the panel that is already there.
         public static void AttachToExisting()
@@ -147,6 +148,7 @@ namespace ArmorFragments.UI
 
             if (section != null) section.Destroy();
         }
+        // RELEASE-STRIP-END
 
         public static void OnPartSelected(PartPropertiesPanelScript properties, PartScript selected)
         {

@@ -218,8 +218,10 @@ namespace ArmorFragments.UI
             builder.Header("Energy model", collapsed: true);
             builder.Text("Status", NetSync.GlobalLocked ? "Balance set by the host" : "All active");
 
+            // RELEASE-STRIP-BEGIN
             ToggleSetting(ArmorFragmentsPlugin.LogChordDiagnostics, "Log chord diagnostics",
                 "Each simulated shot writes how far the line travels inside every part to the log ([CHORD] lines).");
+            // RELEASE-STRIP-END
             FloatSetting(ArmorFragmentsPlugin.VisualSpeedMultiplier, "Visual speed multiplier",
                 "Drawn rays move at their real speed (from energy) times this, and slow down as they lose energy.", 0.005f, "x");
 
@@ -455,12 +457,16 @@ namespace ArmorFragments.UI
                 "While a simulation works and the frame rate drops, it uses fewer threads for a while.");
             Live("Simulation", () => PlateDamageMaps.SimStatus);
             Live("Maps", () => PlateDamageMaps.Status);
+            // RELEASE-STRIP-BEGIN
             Live("Test", () => PlateDamageMaps.Message);
+            // RELEASE-STRIP-END
             builder.Buttons(new List<KeyValuePair<string, Action>>
             {
+                // RELEASE-STRIP-BEGIN
                 new KeyValuePair<string, Action>("Test: dent", () => PlateDamageMaps.RequestTest(DamageKind.Blocked)),
                 new KeyValuePair<string, Action>("Test: hole", () => PlateDamageMaps.RequestTest(DamageKind.Penetrated)),
                 new KeyValuePair<string, Action>("Test: groove", () => PlateDamageMaps.RequestTest(DamageKind.Ricochet)),
+                // RELEASE-STRIP-END
                 new KeyValuePair<string, Action>("Clear", PlateDamageMaps.Clear),
             });
         }
@@ -474,7 +480,9 @@ namespace ArmorFragments.UI
             {
                 new KeyValuePair<string, Action>("Reset to defaults", ResetToDefaults),
                 new KeyValuePair<string, Action>("Clear rays", ClearRays),
+                // RELEASE-STRIP-BEGIN
                 new KeyValuePair<string, Action>("Camera diagnostic", CameraDiagnostic.Run),
+                // RELEASE-STRIP-END
             });
         }
 
