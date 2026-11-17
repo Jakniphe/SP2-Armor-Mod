@@ -165,8 +165,8 @@ Also
 - Paint: impacts scorch the paint, flake it off to bare steel, and leave a bright steel rim at the hole ("Scorched and flaked paint"; plates with patterned or textured paint lose the pattern).
 - Marks are shared with other players who have the mod, and sent again to players who join later.
 - Fix: the frame rate no longer collapses after visiting the designer and returning to flight.
-- Fix: ammo racks are recognized again after reloading the mod (F6), and armor plates stay out of the game's mesh merge so they can carry marks.
-- Added an impact camera, a vehicle X-ray and a lab app (tools/sim-lab) for studying the simulation.
+- Armor plates stay out of the game's mesh merge so they can carry marks.
+- Added an impact camera and a vehicle X-ray.
 
 0.10.0 (impact look)
 - Sparks, a flash, paint dust and smoke where a shell hits armor: a fountain of sparks for a hit, a stream of long sparks along a ricochet, a hot spray and dark smoke out of the back of a penetration, a fireball for an HE shell. "Impact effects" and "Impact effects amount" in the panel.
