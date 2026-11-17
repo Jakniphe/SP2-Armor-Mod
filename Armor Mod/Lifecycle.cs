@@ -92,6 +92,7 @@ namespace ArmorFragments
             // Damage maps: plates back as the game made them, threads stopped.
             Step("damage maps", PlateDamageMaps.Shutdown);
             Step("graphics card", GpuStatus.Shutdown);
+            Step("frame profiler", FrameProfiler.Remove);
 
             // The panel, its button and the designer's section.
             Step("panel", UI.ArmorPanel.Shutdown);

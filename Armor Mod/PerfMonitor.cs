@@ -32,9 +32,17 @@ namespace ArmorFragments
         private static readonly Frame[] Ring = new Frame[Size];
         private static int next;
 
+        private static bool profilerTried;
+
         public static void Tick()
         {
             Ring[next++ & (Size - 1)] = new Frame { Timestamp = Stopwatch.GetTimestamp(), Seconds = Time.unscaledDeltaTime };
+            if (ArmorFragmentsPlugin.PerfSceneReport.Value && !profilerTried)
+            {
+                profilerTried = true;
+                try { FrameProfiler.Install(); }
+                catch (System.Exception e) { ArmorFragmentsPlugin.Log.LogWarning("[FRAME] the profiler could not start: " + e.Message); }
+            }
 
             if (ArmorFragmentsPlugin.PerfSceneReport.Value && Time.unscaledTime >= nextSceneReport)
             {
