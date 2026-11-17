@@ -317,18 +317,24 @@ namespace ArmorFragments
             float strength = Mathf.Clamp01(impact.Strength);
             int entry = impact.Front ? 0 : 1, exit = 1 - entry;
             float angle = Mathf.Clamp(impact.Angle, 0f, 85f) * Mathf.Deg2Rad;
+            // A slanted hit digs and scorches an oval along the shell's way (the same stretch as the dent: Apply's 'elong').
+            float elong = Mathf.Clamp(1f / Mathf.Max(Mathf.Cos(angle), 0.2f), 1f, 2.5f);
 
             switch (impact.Kind)
             {
                 case DamageKind.Blocked:
-                    Splash(cpu, cpu.Get(entry), impact.U, impact.V, caliber * 1.6f, 0.30f + 0.40f * strength, caliber * (1.0f + 0.5f * strength), 1f, impact.Seed);
+                    Splash(cpu, cpu.Get(entry), impact.U, impact.V, caliber * 1.6f, 0.30f + 0.40f * strength, caliber * (0.55f + 0.30f * strength), 1f, impact.Seed, elong, dir);
+                    FollowShape(cpu, cpu.Get(entry), caliber, impact.Seed);
                     break;
                 case DamageKind.Penetrated:
                 {
-                    Splash(cpu, cpu.Get(entry), impact.U, impact.V, caliber * 1.8f, 0.40f + 0.30f * strength, caliber * 1.4f, 1f, impact.Seed);
+                    Splash(cpu, cpu.Get(entry), impact.U, impact.V, caliber * 1.8f, 0.40f + 0.30f * strength, caliber * 0.90f, 1f, impact.Seed, elong, dir);
                     // The way out is the hotter side: the shell and the torn metal leave it black, and the paint flakes round the hole.
                     float lateral = Mathf.Min(impact.Thickness * Mathf.Tan(angle), 0.6f);
-                    Splash(cpu, cpu.Get(exit), impact.U + dir.x * lateral, impact.V + dir.y * lateral, caliber * 1.5f, 0.65f + 0.30f * strength, caliber * 1.1f, 1f, impact.Seed + 1);
+                    float elongOut = 1f + 0.6f * (elong - 1f);
+                    Splash(cpu, cpu.Get(exit), impact.U + dir.x * lateral, impact.V + dir.y * lateral, caliber * 1.5f, 0.65f + 0.30f * strength, caliber * 0.80f, 1f, impact.Seed + 1, elongOut, dir);
+                    FollowShape(cpu, cpu.Get(entry), caliber, impact.Seed);
+                    FollowShape(cpu, cpu.Get(exit), caliber, impact.Seed + 1);
                     break;
                 }
                 case DamageKind.Ricochet:
@@ -357,9 +363,13 @@ namespace ArmorFragments
         }
 
         // Soot (soft, dark, patchy) of radius 'radius' and flaked paint (a ragged-edged patch of bare steel) of radius 'chipRadius'.
-        private static void Splash(PlateCpu c, PlateCpu.Face f, float cu, float cv, float radius, float soot, float chipRadius, float chipAmount, int seed)
+        // 'elong' stretches the patch along 'dir' (a slanted hit), the soot reaching a little further ahead.
+        private static void Splash(PlateCpu c, PlateCpu.Face f, float cu, float cv, float radius, float soot, float chipRadius, float chipAmount, int seed,
+                                   float elong = 1f, Vector2 dir = default(Vector2))
         {
-            float extent = Mathf.Max(radius * 2f, chipRadius) * 1.1f;
+            if (dir.sqrMagnitude < 0.0001f) { dir = new Vector2(1f, 0f); elong = 1f; }
+            elong = Mathf.Max(elong, 1f);
+            float extent = Mathf.Max(radius * 2f, chipRadius) * 1.1f * elong;
             int x0, y0, x1, y1;
             if (!Region(c, cu, cv, extent, out x0, out y0, out x1, out y1)) return;
 
@@ -370,11 +380,14 @@ namespace ArmorFragments
                     int at = y * c.Width + x;
                     float dx = (x + 0.5f - PlateCpu.Border) / c.PxU - cu;
                     float dy = (y + 0.5f - PlateCpu.Border) / c.PxV - cv;
-                    float dist = Mathf.Sqrt(dx * dx + dy * dy);
+                    float along = dx * dir.x + dy * dir.y, across = -dx * dir.y + dy * dir.x;
+                    float dist = Mathf.Sqrt((along / elong) * (along / elong) + across * across);
+                    float ahead = along - (elong - 1f) * radius * 0.25f;   // the scorch trails a little forward of the dent
+                    float sootDist = Mathf.Sqrt((ahead / elong) * (ahead / elong) + across * across);
 
                     if (soot > 0f)
                     {
-                        float rho = dist / radius;
+                        float rho = sootDist / radius;
                         if (rho < 2f)
                         {
                             float s = soot * Mathf.Exp(-rho * rho * 1.2f) * (0.7f + 0.6f * ValueNoise(x * 0.45f, y * 0.45f, seed));
@@ -462,6 +475,67 @@ namespace ArmorFragments
             }
             metallic = (byte)Mathf.Clamp(Mathf.RoundToInt(m * 255f), 0, 255);
             smoothness = (byte)Mathf.Clamp(Mathf.RoundToInt(s * 255f), 0, 255);
+        }
+
+        // The bare metal follows what the metal actually did: where the plate was dented the paint is gone (the deeper, the more), the raised rim
+        // loses its paint, and a ring round every hole is bright rubbed steel. Read from the height field and the hole mask, so it has the shape of
+        // the hole and the dent whatever made them (the stamps, or the simulation), oval for a slanted hit.
+        private static void FollowShape(PlateCpu c, PlateCpu.Face f, float caliber, int seed)
+        {
+            if (f == null || f.X1 < 0) return;
+            int x0 = Mathf.Max(PlateCpu.Border, f.X0), y0 = Mathf.Max(PlateCpu.Border, f.Y0);
+            int x1 = Mathf.Min(c.Width - PlateCpu.Border, f.X1), y1 = Mathf.Min(c.Height - PlateCpu.Border, f.Y1);
+            if (x1 <= x0 || y1 <= y0) return;
+
+            float depthRef = Mathf.Max(0.12f * caliber, 0.002f);
+            float riseRef = 0.05f * caliber + 0.0005f;
+            int reach = Mathf.Clamp(Mathf.CeilToInt(Mathf.Max(0.06f * caliber * Mathf.Min(c.PxU, c.PxV), 1.5f)), 1, 8);   // the width of the bright ring, in pixels
+
+            bool anyHole = false;
+            for (int y = y0; y < y1 && !anyHole; y++)
+                for (int x = x0; x < x1; x++)
+                    if (f.Mask[y * c.Width + x] < 128) { anyHole = true; break; }
+
+            for (int y = y0; y < y1; y++)
+            {
+                for (int x = x0; x < x1; x++)
+                {
+                    int at = y * c.Width + x;
+                    if (f.Mask[at] < 128) continue;   // a hole: there is nothing there to paint
+
+                    float h = f.Height[at];
+                    float bare = 0f, shine = 0f;
+                    float dent = Mathf.Clamp01(-h / depthRef);
+                    if (dent > 0.3f) { float st = Mathf.Clamp01((dent - 0.3f) / 0.6f); bare = st * st * (3f - 2f * st) * 0.95f; }
+                    float rise = Mathf.Clamp01(h / riseRef);
+                    if (rise > 0.2f) bare = Mathf.Max(bare, rise * 0.6f);
+                    if (bare > 0f) bare = Mathf.Min(1f, bare * (0.75f + 0.5f * ValueNoise(x * 0.6f, y * 0.6f, seed + 31)));   // ragged
+
+                    if (anyHole)
+                    {
+                        bool near = false;
+                        for (int dy = -reach; dy <= reach && !near; dy++)
+                        {
+                            int yy = y + dy;
+                            if (yy < 0 || yy >= c.Height) continue;
+                            for (int dx = -reach; dx <= reach; dx++)
+                            {
+                                int xx = x + dx;
+                                if (xx < 0 || xx >= c.Width) continue;
+                                if (f.Mask[yy * c.Width + xx] < 128) { near = true; break; }
+                            }
+                        }
+                        if (near) { bare = 1f; shine = 0.85f; }
+                    }
+                    if (bare <= 0f) continue;
+
+                    byte value = (byte)Mathf.RoundToInt(bare * 255f);
+                    if (value > f.Bare[at]) f.Bare[at] = value;
+                    byte glow = (byte)Mathf.RoundToInt(Mathf.Max(shine, bare * 0.3f) * 255f);
+                    if (glow > f.Shine[at]) f.Shine[at] = glow;
+                }
+            }
+            Dirty(f, x0, y0, x1, y1, true);
         }
 
         // Smooth noise in 0..1 on a lattice of one unit (the same for the same seed).
