@@ -32,6 +32,9 @@ namespace SimLab
         public int Quality { get; set; } = 1;           // 0 low, 1 medium, 2 high
         public int Threads { get; set; } = 0;           // 0 = all the cores
         public int Seed { get; set; } = 1;
+        public float MapPxPerM { get; set; } = 120;     // the plate's map, pixels per meter (the game gives 120 to a vehicle with many plates): caps the grid
+        public bool Cracks { get; set; } = true;        // the mod's SimCracks
+        public bool Smooth { get; set; } = true;        // the mod's SimSmoothEdges
         public bool Gpu { get; set; }                   // run on the graphics card (OpenCL) if the computer has one that works
         public float EnergyScale { get; set; } = 1;     // a knob: 1 = the shell's real energy
     }
@@ -197,6 +200,17 @@ namespace SimLab
                 // a shell that goes through is turned toward the plate's normal by the energy model's own number
                 DeflectionDeg = verdict == "Penetrated" ? EnergyModel.DeflectionDegrees(armor, shell, s.Angle) : 0f,
             };
+            // No finer than the plate's map can show (the game's ChooseColumns does the same; the ladder is its Ladder)
+            int wantedColumns = ImpactSim.ColumnsOfQuality(s.Quality);
+            int usefulColumns = ImpactSim.UsefulColumns(caliberM, s.Angle, s.MapPxPerM);
+            bool mapLimited = false;
+            if (usefulColumns < wantedColumns)
+            {
+                int[] ladder = { 128, 112, 96, 80, 64, 56, 48, 40, 32 };
+                int enough = ladder[0];
+                for (int i = ladder.Length - 1; i >= 0; i--) if (ladder[i] >= usefulColumns) { enough = ladder[i]; break; }
+                if (enough < wantedColumns) { input.Columns = enough; mapLimited = true; }
+            }
             input.Progress = p => { if (p > progress) progress = p; };
             ImpactSimResult sim = s.Gpu ? OnCard(input) : null;
             bool onCard = sim != null;
@@ -219,8 +233,8 @@ namespace SimLab
                 float scale = 4f;
                 picture = new
                 {
-                    gameFront = Png.Relief(gameFront, gameHole, gameN, 1f / 256f, 2f),
-                    gameBack = Png.Relief(gameBack, gameHole, gameN, 1f / 256f, 2f),
+                    gameFront = Png.Relief(gameFront, gameHole, gameN, 1f / Math.Max(s.MapPxPerM, 32f), 512f / gameN),
+                    gameBack = Png.Relief(gameBack, gameHole, gameN, 1f / Math.Max(s.MapPxPerM, 32f), 512f / gameN),
                     simFront = Png.Relief(sim.Front, sim.Hole, sim.N, sim.Cell, scale),
                     simBack = Png.Relief(sim.Back, sim.Hole, sim.N, sim.Cell, scale),
                     simSection = Png.Section(sim.Front, sim.Back, sim.Hole, sim.N, sim.Cell, input.ThicknessM, input.CaliberM),
@@ -256,6 +270,9 @@ namespace SimLab
                     ms = sim.Ms,
                     agrees,
                     threads = s.Threads > 0 ? s.Threads : Environment.ProcessorCount,
+                    columns = sim.N,
+                    mapLimited,
+                    mapPxPerM = s.MapPxPerM,
                     gpu = onCard,
                     gpuName,
                     gpuState,
@@ -308,7 +325,8 @@ namespace SimLab
         private static void InGame(Scenario s, ImpactSimInput input, DamageKind kind, float energy, float absorbed, float kept,
                                    ImpactSimResult sim, bool agrees, out float[] front, out float[] back, out byte[] hole, out int n)
         {
-            const float plate = 1.0f, density = 256f;
+            const float plate = 1.0f;
+            float density = Math.Min(Math.Max(s.MapPxPerM, 32f), 1024f);   // the map's pixels per meter, as the game's plate has it
             n = (int)(plate * density);
             PlateCpu cpu = new PlateCpu { Width = n + 2 * PlateCpu.Border, Height = n + 2 * PlateCpu.Border, PxU = n / plate, PxV = n / plate };
             float strength = kind == DamageKind.Blocked ? Math.Min(1f, energy / Math.Max(absorbed, 1f))
@@ -320,7 +338,7 @@ namespace SimLab
                 ShellMass = input.ShellMassKg, Speed = input.SpeedMS, PlateHardness = input.PlateHardness,
                 PlateBrittleness = input.PlateBrittleness, KeptEnergy = kept, Deflection = input.DeflectionDeg,
             };
-            if (agrees) SimBridge.Apply(cpu, impact, sim); else PlateStamps.Apply(cpu, impact);
+            if (agrees) SimBridge.Apply(cpu, impact, sim, s.Cracks, s.Smooth); else PlateStamps.Apply(cpu, impact);
 
             front = new float[n * n]; back = new float[n * n]; hole = new byte[n * n];
             for (int i = 0; i < hole.Length; i++) hole[i] = 255;

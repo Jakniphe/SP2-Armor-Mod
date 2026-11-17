@@ -36,6 +36,11 @@ It prints the address (http://localhost:5057) and opens the page.
 - **Thread scaling**: the same simulation on 1, 2, 4... threads. The work is handed out in small chunks to every thread that is
   free, so a busy thread simply takes fewer. Small grids (low quality) are not worth threading.
 
+- **Plate map** (pixels per meter; the game gives 120 to a vehicle with many plates): the grid is never finer than the map can show, as in the game (the Grid line says when the map limited it), and the "as the game draws it" pictures use that density. **Cracks in the marks** and **Smooth, ragged hole edges** are the mod's `SimCracks` and `SimSmoothEdges`.
+
+## What the lab does NOT show
+The real geometry (the finer mesh around holes: `tools/mesher-test` checks that offline), the atlases and the game's own rendering, decals and textures. Those need the game.
+
 ## From a terminal
     dotnet run --project tools/sim-lab/Web -- --cli out --thickness 20 --speed 800 --angle 30
 writes the pictures into `out/` and prints the model and simulation numbers (any field of the scenario can be given).

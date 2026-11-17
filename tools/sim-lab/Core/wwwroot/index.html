@@ -71,6 +71,8 @@
     <section>
       <h2>Simulation</h2>
       <div class="row full"><label>Quality <select id="quality"><option value="0">Low (40×40)</option><option value="1">Medium (64×64)</option><option value="2">High (96×96)</option><option value="3">Ultra (128×128)</option></select></label></div>
+      <div class="row"><label>Plate map <small>px per meter (the game gives 120 to a vehicle with many plates; the grid is never finer than the map can show)</small><input type="range" id="mapPxPerMR" min="32" max="1024" step="8"></label><input type="number" id="mapPxPerM"></div>
+      <div class="row full"><label><input type="checkbox" id="cracks" checked> Cracks in the marks · <input type="checkbox" id="smooth" checked> Smooth, ragged hole edges</label></div>
       <div class="row full"><label><input type="checkbox" id="gpu" checked> Use the graphics card (OpenCL) <small id="gpuNote"></small></label></div>
       <div class="row"><label>Threads <small id="coresNote"></small><input type="range" id="threadsR" min="1" max="16" step="1"></label><input type="number" id="threads"></div>
       <div class="row"><label>Seed<input type="range" id="seedR" min="1" max="99" step="1"></label><input type="number" id="seed"></div>
@@ -97,8 +99,8 @@
   </div>
 </main>
 <script>
-const ids = ['thickness','hardness','brittleness','caliber','mass','speed','shellHardness','angle','azimuth','threads','seed','energyScale'];
-const defaults = { thickness:20, hardness:100, brittleness:50, caliber:75, mass:0, speed:800, shellHardness:100, angle:0, azimuth:0, threads:0, seed:1, energyScale:1, quality:1 };
+const ids = ['thickness','hardness','brittleness','caliber','mass','speed','shellHardness','angle','azimuth','threads','seed','energyScale','mapPxPerM'];
+const defaults = { thickness:20, hardness:100, brittleness:50, caliber:75, mass:0, speed:800, shellHardness:100, angle:0, azimuth:0, threads:0, seed:1, energyScale:1, quality:1, mapPxPerM:120 };
 const presets = [[20,'20 mm autocannon'],[30,'30 mm'],[37,'37 mm'],[45,'45 mm'],[57,'57 mm'],[75,'75 mm'],[88,'88 mm'],[100,'100 mm'],[105,'105 mm'],[122,'122 mm'],[152,'152 mm']];
 let cores = 4;
 const $ = id => document.getElementById(id);
@@ -115,6 +117,8 @@ function read() {
   ids.forEach(id => s[id] = parseFloat($(id).value) || 0);
   s.quality = parseInt($('quality').value);
   s.gpu = $('gpu').checked;
+  s.cracks = $('cracks').checked;
+  s.smooth = $('smooth').checked;
   ['seed','threads'].forEach(k => s[k] = Math.round(s[k]));
   return s;
 }
@@ -122,6 +126,8 @@ function write(s) {
   ids.forEach(id => { $(id).value = s[id]; $(id + 'R').value = s[id]; });
   $('quality').value = s.quality;
   $('gpu').checked = s.gpu !== false;
+  $('cracks').checked = s.cracks !== false;
+  $('smooth').checked = s.smooth !== false;
 }
 async function post(url, body) {
   const r = await fetch(url, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) });
@@ -153,6 +159,7 @@ function show(res) {
         <span>Energy left</span><b>${f1(s.energyLeftPercent)} %</b>
         <span>Time</span><b>${Math.round(s.ms)} ms on ${s.gpu ? 'the graphics card (' + s.gpuName + ')' : s.threads + ' thread(s)'}${$('gpu').checked && !s.gpu ? ' (the card is ' + s.gpuState + ')' : ''}</b>
         <span>Game uses</span><b>${s.agrees ? 'the simulation' : 'the quick marks (disagreement)'}</b>
+        <span>Grid</span><b>${s.columns}×${s.columns}${s.mapLimited ? ' (the quality asked for more, but a map of ' + s.mapPxPerM + ' px/m cannot show it)' : ''}</b>
         <span>Size</span><b>${s.particles} particles, ${s.steps} steps, cell ${f1(s.cellMm)} mm, patch ${f1(s.patchCm)} cm</b>
       </div></div>
     </div>
@@ -233,6 +240,8 @@ async function scaling() {
   sel.addEventListener('change', () => { if (sel.value) { $('caliber').value = $('caliberR').value = sel.value; store(); } });
   $('quality').addEventListener('change', store);
   $('gpu').addEventListener('change', store);
+  $('cracks').addEventListener('change', store);
+  $('smooth').addEventListener('change', store);
   $('run').addEventListener('click', run);
   $('sweep').addEventListener('click', sweep);
   $('scaling').addEventListener('click', scaling);
