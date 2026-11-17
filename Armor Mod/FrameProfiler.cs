@@ -60,6 +60,8 @@ namespace ArmorFragments
         // lists, every couple of seconds so new ones are caught) and times them the same way.
         private static readonly HashSet<MethodBase> WatchedDelegates = new HashSet<MethodBase>();
         private static float nextDelegateScan;
+        private static string lastCrafts;
+        private static bool stepsWatched;
 
         public static void Tick()
         {
@@ -87,7 +89,43 @@ namespace ArmorFragments
             HarmonyMethod before = new HarmonyMethod(typeof(FrameProfiler).GetMethod("ScriptBefore", BindingFlags.Static | BindingFlags.NonPublic));
             HarmonyMethod after = new HarmonyMethod(typeof(FrameProfiler).GetMethod("ScriptAfter", BindingFlags.Static | BindingFlags.NonPublic));
             int added = 0;
-            foreach (UnityEngine.Object script in UnityEngine.Object.FindObjectsByType(craftUpdate, FindObjectsSortMode.None))
+            UnityEngine.Object[] scripts = UnityEngine.Object.FindObjectsByType(craftUpdate, FindObjectsInactive.Include, FindObjectsSortMode.None);
+
+            // The steps of the craft's own update, and the body and aircraft scripts they call (timed once).
+            if (!stepsWatched)
+            {
+                stepsWatched = true;
+                foreach (MethodInfo method in craftUpdate.GetMethods(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly))
+                    if (method.Name.StartsWith("OnUpdate") || method.Name == "PerformUpdate")
+                    {
+                        try { scriptPatches.Patch(method, before, after); added++; } catch { }
+                    }
+                foreach (string typeName in new[] { "Assets.Scripts.Craft.BodyScript", "Assets.Scripts.Craft.AircraftScript" })
+                {
+                    Type type = craftUpdate.Assembly.GetType(typeName);
+                    MethodInfo method = type != null ? type.GetMethod("OnUpdate", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly) : null;
+                    if (method == null) continue;
+                    try { scriptPatches.Patch(method, before, after); added++; } catch { }
+                }
+            }
+
+            // How many crafts are being updated, and which (a craft that was left behind keeps being updated).
+            StringBuilder crafts = new StringBuilder();
+            foreach (UnityEngine.Object script in scripts)
+            {
+                object aircraft = Member(script, "CraftScript");
+                UnityEngine.Component component = aircraft as UnityEngine.Component;
+                Behaviour behaviour = script as Behaviour;
+                crafts.Append(component != null ? component.name : "?").Append(" [").Append(Member(aircraft, "LoadContext")).Append(behaviour != null && behaviour.isActiveAndEnabled ? ", active" : ", inactive").Append("]; ");
+            }
+            string signature = scripts.Length + ": " + crafts;
+            if (signature != lastCrafts)
+            {
+                lastCrafts = signature;
+                ArmorFragmentsPlugin.Log.LogInfo("[FRAME] crafts that the game updates: " + signature);
+            }
+
+            foreach (UnityEngine.Object script in scripts)
             {
                 Array collections = Member(script, "_updateCollections") as Array;
                 if (collections == null) continue;
@@ -197,6 +235,8 @@ namespace ArmorFragments
             catch { }
             scriptPatches = null;
             WatchedDelegates.Clear();
+            stepsWatched = false;
+            lastCrafts = null;
             PlayerLoopSystem root = PlayerLoop.GetCurrentPlayerLoop();
             if (root.subSystemList == null) return;
             PlayerLoopSystem[] groups = root.subSystemList;
