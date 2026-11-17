@@ -27,6 +27,10 @@ namespace ArmorFragments
                 if (neighbors.Count == 0) return null;
 
                 PlateGeometry g = plate.Info.Geometry;
+                // Only a flat slab has its surface at the plane this measures (the face of its bounding box). A thick or curved block is "not a slab": its
+                // surface is somewhere inside that box, the probes land inside the plates around it, the whole area reads as buried and every mark was
+                // flattened (the ricochets and slanted shots on such blocks lost their relief). Those blocks get no limit; they have no real geometry either.
+                if (g.Curved) return null;
                 if (plate.ClearKnown == null)
                 {
                     plate.ClearKnown = new ClearGrid[2];
@@ -81,6 +85,8 @@ namespace ArmorFragments
             Vector3 normalLocal = face == 0 ? g.N : -g.N;
             Vector3 worldNormal = tr.TransformDirection(normalLocal).normalized;
             bool any = false;
+            List<int> fresh = new List<int>();
+            int buried = 0;
             for (int j = y0; j <= y1; j++)
             {
                 for (int i = x0; i <= x1; i++)
@@ -89,6 +95,7 @@ namespace ArmorFragments
                     if (done[at]) continue;
                     done[at] = true;
                     any = true;
+                    fresh.Add(at);
 
                     float u = (i + 0.5f) * known.Cell, v = (j + 0.5f) * known.Cell;
                     Vector3 local = g.Origin + g.T1 * u + g.T2 * v + normalLocal * (g.Depth * 0.5f);
@@ -105,9 +112,24 @@ namespace ArmorFragments
                     }
                     known.Out[at] = outRoom;
                     known.In[at] = inRoom;
+                    if (outRoom <= 0f) buried++;
                 }
             }
             if (!any) return null;
+
+            // Almost all of the area reading as buried is not an overlap, it is a measure that does not fit this plate (a plate lying inside others):
+            // it is not trusted, the area stays free.
+            if (fresh.Count >= 6 && buried > fresh.Count * 0.85f)
+            {
+                foreach (int at in fresh) { known.Out[at] = ClearGrid.Free; known.In[at] = ClearGrid.Free; }
+                ArmorFragmentsPlugin.Log.LogInfo("[DMAP] plate '" + plate.Info.Part.Part.Name + "': " + buried + " of " + fresh.Count +
+                                                 " cells round the mark read as buried in other plates; not trusted, the marks are not limited there");
+            }
+            else if (buried > 0)
+            {
+                ArmorFragmentsPlugin.Log.LogInfo("[DMAP] plate '" + plate.Info.Part.Part.Name + "': " + buried + " of " + fresh.Count +
+                                                 " cells round the mark are buried in other plates (no marks there)");
+            }
 
             int w = x1 - x0 + 1, h = y1 - y0 + 1;
             ClearPatch patch = new ClearPatch { Face = face, FullW = known.W, FullH = known.H, Cell = known.Cell, X0 = x0, Y0 = y0, W = w, H = h, Out = new float[w * h], In = new float[w * h] };

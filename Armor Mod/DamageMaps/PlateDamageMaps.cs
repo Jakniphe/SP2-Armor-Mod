@@ -543,16 +543,19 @@ namespace ArmorFragments
                     if (d < 0.3f && (!distance.TryGetValue(other, out known) || d < known)) { distance[other] = d; nearest[other] = q; }
                 }
 
-                foreach (KeyValuePair<PartScript, Vector3> pair in nearest)
+                // Only the three nearest plates bend (a vehicle packed with plates must not set up dozens of them for one hit).
+                List<PartScript> order = new List<PartScript>(nearest.Keys);
+                order.Sort((a, b) => distance[a].CompareTo(distance[b]));
+                if (order.Count > 3) order.RemoveRange(3, order.Count - 3);
+                foreach (PartScript other in order)
                 {
-                    PartScript other = pair.Key;
                     float share = 0.5f * (1f - distance[other] / 0.3f);
                     float neighborDepth = depth * share;
                     if (neighborDepth < 0.0008f) continue;
                     PlateInfo info = InfoOf(other);
                     if (info == null) continue;
 
-                    Vector2 at = info.Geometry.ToPlane(other.transform.InverseTransformPoint(pair.Value));
+                    Vector2 at = info.Geometry.ToPlane(other.transform.InverseTransformPoint(nearest[other]));
                     Vector3 normal = other.transform.TransformDirection(info.Geometry.N);
                     PlateImpact flex = new PlateImpact
                     {
