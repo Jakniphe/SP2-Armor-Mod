@@ -177,3 +177,6 @@ Also
 - The detail of the marks no longer depends on how many armor plates the vehicle has: each plate gets its own piece of the vehicle's texture the first time it is hit (up to 768 pixels per meter, less if the texture is filling up). Before, a vehicle with many plates shared one texture and every mark came out at about 120 pixels per meter.
 - A heavy blow bends the whole plate it hits, and a little the armor plates joined to it ("Heavy hits bend plates").
 - Marks no longer push a plate's metal through the armor plates that overlap it ("Marks stay inside overlapping plates").
+
+0.10.0 (marks on every part)
+- Shells that go through or burst on parts that are not armor (wings, plain fuselage, engines...) now leave marks: a hole where they went in and, if they came out, a bigger torn hole, with scorch and bare metal round it. They are decals laid over the surface, only where seen from outside ("Marks on parts that are not armor", "Decals kept per vehicle").

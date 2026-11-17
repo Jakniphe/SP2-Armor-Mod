@@ -555,6 +555,7 @@ namespace ArmorFragments
                                              PartScript skip, bool applyDamage, float startDelay, float shellCaliberMm = 0f)
         {
             TraceResult total = default;
+            if (applyDamage) PartDecals.FromCrossings(ray, from, direction, shellCaliberMm);   // the holes it leaves in the parts it goes through
             BeginBatch();
             depositingShell = true;   // an ammo rack treats the shell itself as a direct hit
             shellRadius = Mathf.Max(shellCaliberMm, 0f) * 0.0005f;   // mm of caliber -> m of radius

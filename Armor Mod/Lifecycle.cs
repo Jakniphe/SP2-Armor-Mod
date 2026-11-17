@@ -87,6 +87,7 @@ namespace ArmorFragments
             Step("x-ray view", XRayView.Shutdown);
             Step("rays and bubbles", RayDrawer.Shutdown);
             Step("impact effects", ImpactEffects.Shutdown);
+            Step("marks on other parts", PartDecals.Shutdown);
             Step("rack view", RackVisualizer.Shutdown);
             Step("face highlight", FaceHighlight.Shutdown);
 

@@ -932,6 +932,7 @@ namespace ArmorFragments
             Pits.Clear();
             Holding.Clear();
             HoldingMeshes.Clear();
+            PartDecals.Shutdown();   // the decals on the other parts too
             Message = "Cleared";
         }
 

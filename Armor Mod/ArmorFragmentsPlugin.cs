@@ -95,6 +95,8 @@ namespace ArmorFragments
         internal static ConfigEntry<bool> KeepPlatesApart;          // local: armor plates keep their own renderer in flight
         internal static ConfigEntry<bool> DamageMapsEnabled;        // local: marks on the plates
         internal static ConfigEntry<bool> DamageMapsPaintDamage;    // local: marks scorch the paint and flake it off, showing steel (marked plates are drawn with the Lit shader)
+        internal static ConfigEntry<bool> PartDecalsEnabled;        // local: marks (holes, scorch) on the parts that are not armor, as decals
+        internal static ConfigEntry<int> PartDecalsMax;             // local: how many a vehicle keeps
         internal static ConfigEntry<bool> DamageMapsFlex;           // local: a heavy blow bends the plate it hits, and the armor plates joined to it, a little
         internal static ConfigEntry<bool> DamageMapsAvoidOverlap;   // local: marks do not push a plate's metal through the armor plates it overlaps
         internal static ConfigEntry<bool> DamageMapsSteelGloss;     // local: bare steel is metallic and shiny (a metallic/smoothness map next to the paint), scorched paint is dull
@@ -416,6 +418,13 @@ namespace ArmorFragments
                 "steel (and a bright rim round holes). Plates with marks are then drawn with the Lit shader in their paint's color (a plate with a pattern " +
                 "or a texture loses it). Takes effect for the next vehicle that gets marks (the panel's Clear button starts over).")
             ;
+            PartDecalsEnabled = Config.Bind("Decals", "Enabled", true,
+                "Shells that go through or burst on parts that are NOT armor (wings, plain fuselage, engines...) leave marks: a hole where they went in and, " +
+                "if they came out, a bigger torn one, with scorch and bare metal round it. Laid over the surface as small decals (those parts are merged into " +
+                "their group's mesh in flight, so they cannot be marked like armor plates), only where seen from outside. Local: other players' are not sent.");
+            PartDecalsMax = Config.Bind("Decals", "MaxPerVehicle", 48,
+                new ConfigDescription("How many of these decals a vehicle keeps (each is a small mesh and two 128 x 128 textures); the oldest are taken off.",
+                    new AcceptableValueRange<int>(4, 200)));
             DamageMapsFlex = Config.Bind("DamageMaps", "Flex", true,
                 "A heavy blow bends the whole plate it hits (a broad dish on the struck face, a bulge on the other) and, a little, the armor plates joined " +
                 "to it, the less the further they are. Only a look, and only for heavy hits (a big shell against a plate that stops it).");

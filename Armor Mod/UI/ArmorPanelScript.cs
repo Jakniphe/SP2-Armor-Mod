@@ -376,6 +376,10 @@ namespace ArmorFragments.UI
                 "Shots leave dents, holes, grooves and pits on armor plates.");
             ToggleSetting(ArmorFragmentsPlugin.DamageMapsPaintDamage, "Scorched and flaked paint",
                 "Marks scorch the paint and knock it off, showing steel. Marked plates are drawn with the Lit shader in their paint's color. Applies to the next vehicle that gets marks (Clear starts over).");
+            ToggleSetting(ArmorFragmentsPlugin.PartDecalsEnabled, "Marks on parts that are not armor",
+                "Holes, scorch and bare metal on wings, plain fuselage and other parts a shell goes through or bursts on, laid over the surface as decals. Only where seen from outside.");
+            IntSetting(ArmorFragmentsPlugin.PartDecalsMax, "Decals kept per vehicle",
+                "The oldest are taken off beyond this (each is a small mesh and two 128 x 128 textures).");
             ToggleSetting(ArmorFragmentsPlugin.DamageMapsFlex, "Heavy hits bend plates",
                 "A heavy blow bends the whole plate it hits, and a little the armor plates joined to it. Only a look.");
             ToggleSetting(ArmorFragmentsPlugin.DamageMapsAvoidOverlap, "Marks stay inside overlapping plates",

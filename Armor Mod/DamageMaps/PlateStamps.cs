@@ -177,7 +177,7 @@ namespace ArmorFragments
     // The shapes of damage, in meters on the plate, drawn into a PlateCpu. Pure arithmetic: it runs on a worker thread.
     internal static class PlateStamps
     {
-        public static void Apply(PlateCpu cpu, PlateImpact impact)
+        public static void Apply(PlateCpu cpu, PlateImpact impact, bool flex = true)
         {
             Vector2 dir = new Vector2(impact.DirU, impact.DirV);
             if (dir.sqrMagnitude < 0.0001f) dir = new Vector2(1f, 0f);
@@ -242,7 +242,7 @@ namespace ArmorFragments
                     break;
                 }
             }
-            AddFlex(cpu, impact);
+            if (flex) AddFlex(cpu, impact);
             LimitDepth(cpu, impact.Thickness);
             PaintImpact(cpu, impact);
         }
