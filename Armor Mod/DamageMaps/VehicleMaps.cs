@@ -601,6 +601,9 @@ namespace ArmorFragments
         public bool Failed;
         public bool HasHole;
         public Material Lit;
+        public System.Collections.Generic.List<Collider> Neighbors;   // the other armor plates' colliders that reach this plate (PlateClearance)
+        public ClearGrid[] ClearKnown;                                // what the main thread has measured of the room around it, per face
+        public bool[][] ClearDone;
 
         private Material[] originalMaterials;
         private bool originalExclude;
@@ -1020,6 +1023,7 @@ namespace ArmorFragments
             public bool Height;
             public bool Damage;
             public bool Everything;
+            public List<ClearPatch> ClearPatches;   // the room around the plate that was measured for this job (the worker merges it first)
             public bool SimCracks, SimSmooth;  // the marks' cracks and the smooth edge of a hole
             public bool UseGpu;                // the player's wish (the card is used only if it was found and passed its test)
 
@@ -1162,6 +1166,8 @@ namespace ArmorFragments
                 try
                 {
                     System.Diagnostics.Stopwatch watch = System.Diagnostics.Stopwatch.StartNew();
+                    if (job.ClearPatches != null)
+                        foreach (ClearPatch patch in job.ClearPatches) job.Plate.Cpu.MergeClear(patch);
                     foreach (PlateImpact impact in job.Impacts)
                     {
                         if (stopping) break;

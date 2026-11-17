@@ -480,6 +480,7 @@ namespace ArmorFragments
                 Owner = maps, Plate = plate, Impacts = impacts, DeliverAt = Time.time + Mathf.Max(delay, 0f),
                 Height = ArmorFragmentsPlugin.DamageMapsRelief.Value != 0 || maps.Gloss,
                 Damage = ArmorFragmentsPlugin.ImpactCameraDamageView.Value,
+                ClearPatches = PlateClearance.Prepare(plate, impacts),   // plates that overlap this one: the marks stay inside the room there is
             };
             WantGeometry(job, plate);
 

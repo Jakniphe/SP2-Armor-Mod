@@ -302,6 +302,51 @@ internal static class Test
         Check(lowest >= -0.0061f, "five shots on one spot dent it no deeper than 60% of the plate (" + (lowest * 1000f).ToString("F2") + " mm of 10)");
     }
 
+    // Overlapping plates: where another plate is in the way, the marks stay inside the room there is (no dent through the plate behind, no
+    // metal pushed through the plate in front, nothing at all where the surface is buried); elsewhere they are as before.
+    private static void ClearTest()
+    {
+        Console.WriteLine("\n== PLATES THAT OVERLAP ==");
+        PlateCpu cpu = new PlateCpu { Width = 64, Height = 64, PxU = 200f, PxV = 200f };
+        float size = (64 - 2 * PlateCpu.Border) / 200f;
+        cpu.TileX[0] = 0; cpu.TileY[0] = 0; cpu.TileX[1] = 64; cpu.TileY[1] = 0;
+        ClearGrid grid = ClearGrid.Make(size, size);
+        // The left half of the plate is buried in another plate; the right half has a plate 2 mm behind it and 3 mm in front of it.
+        for (int j = 0; j < grid.H; j++)
+        {
+            for (int i = 0; i < grid.W; i++)
+            {
+                bool left = (i + 0.5f) * grid.Cell < size * 0.5f;
+                grid.Out[j * grid.W + i] = left ? 0f : 0.0045f;   // 4.5 mm of room, less the 1.5 mm margin = 3 mm
+                grid.In[j * grid.W + i] = left ? 0f : 0.002f;
+            }
+        }
+        cpu.Clear[0] = grid;
+
+        PlateStamps.Apply(cpu, new PlateImpact { Kind = DamageKind.Penetrated, Front = true, U = size * 0.75f, V = size * 0.5f, Caliber = 0.04f, Strength = 1f, Thickness = 0.02f, Angle = 0f, Seed = 5 });
+        float lowestRight = 0f, highestRight = 0f, anyLeft = 0f;
+        for (int y = 0; y < cpu.Height; y++)
+        {
+            for (int x = 0; x < cpu.Width; x++)
+            {
+                float u = (x + 0.5f - PlateCpu.Border) / cpu.PxU;
+                float h = cpu.Faces[0].Height[y * cpu.Width + x];
+                if (u < size * 0.5f - grid.Cell) anyLeft = Math.Max(anyLeft, Math.Abs(h));
+                else if (u > size * 0.5f + grid.Cell) { lowestRight = Math.Min(lowestRight, h); highestRight = Math.Max(highestRight, h); }
+            }
+        }
+        Check(anyLeft < 1e-6f, "nothing is marked where the surface is buried in another plate (" + (anyLeft * 1000f).ToString("F3") + " mm)");
+        Check(lowestRight >= -0.00171f, "a dent stops short of the plate behind (" + (lowestRight * 1000f).ToString("F2") + " mm of 2 allowed 1.7)");
+        Check(highestRight <= 0.0031f, "metal pushed out stops short of the plate in front (" + (highestRight * 1000f).ToString("F2") + " mm of 3)");
+
+        PlateCpu free = new PlateCpu { Width = 64, Height = 64, PxU = 200f, PxV = 200f };
+        free.TileX[0] = 0; free.TileY[0] = 0; free.TileX[1] = 64; free.TileY[1] = 0;
+        PlateStamps.Apply(free, new PlateImpact { Kind = DamageKind.Blocked, Front = true, U = size * 0.5f, V = size * 0.5f, Caliber = 0.04f, Strength = 1f, Thickness = 0.02f, Seed = 5 });
+        float deepest = 0f;
+        foreach (float v in free.Faces[0].Height) deepest = Math.Min(deepest, v);
+        Check(deepest < -0.002f, "a plate with nothing around it is marked as before (" + (deepest * 1000f).ToString("F2") + " mm)");
+    }
+
     // The sides of a thick block as plates: every corner of the block falls inside the side's rectangle, the axes are perpendicular and right-handed.
     private static void SideTest()
     {
@@ -342,6 +387,7 @@ internal static class Test
         Run("FINE 3 mm, small budget", false, 0.008f, 3000, 0.003f);
         MipTest();
         SideTest();
+        ClearTest();
         Console.WriteLine(failures == 0 ? "\nALL CHECKS PASSED" : "\n" + failures + " CHECK(S) FAILED");
         return failures == 0 ? 0 : 1;
     }

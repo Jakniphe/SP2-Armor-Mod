@@ -59,6 +59,57 @@ namespace ArmorFragments
         public float DeliverAt;    // Time.time from which it may be shown (the shell's ray has to arrive first)
     }
 
+    // How much room a plate's surface has, out of it and into it, before it would go through another armor plate (see PlateClearance, which measures
+    // it on the main thread). One value per cell of a coarse grid over the plate's (u, v) area, one grid per face. Free = nothing in the way.
+    internal sealed class ClearGrid
+    {
+        public const float Free = 10f;
+        public int W, H;
+        public float Cell;
+        public float[] Out, In;   // meters: rise allowed (0 = buried in another plate) and dent depth allowed
+
+        public static ClearGrid Make(float sizeU, float sizeV)
+        {
+            float cell = Mathf.Max(0.03f, Mathf.Max(sizeU, sizeV) / 80f);
+            return Create(Mathf.Max(1, Mathf.CeilToInt(sizeU / cell)), Mathf.Max(1, Mathf.CeilToInt(sizeV / cell)), cell);
+        }
+
+        public static ClearGrid Create(int w, int h, float cell)
+        {
+            ClearGrid grid = new ClearGrid { W = w, H = h, Cell = cell, Out = new float[w * h], In = new float[w * h] };
+            for (int i = 0; i < grid.Out.Length; i++) { grid.Out[i] = Free; grid.In[i] = Free; }
+            return grid;
+        }
+
+        // The smallest of the four cells around (u, v): steps rather than a blend, so a buried cell keeps its whole neighborhood in check.
+        public float MinOut(float u, float v) { return Min4(Out, u, v); }
+        public float MinIn(float u, float v) { return Min4(In, u, v); }
+
+        private float Min4(float[] a, float u, float v)
+        {
+            int x0 = Mathf.FloorToInt(u / Cell - 0.5f), y0 = Mathf.FloorToInt(v / Cell - 0.5f);
+            float best = Free;
+            for (int dy = 0; dy <= 1; dy++)
+            {
+                for (int dx = 0; dx <= 1; dx++)
+                {
+                    int x = Mathf.Clamp(x0 + dx, 0, W - 1), y = Mathf.Clamp(y0 + dy, 0, H - 1);
+                    float value = a[y * W + x];
+                    if (value < best) best = value;
+                }
+            }
+            return best;
+        }
+    }
+
+    // A rectangle of cells of a ClearGrid that was just measured, on its way to the worker.
+    internal sealed class ClearPatch
+    {
+        public int Face, FullW, FullH, X0, Y0, W, H;
+        public float Cell;
+        public float[] Out, In;
+    }
+
     // The damage of one plate, kept on the CPU: for each face, a height field (meters, outward from the face) and a
     // hole mask. Stamps add to them; the normals the shader reads are worked out from the heights, so impacts that
     // overlap combine. Only the worker thread touches these arrays.
@@ -88,6 +139,25 @@ namespace ArmorFragments
         public readonly int[] TileX = new int[2];   // where each face's tile starts in the atlas
         public readonly int[] TileY = new int[2];
         public readonly Face[] Faces = new Face[2];
+        public readonly ClearGrid[] Clear = new ClearGrid[2];   // the room around the plate (null = nothing overlaps it): the heights stay inside it
+
+        // The worker's copy of what the main thread measured.
+        public void MergeClear(ClearPatch patch)
+        {
+            if (patch == null || patch.Face < 0 || patch.Face > 1) return;
+            ClearGrid grid = Clear[patch.Face];
+            if (grid == null || grid.W != patch.FullW || grid.H != patch.FullH) Clear[patch.Face] = grid = ClearGrid.Create(patch.FullW, patch.FullH, patch.Cell);
+            for (int j = 0; j < patch.H; j++)
+            {
+                for (int i = 0; i < patch.W; i++)
+                {
+                    int at = (patch.Y0 + j) * grid.W + patch.X0 + i;
+                    if (at < 0 || at >= grid.Out.Length) continue;
+                    grid.Out[at] = patch.Out[j * patch.W + i];
+                    grid.In[at] = patch.In[j * patch.W + i];
+                }
+            }
+        }
 
         public Face Get(int index)
         {
@@ -384,14 +454,24 @@ namespace ArmorFragments
                 PlateCpu.Face f = c.Faces[index];
                 if (f == null || f.X1 < 0) continue;
                 int x1 = Mathf.Min(f.X1, c.Width), y1 = Mathf.Min(f.Y1, c.Height);
+                ClearGrid room = c.Clear[index];
                 for (int y = Mathf.Max(f.Y0, 0); y < y1; y++)
                 {
                     int row = y * c.Width;
                     for (int x = Mathf.Max(f.X0, 0); x < x1; x++)
                     {
+                        float lo = low, hi = high;
+                        if (room != null)
+                        {
+                            // Another plate is in the way: the surface may not rise into the one in front of it, nor a dent run into the one behind.
+                            float u = (x + 0.5f - PlateCpu.Border) / c.PxU, v = (y + 0.5f - PlateCpu.Border) / c.PxV;
+                            float up = room.MinOut(u, v), down = room.MinIn(u, v);
+                            if (up < ClearGrid.Free) hi = Mathf.Min(hi, Mathf.Max(up - 0.0015f, 0f));
+                            if (down < ClearGrid.Free) lo = Mathf.Max(lo, -Mathf.Max(down * 0.85f, 0f));
+                        }
                         float h = f.Height[row + x];
-                        if (h < low) f.Height[row + x] = low;
-                        else if (h > high) f.Height[row + x] = high;
+                        if (h < lo) f.Height[row + x] = lo;
+                        else if (h > hi) f.Height[row + x] = hi;
                     }
                 }
             }

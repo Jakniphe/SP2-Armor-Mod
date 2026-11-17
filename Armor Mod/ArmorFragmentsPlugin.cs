@@ -95,6 +95,7 @@ namespace ArmorFragments
         internal static ConfigEntry<bool> KeepPlatesApart;          // local: armor plates keep their own renderer in flight
         internal static ConfigEntry<bool> DamageMapsEnabled;        // local: marks on the plates
         internal static ConfigEntry<bool> DamageMapsPaintDamage;    // local: marks scorch the paint and flake it off, showing steel (marked plates are drawn with the Lit shader)
+        internal static ConfigEntry<bool> DamageMapsAvoidOverlap;   // local: marks do not push a plate's metal through the armor plates it overlaps
         internal static ConfigEntry<bool> DamageMapsSteelGloss;     // local: bare steel is metallic and shiny (a metallic/smoothness map next to the paint), scorched paint is dull
         internal static ConfigEntry<bool> ImpactEffectsEnabled;            // local: sparks, flash, smoke and paint dust where a shell hits armor
         internal static ConfigEntry<bool> ImpactEffectsLitSmoke;    // local: smoke and dust are drawn with the URP lit particle shader (lit by the scene)
@@ -414,6 +415,10 @@ namespace ArmorFragments
                 "steel (and a bright rim round holes). Plates with marks are then drawn with the Lit shader in their paint's color (a plate with a pattern " +
                 "or a texture loses it). Takes effect for the next vehicle that gets marks (the panel's Clear button starts over).")
             ;
+            DamageMapsAvoidOverlap = Config.Bind("DamageMaps", "AvoidOverlap", true,
+                "Where armor plates overlap or are clipped into each other, the marks of a hit stay inside the room there is: a dent cannot run through " +
+                "the plate behind it and metal pushed out cannot come through the plate in front. Costs a few physics queries the first time a plate with " +
+                "neighbors is hit.");
             DamageMapsSteelGloss = Config.Bind("DamageMaps", "SteelGloss", true,
                 "With paint damage on, the steel that shows through is metallic and shiny (rubbed bright where a shell skidded or cut through, duller where " +
                 "the metal was torn) and scorched paint is dull. Uses the plate's bump atlas as a metallic/smoothness map (one more atlas per vehicle, " +
