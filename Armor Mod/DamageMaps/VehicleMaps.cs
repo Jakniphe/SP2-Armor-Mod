@@ -253,6 +253,31 @@ namespace ArmorFragments
             material.SetTexture("_ParallaxMap", bump ? Height : null);
             material.SetFloat("_Parallax", ParallaxAmplitude);
             SetKeyword(material, "_PARALLAXMAP", bump);
+            if (bump) ReportParallax(material);
+        }
+
+        private static readonly HashSet<string> ParallaxReported = new HashSet<string>();
+
+        // Once per shader: does it have the bump map's slot, the amplitude, and the keyword that switches the parallax on? (If the shader has
+        // no such keyword, or its compiled variants were stripped from the build, the bump map is accepted and then ignored.)
+        private static void ReportParallax(Material material)
+        {
+            try
+            {
+                Shader shader = material.shader;
+                if (shader == null || !ParallaxReported.Add(shader.name)) return;
+                bool declared = false;
+                foreach (UnityEngine.Rendering.LocalKeyword keyword in shader.keywordSpace.keywords)
+                    if (keyword.name == "_PARALLAXMAP") declared = true;
+                ArmorFragmentsPlugin.Log.LogInfo("[RELIEF] shader '" + shader.name + "': _ParallaxMap slot " + material.HasProperty("_ParallaxMap") +
+                    ", _Parallax " + material.HasProperty("_Parallax") + ", keyword _PARALLAXMAP declared " + declared +
+                    ", on " + material.IsKeywordEnabled("_PARALLAXMAP") + ", amplitude " + material.GetFloat("_Parallax").ToString("F4") +
+                    ", bump atlas " + (material.GetTexture("_ParallaxMap") != null) + ". If 'declared' is false the shader has no parallax, and only the normal map or the real geometry shows relief.");
+            }
+            catch (Exception e)
+            {
+                ArmorFragmentsPlugin.Log.LogInfo("[RELIEF] could not inspect the shader: " + e.Message);
+            }
         }
 
         private static void SetKeyword(Material material, string keyword, bool on)
@@ -407,9 +432,11 @@ namespace ArmorFragments
             public int[] Triangles;
             public readonly List<Vector2> Uv0 = new List<Vector2>();
             public readonly List<Vector4> Uv1 = new List<Vector4>();
+            public readonly List<Vector4> Uv2 = new List<Vector4>();
             public readonly List<Vector4> Tangents = new List<Vector4>();
             public IndexFormat Format;
             public int Uv1Dimension;
+            public int Uv2Dimension;
         }
         private SavedMesh saved;
 
@@ -474,7 +501,8 @@ namespace ArmorFragments
             mesh.SetVertices(blendVertices);
             mesh.SetNormals(blendNormals);
             mesh.SetUVs(0, data.Uv0);
-            if (data.Uv1 != null) SetUv1(mesh, data.Uv1, Source.Uv1Dimension);
+            if (data.Uv1 != null) SetUv(mesh, 1, data.Uv1, Source.Uv1Dimension);
+            if (data.Uv2 != null) SetUv(mesh, 2, data.Uv2, Source.Uv2Dimension);
             mesh.SetTriangles(data.Triangles, 0, true);
             double setMs = watch.Elapsed.TotalMilliseconds;
             mesh.RecalculateTangents();
@@ -541,30 +569,33 @@ namespace ArmorFragments
             {
                 Vertices = mesh.vertices, Normals = mesh.normals, Triangles = mesh.GetTriangles(0), Format = mesh.indexFormat,
                 Uv1Dimension = Source != null ? Source.Uv1Dimension : 0,
+                Uv2Dimension = Source != null ? Source.Uv2Dimension : 0,
             };
             mesh.GetUVs(0, copy.Uv0);
             mesh.GetTangents(copy.Tangents);
             if (copy.Uv1Dimension > 0) mesh.GetUVs(1, copy.Uv1);
+            if (copy.Uv2Dimension > 0) mesh.GetUVs(2, copy.Uv2);
             return copy;
         }
 
-        private static void SetUv1(Mesh mesh, Vector4[] values, int dimension)
+        // A UV channel (1 or 2) back into a mesh with the number of components it had.
+        private static void SetUv(Mesh mesh, int channel, Vector4[] values, int dimension)
         {
             if (dimension == 2)
             {
                 Vector2[] two = new Vector2[values.Length];
                 for (int i = 0; i < two.Length; i++) two[i] = values[i];
-                mesh.SetUVs(1, two);
+                mesh.SetUVs(channel, two);
             }
             else if (dimension == 3)
             {
                 Vector3[] three = new Vector3[values.Length];
                 for (int i = 0; i < three.Length; i++) three[i] = values[i];
-                mesh.SetUVs(1, three);
+                mesh.SetUVs(channel, three);
             }
             else
             {
-                mesh.SetUVs(1, values);
+                mesh.SetUVs(channel, values);
             }
         }
 
@@ -587,7 +618,8 @@ namespace ArmorFragments
                 mesh.SetVertices(copy.Vertices);
                 mesh.SetNormals(copy.Normals);
                 mesh.SetUVs(0, copy.Uv0);
-                if (copy.Uv1Dimension > 0 && copy.Uv1.Count == copy.Vertices.Length) SetUv1(mesh, copy.Uv1.ToArray(), copy.Uv1Dimension);
+                if (copy.Uv1Dimension > 0 && copy.Uv1.Count == copy.Vertices.Length) SetUv(mesh, 1, copy.Uv1.ToArray(), copy.Uv1Dimension);
+                if (copy.Uv2Dimension > 0 && copy.Uv2.Count == copy.Vertices.Length) SetUv(mesh, 2, copy.Uv2.ToArray(), copy.Uv2Dimension);
                 mesh.SetTriangles(copy.Triangles, 0, true);
                 if (copy.Tangents.Count == copy.Vertices.Length) mesh.SetTangents(copy.Tangents);
                 else mesh.RecalculateTangents();

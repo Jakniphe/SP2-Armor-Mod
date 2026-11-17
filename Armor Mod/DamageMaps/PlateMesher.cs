@@ -30,6 +30,8 @@ namespace ArmorFragments
         public Vector2[] Uv0;             // as the maps left them (into the atlas)
         public Vector4[] Uv1;             // null if the mesh has none
         public int Uv1Dimension;          // 0 = none
+        public Vector4[] Uv2;             // null if the mesh has none (the game's newer plate meshes have a third UV set)
+        public int Uv2Dimension;          // 0 = none
         public int[] Triangles;
         public Vector3[] PartPositions;   // the same vertices and normals in the part's frame (where the plate's axes are)
         public Vector3[] PartNormals;
@@ -47,7 +49,7 @@ namespace ArmorFragments
         private static bool Supported(VertexAttribute attribute)
         {
             return attribute == VertexAttribute.Position || attribute == VertexAttribute.Normal || attribute == VertexAttribute.Tangent ||
-                   attribute == VertexAttribute.TexCoord0 || attribute == VertexAttribute.TexCoord1;
+                   attribute == VertexAttribute.TexCoord0 || attribute == VertexAttribute.TexCoord1 || attribute == VertexAttribute.TexCoord2;
         }
 
         public static PlateMeshSource Read(PlateInfo info)
@@ -95,6 +97,14 @@ namespace ArmorFragments
                 if (uv1.Count == count) s.Uv1 = uv1.ToArray();
                 else s.Uv1Dimension = 0;
             }
+            if (mesh.HasVertexAttribute(VertexAttribute.TexCoord2))
+            {
+                s.Uv2Dimension = mesh.GetVertexAttributeDimension(VertexAttribute.TexCoord2);
+                List<Vector4> uv2 = new List<Vector4>(count);
+                mesh.GetUVs(2, uv2);
+                if (uv2.Count == count) s.Uv2 = uv2.ToArray();
+                else s.Uv2Dimension = 0;
+            }
 
             s.FromPart = info.ToPart.inverse;
             s.PartPositions = new Vector3[count];
@@ -132,6 +142,7 @@ namespace ArmorFragments
         public int[] Moved;              // the vertices the push moves (the others are the same in both)
         public Vector2[] Uv0;
         public Vector4[] Uv1;            // null if the mesh has none
+        public Vector4[] Uv2;            // null if the mesh has none
         public int[] Triangles;
         public float DeliverAt;          // Time.time from which it may be shown (the shell's ray has to arrive first)
         public double BuildMs;
@@ -505,6 +516,7 @@ namespace ArmorFragments
                 Vector3[] baseV = new Vector3[count], baseN = new Vector3[count], pushedV = new Vector3[count], pushedN = new Vector3[count];
                 Vector2[] uv0 = new Vector2[count];
                 Vector4[] uv1 = s.Uv1 != null ? new Vector4[count] : null;
+                Vector4[] uv2 = s.Uv2 != null ? new Vector4[count] : null;
                 float[] plateU = new float[count], plateV = new float[count];
                 List<int> moved = new List<int>();
                 float maxHeight = 0f;
@@ -521,6 +533,7 @@ namespace ArmorFragments
                     pushedV[i] = baseV[i];
                     pushedN[i] = baseN[i];
                     if (uv1 != null) uv1[i] = s.Uv1[own[i]];
+                    if (uv2 != null) uv2[i] = s.Uv2[own[i]];
 
                     int f = vface[i];
                     if (f < 0)
@@ -569,7 +582,7 @@ namespace ArmorFragments
                 return new MeshData
                 {
                     Vertices = pushedV, Normals = pushedN, BaseVertices = baseV, BaseNormals = baseN, Moved = moved.ToArray(),
-                    Uv0 = uv0, Uv1 = uv1, Triangles = output.ToArray(),
+                    Uv0 = uv0, Uv1 = uv1, Uv2 = uv2, Triangles = output.ToArray(),
                     BuildMs = watch.Elapsed.TotalMilliseconds, Before = original, After = after, MaxHeight = maxHeight,
                 };
             }
