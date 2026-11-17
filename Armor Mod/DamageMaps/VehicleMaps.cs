@@ -957,7 +957,12 @@ namespace ArmorFragments
             mesh.GetNormals(normals);
             bool hasNormals = normals.Count == count;
 
-            Vector2 sentinel = Owner.SentinelUv();
+            // The vertices that belong to no face of the block (a sloped or rounded part of its surface) must not read the atlas's shared gray corner: that
+            // is bare steel, and the block turned shiny steel where nothing had hit it. In paint mode they read a pixel in the flat border of the block's
+            // own tile instead, which is filled with the block's paint (and its base shine) like the rest of the tile.
+            Vector2 sentinel = Owner.PaintMode
+                ? new Vector2((Cpu.TileX[0] + 1f) / Owner.AtlasSize, (Cpu.TileY[0] + 1f) / Owner.AtlasSize)
+                : Owner.SentinelUv();
             float atlas = Owner.AtlasSize;
             int innerW = Cpu.Width - 2 * PlateCpu.Border, innerH = Cpu.Height - 2 * PlateCpu.Border;
 

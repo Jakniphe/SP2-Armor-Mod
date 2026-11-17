@@ -485,6 +485,23 @@ namespace ArmorFragments
             };
             WantGeometry(job, plate);
 
+            // The sides of a block got their tiles with it: they are filled with the block's paint now, hit or not (an untouched tile is white, shiny
+            // metal in the atlas, and the block's side showed it).
+            if (plate.Main == null)
+            {
+                foreach (PlateVisual side in plate.Sides)
+                {
+                    if (side == null || side.Cpu.Width <= 0 || !side.TakeFull()) continue;
+                    DamageWorker.Job fill = new DamageWorker.Job
+                    {
+                        Owner = maps, Plate = side, Impacts = new PlateImpact[0], DeliverAt = job.DeliverAt,
+                        Height = job.Height, Damage = job.Damage, Everything = true,
+                    };
+                    WantGeometry(fill, side);   // the block's mesh is built by whichever of its jobs is the last
+                    DamageWorker.Enqueue(fill);
+                }
+            }
+
             // A shell's impact is simulated if the setting says so and the simulations are not piling up; the settings are taken
             // here, on the main thread, and travel with the job.
             int quality = Math.Min(ArmorFragmentsPlugin.SimQuality.Value - 1, ArmorFragments.Sim.ImpactSim.MaxQuality);
