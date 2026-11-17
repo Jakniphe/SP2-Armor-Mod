@@ -184,7 +184,7 @@ namespace ArmorFragments
             dir.Normalize();
 
             float angle = Mathf.Clamp(impact.Angle, 0f, 85f) * Mathf.Deg2Rad;
-            float elong = Mathf.Clamp(1f / Mathf.Max(Mathf.Cos(angle), 0.2f), 1f, 2.5f);
+            float elong = Mathf.Clamp(1f / Mathf.Max(Mathf.Cos(angle), 0.25f), 1f, 4f);
             float strength = Mathf.Clamp01(impact.Strength);
             float caliber = Mathf.Max(impact.Caliber, 0.002f);
             int entry = impact.Front ? 0 : 1;
@@ -242,9 +242,39 @@ namespace ArmorFragments
                     break;
                 }
             }
+            AddOblique(cpu, impact);
             if (flex) AddFlex(cpu, impact);
             LimitDepth(cpu, impact.Thickness, impact.Caliber);
             PaintImpact(cpu, impact);
+        }
+
+        // ---- A very slanted hit skids before it stops: a groove along its way ----
+
+        // Past about 65 degrees the shell does not dig in where it touched: it skids along the plate, scooping a groove, and stops (or is stopped)
+        // further on, so the mark is a long oval (up to about five calibers at 85 degrees) and not a dent with a rim. The groove runs from a little
+        // behind the point of contact to well past it. Returns false for a hit that is not slanted enough.
+        public static bool ObliqueSpan(PlateImpact impact, out float u0, out float v0, out float u1, out float v1, out float t)
+        {
+            u0 = v0 = u1 = v1 = 0f; t = 0f;
+            if (impact.Kind != DamageKind.Blocked && impact.Kind != DamageKind.Penetrated) return false;
+            t = Mathf.Clamp01((impact.Angle - 65f) / 20f);
+            if (t <= 0f) return false;
+            Vector2 dir = new Vector2(impact.DirU, impact.DirV);
+            if (dir.sqrMagnitude < 0.0001f) return false;
+            dir.Normalize();
+            float length = Mathf.Max(impact.Caliber, 0.002f) * (0.6f + 4.5f * t * t);
+            u0 = impact.U - dir.x * length * 0.3f; v0 = impact.V - dir.y * length * 0.3f;
+            u1 = impact.U + dir.x * length * 0.7f; v1 = impact.V + dir.y * length * 0.7f;
+            return true;
+        }
+
+        public static void AddOblique(PlateCpu c, PlateImpact impact)
+        {
+            float u0, v0, u1, v1, t;
+            if (!ObliqueSpan(impact, out u0, out v0, out u1, out v1, out t)) return;
+            float caliber = Mathf.Max(impact.Caliber, 0.002f);
+            float strength = Mathf.Clamp01(impact.Strength);
+            Streak(c, c.Get(impact.Front ? 0 : 1), u0, v0, u1, v1, Mathf.Max(caliber * 0.5f, 1.6f / Mathf.Min(c.PxU, c.PxV)), caliber * (0.02f + 0.05f * strength) * t);
         }
 
         // ---- Flexing: a heavy blow bends the whole plate a little ----
@@ -318,13 +348,14 @@ namespace ArmorFragments
             int entry = impact.Front ? 0 : 1, exit = 1 - entry;
             float angle = Mathf.Clamp(impact.Angle, 0f, 85f) * Mathf.Deg2Rad;
             // A slanted hit digs and scorches an oval along the shell's way (the same stretch as the dent: Apply's 'elong').
-            float elong = Mathf.Clamp(1f / Mathf.Max(Mathf.Cos(angle), 0.2f), 1f, 2.5f);
+            float elong = Mathf.Clamp(1f / Mathf.Max(Mathf.Cos(angle), 0.25f), 1f, 4f);
 
             switch (impact.Kind)
             {
                 case DamageKind.Blocked:
                     Splash(cpu, cpu.Get(entry), impact.U, impact.V, caliber * 1.6f, 0.30f + 0.40f * strength, caliber * (0.55f + 0.30f * strength), 1f, impact.Seed, elong, dir);
                     FollowShape(cpu, cpu.Get(entry), caliber, impact.Seed);
+                    ObliqueScrape(cpu, cpu.Get(entry), impact, caliber, strength);
                     break;
                 case DamageKind.Penetrated:
                 {
@@ -335,6 +366,7 @@ namespace ArmorFragments
                     Splash(cpu, cpu.Get(exit), impact.U + dir.x * lateral, impact.V + dir.y * lateral, caliber * 1.5f, 0.65f + 0.30f * strength, caliber * 0.80f, 1f, impact.Seed + 1, elongOut, dir);
                     FollowShape(cpu, cpu.Get(entry), caliber, impact.Seed);
                     FollowShape(cpu, cpu.Get(exit), caliber, impact.Seed + 1);
+                    ObliqueScrape(cpu, cpu.Get(entry), impact, caliber, strength);
                     break;
                 }
                 case DamageKind.Ricochet:
@@ -395,11 +427,18 @@ namespace ArmorFragments
                             f.Soot[at] = (byte)Mathf.Min(value, 255);
                         }
                     }
-                    if (chipAmount > 0f && dist < chipRadius)
+                    if (chipAmount > 0f && dist < chipRadius * 1.5f)
                     {
-                        // The flakes: bare in the middle, patchy toward the edge (the noise decides which bits of the paint hold on).
-                        float chip = (1f - dist / chipRadius) * 1.7f - 0.55f * ValueNoise(x * 0.6f + 17f, y * 0.6f + 5f, seed + 11);
-                        chip = Mathf.Clamp01(chip * 1.5f) * chipAmount;
+                        // The flakes: bare in the middle, patchy toward the edge. The edge has lobes (it is not a circle) and the flakes are a few
+                        // millimeters to a centimeter whatever the map's detail, so some bits of paint hold on inside and some flakes sit outside.
+                        float angleAround = Mathf.Atan2(across, along / elong);
+                        float lobe = 1f + 0.30f * Noise(angleAround, seed + 5);
+                        float flake = Mathf.Max(chipRadius * 0.28f, 2.5f / Mathf.Min(c.PxU, c.PxV));
+                        float mu = (x + 0.5f - PlateCpu.Border) / c.PxU, mv = (y + 0.5f - PlateCpu.Border) / c.PxV;
+                        float grain = 0.65f * ValueNoise(mu / flake, mv / flake, seed + 11) + 0.35f * ValueNoise(2f * mu / flake + 7f, 2f * mv / flake + 3f, seed + 17);
+                        float cover = 1.25f - dist / (chipRadius * lobe);
+                        float chip = Mathf.Clamp01((cover - 0.55f * grain) * 2.4f);
+                        chip = chip * chipAmount;
                         int value = Mathf.RoundToInt(chip * 255f);
                         if (value > f.Bare[at]) f.Bare[at] = (byte)value;
                         int shiny = Mathf.RoundToInt(chip * 70f);   // torn metal: a little shiny
@@ -477,6 +516,13 @@ namespace ArmorFragments
             smoothness = (byte)Mathf.Clamp(Mathf.RoundToInt(s * 255f), 0, 255);
         }
 
+        private static void ObliqueScrape(PlateCpu c, PlateCpu.Face f, PlateImpact impact, float caliber, float strength)
+        {
+            float u0, v0, u1, v1, t;
+            if (!ObliqueSpan(impact, out u0, out v0, out u1, out v1, out t)) return;
+            Scrape(c, f, u0, v0, u1, v1, caliber, strength * 0.7f, impact.Seed + 9);
+        }
+
         // The bare metal follows what the metal actually did: where the plate was dented the paint is gone (the deeper, the more), the raised rim
         // loses its paint, and a ring round every hole is bright rubbed steel. Read from the height field and the hole mask, so it has the shape of
         // the hole and the dent whatever made them (the stamps, or the simulation), oval for a slanted hit.
@@ -489,6 +535,7 @@ namespace ArmorFragments
 
             float depthRef = Mathf.Max(0.12f * caliber, 0.002f);
             float riseRef = 0.05f * caliber + 0.0005f;
+            float flake = Mathf.Max(0.10f * caliber, 2.5f / Mathf.Min(c.PxU, c.PxV));
             int reach = Mathf.Clamp(Mathf.CeilToInt(Mathf.Max(0.06f * caliber * Mathf.Min(c.PxU, c.PxV), 1.5f)), 1, 8);   // the width of the bright ring, in pixels
 
             bool anyHole = false;
@@ -506,10 +553,15 @@ namespace ArmorFragments
                     float h = f.Height[at];
                     float bare = 0f, shine = 0f;
                     float dent = Mathf.Clamp01(-h / depthRef);
-                    if (dent > 0.3f) { float st = Mathf.Clamp01((dent - 0.3f) / 0.6f); bare = st * st * (3f - 2f * st) * 0.95f; }
                     float rise = Mathf.Clamp01(h / riseRef);
-                    if (rise > 0.2f) bare = Mathf.Max(bare, rise * 0.6f);
-                    if (bare > 0f) bare = Mathf.Min(1f, bare * (0.75f + 0.5f * ValueNoise(x * 0.6f, y * 0.6f, seed + 31)));   // ragged
+                    float cover = Mathf.Max(dent * 1.1f, rise * 0.8f);
+                    if (cover > 0.05f)
+                    {
+                        // Ragged: flakes of a size in meters (not pixels) decide where the paint is gone, so the edge is torn, not a smooth curve.
+                        float mu = (x + 0.5f - PlateCpu.Border) / c.PxU, mv = (y + 0.5f - PlateCpu.Border) / c.PxV;
+                        float grain = 0.65f * ValueNoise(mu / flake, mv / flake, seed + 31) + 0.35f * ValueNoise(2f * mu / flake + 7f, 2f * mv / flake + 3f, seed + 37);
+                        bare = Mathf.Clamp01((cover - 0.45f * grain) * 2.6f) * 0.95f;
+                    }
 
                     if (anyHole)
                     {

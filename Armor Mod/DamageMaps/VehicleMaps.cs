@@ -178,7 +178,10 @@ namespace ArmorFragments
 
         public const int MaxTileSide = 1024;   // a plate's tile is never more than this many pixels on a side (a long plate is less dense, not huge)
         public const float MinDensity = 48f;   // the least dense a tile may get when the atlas is filling up
-        private int packX, packY = SentinelSize, packShelf;
+        private sealed class Shelf { public int Y, Height, X; }
+        private readonly List<Shelf> shelves = new List<Shelf>();   // rows of tiles; a tile goes in the row it wastes least
+        private int shelfBottom = SentinelSize;                      // where the next new row starts
+        private long usedPixels;                                      // the area of the tiles given out
 
         // The size of one tile (front or back) of a plate at a density: multiples of Align, so it lines up with every mip level.
         private static void TileSize(PlateGeometry g, float density, out int w, out int h)
@@ -195,11 +198,23 @@ namespace ArmorFragments
         {
             x = 0; y = 0;
             if (w > AtlasSize || h > AtlasSize) return false;
-            int px = packX, py = packY, shelf = packShelf;
-            if (px + w > AtlasSize) { py += shelf; px = 0; shelf = 0; }
-            if (py + h > AtlasSize) return false;
-            x = px; y = py;
-            packX = px + w; packY = py; packShelf = Math.Max(shelf, h);
+            Shelf best = null;
+            int bestWaste = int.MaxValue;
+            foreach (Shelf shelf in shelves)
+            {
+                if (shelf.Height < h || shelf.X + w > AtlasSize) continue;
+                if (shelf.Height - h < bestWaste) { best = shelf; bestWaste = shelf.Height - h; }
+            }
+            if (best == null)
+            {
+                if (shelfBottom + h > AtlasSize) return false;
+                best = new Shelf { Y = shelfBottom, Height = h, X = 0 };
+                shelfBottom += h;
+                shelves.Add(best);
+            }
+            x = best.X; y = best.Y;
+            best.X += w;
+            usedPixels += (long)w * h;
             return true;
         }
 
@@ -229,16 +244,21 @@ namespace ArmorFragments
         {
             if (main.Cpu.Width > 0) return true;
             float density = Mathf.Clamp(ArmorFragmentsPlugin.DamageMapsDensity.Value, 16f, 768f);   // finer than that and a few plates would fill the atlas
-            // No plate takes more than a sixth of the atlas (its two faces): a big plate is less dense so that the others still have room.
-            for (int guard = 0; guard < 24 && density > MinDensity; guard++)
-            {
-                int tw, th;
-                TileSize(main.Info.Geometry, density, out tw, out th);
-                if (2L * tw * th <= (long)AtlasSize * AtlasSize / 6) break;
-                density *= 0.85f;
-            }
+
+            // What this block may take of the atlas (its faces and its sides together): a sixteenth of it, and no more than a quarter of what is
+            // left, so the plates that come later still get a fair share (the first ones were taking most of it and the rest got 40 pixels per
+            // meter or nothing). The density is what makes the block's tiles fit that area (a side has a quarter of the area at half the density).
+            long atlasArea = (long)AtlasSize * AtlasSize;
+            long left = (long)(atlasArea * 0.85) - usedPixels;
+            long budget = Math.Min(atlasArea / 16, Math.Max(left / 4, 20000));
+            float unit = 2f * main.Info.Geometry.SizeU * main.Info.Geometry.SizeV;    // pixels per (px/m)^2 of its two faces
+            foreach (PlateVisual side in main.Sides)
+                if (side != null) unit += 0.5f * side.Info.Geometry.SizeU * side.Info.Geometry.SizeV;
+            if (unit > 0.0001f) density = Mathf.Min(density, Mathf.Sqrt(budget / unit));
+            density = Mathf.Max(density, MinDensity);
+
             float got = 0f;
-            for (float d = density; d >= MinDensity * 0.7f; d *= 0.7f)
+            for (float d = density; d >= MinDensity * 0.7f; d *= 0.8f)
             {
                 if (TryAllocateOne(main, d)) { got = d; break; }
             }
@@ -246,12 +266,11 @@ namespace ArmorFragments
             foreach (PlateVisual side in main.Sides)
             {
                 if (side == null) continue;
-                for (float d = got; d >= MinDensity * 0.7f; d *= 0.7f)
+                for (float d = got; d >= MinDensity * 0.7f; d *= 0.8f)
                     if (TryAllocateOne(side, d)) break;
             }
             ArmorFragmentsPlugin.Log.LogInfo("[DMAP] tiles for plate '" + main.Info.Part.Part.Name + "': " + main.Cpu.PxU.ToString("F0") + " x " + main.Cpu.PxV.ToString("F0") +
-                                             " px/m (" + main.Cpu.Width + " x " + main.Cpu.Height + " a face), the atlas is " +
-                                             (100L * packY / AtlasSize) + "% used");
+                                             " px/m (" + main.Cpu.Width + " x " + main.Cpu.Height + " a face), " + (100L * usedPixels / atlasArea) + "% of the atlas is given out");
             return true;
         }
 
