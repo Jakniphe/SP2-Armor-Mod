@@ -18,6 +18,27 @@ namespace ArmorFragments
         public Mesh Mesh;
         public Matrix4x4 ToPart;    // the mesh's vertices to the part's local frame
         public float ThicknessM;    // the plate's thickness from its tag, meters
+
+        // A block thick enough also has marks on its sides: they are plates of their own (PlateGeometry.Side), for the two pairs of faces
+        // across its length and its width. Null for a thin slab (a side of a few centimeters is not worth a map).
+        public const float MinSideDepth = 0.05f;
+        public readonly PlateGeometry[] Sides = new PlateGeometry[2];
+        private readonly PlateInfo[] sideInfos = new PlateInfo[2];
+
+        public PlateGeometry GeometryOf(int axis)
+        {
+            return axis == 0 || Sides[axis - 1] == null ? Geometry : Sides[axis - 1];
+        }
+
+        // The same plate seen through the geometry of one of its sides (what that side's tile and marks are made from).
+        public PlateInfo ForAxis(int axis)
+        {
+            if (axis == 0) return this;
+            PlateInfo side = sideInfos[axis - 1];
+            if (side == null && Sides[axis - 1] != null)
+                sideInfos[axis - 1] = side = new PlateInfo { Part = Part, Geometry = Sides[axis - 1], Map = Map, Mesh = Mesh, ToPart = ToPart, ThicknessM = ThicknessM };
+            return side;
+        }
     }
 
     // DAMAGE MAPS. Every shot that resolves on an armor plate leaves a mark on it (a dent, a hole, a groove, pits), and
@@ -34,8 +55,8 @@ namespace ArmorFragments
         private const int MaxRecords = 64;      // holes and dents kept per plate (the oldest go)
         private const int MaxPitsPerCloud = 96; // fragment marks drawn per plate for one burst
 
-        private struct Hole { public bool Front; public float U, V, R; }
-        private struct Dent { public float U, V, R, D; }
+        private struct Hole { public int Axis; public bool Front; public float U, V, R; }
+        private struct Dent { public int Axis; public float U, V, R, D; }
 
         private sealed class PlateState
         {
@@ -132,11 +153,17 @@ namespace ArmorFragments
                 if (geometry.Curved)
                     ArmorFragmentsPlugin.Log.LogInfo(Tag + "plate '" + part.Part.Name + "' is not a slab (depth " + geometry.Depth.ToString("F2") +
                         " m of " + geometry.SizeU.ToString("F2") + " x " + geometry.SizeV.ToString("F2") + "): its maps are flat approximations");
-                return new PlateInfo
+                PlateInfo made = new PlateInfo
                 {
                     Part = part, Geometry = geometry, Map = map, Mesh = mesh, ToPart = toPart,
                     ThicknessM = (armor != null ? armor.Thickness : 20f) * 0.001f,
                 };
+                if (geometry.Depth >= PlateInfo.MinSideDepth)
+                {
+                    made.Sides[0] = PlateGeometry.Side(geometry, 1);
+                    made.Sides[1] = PlateGeometry.Side(geometry, 2);
+                }
+                return made;
             }
             return null;
         }
@@ -150,18 +177,36 @@ namespace ArmorFragments
             PlateState state;
             if (!States.TryGetValue(part, out state) || state.Holes.Count == 0) return false;
 
-            PlateGeometry g = state.Info.Geometry;
-            float facing = Vector3.Dot(g.N, part.transform.InverseTransformDirection(worldNormal).normalized);
-            if (Mathf.Abs(facing) < BigFaceCos) return false;   // an edge or a side of a block: no map there
+            int axis;
+            float facing;
+            if (!ChooseAxis(state.Info, part.transform.InverseTransformDirection(worldNormal).normalized, out axis, out facing)) return false;   // an edge: no map there
+            PlateGeometry g = state.Info.GeometryOf(axis);
             bool front = facing > 0f;
             Vector2 at = g.ToPlane(part.transform.InverseTransformPoint(worldPoint));
             foreach (Hole hole in state.Holes)
             {
-                if (hole.Front != front) continue;
+                if (hole.Axis != axis || hole.Front != front) continue;
                 float du = at.x - hole.U, dv = at.y - hole.V;
                 if (du * du + dv * dv < hole.R * hole.R) return true;
             }
             return false;
+        }
+
+        // Which of the block's faces a surface normal (in the part's frame) looks at: 0 = the plate's own two big faces, 1 and 2 = the sides of a
+        // thick block. False if it lines up with none of them well enough (an edge or a corner, which has no map).
+        private static bool ChooseAxis(PlateInfo info, Vector3 normalLocal, out int axis, out float facing)
+        {
+            axis = 0;
+            facing = Vector3.Dot(info.Geometry.N, normalLocal);
+            float best = Mathf.Abs(facing);
+            for (int a = 1; a <= 2; a++)
+            {
+                PlateGeometry side = info.Sides[a - 1];
+                if (side == null) continue;
+                float f = Vector3.Dot(side.N, normalLocal);
+                if (Mathf.Abs(f) > best + 1e-4f) { best = Mathf.Abs(f); axis = a; facing = f; }
+            }
+            return best >= BigFaceCos;
         }
 
         // The plate as it is at this point: thinner where it is dented. Returns the same tag if nothing changed.
@@ -191,6 +236,7 @@ namespace ArmorFragments
             float lost = 0f;
             foreach (Dent dent in state.Dents)
             {
+                if (dent.Axis != 0) continue;   // a dent in a side thins the block across its width, not the plate across its thickness
                 float du = at.x - dent.U, dv = at.y - dent.V;
                 float rho = Mathf.Sqrt(du * du + dv * dv) / dent.R;
                 if (rho >= 1f) continue;
@@ -222,15 +268,16 @@ namespace ArmorFragments
                 return;
             }
 
-            PlateGeometry g = info.Geometry;
             Vector3 normalLocal = part.transform.InverseTransformDirection(normalFacing).normalized;
-            float facing = Mathf.Abs(Vector3.Dot(g.N, normalLocal));
-            if (facing < BigFaceCos)   // an edge or a side of a block: it has no map
+            int axis;
+            float signedFacing;
+            if (!ChooseAxis(info, normalLocal, out axis, out signedFacing))   // an edge or a corner: it has no map
             {
-                NoMark(part, "the shell hit a side or an edge of the block, which has no map (the hit is " +
-                             (Mathf.Acos(Mathf.Clamp01(facing)) * Mathf.Rad2Deg).ToString("F0") + " deg off the block's thin axis; marks go on its two big faces)");
+                NoMark(part, "the shell hit an edge or a corner of the block, which has no map (no face of the block is within " +
+                             (Mathf.Acos(BigFaceCos) * Mathf.Rad2Deg).ToString("F0") + " deg of the surface there)");
                 return;
             }
+            PlateGeometry g = info.GeometryOf(axis);
             Vector3 directionLocal = part.transform.InverseTransformDirection(direction).normalized;
             Vector2 at = g.ToPlane(part.transform.InverseTransformPoint(point));
             Vector2 along = g.DirectionToPlane(directionLocal);
@@ -239,7 +286,8 @@ namespace ArmorFragments
             PlateImpact impact = new PlateImpact
             {
                 Kind = kind,
-                Front = Vector3.Dot(g.N, normalLocal) > 0f,
+                Axis = axis,
+                Front = signedFacing > 0f,
                 U = at.x, V = at.y,
                 DirU = along.x, DirV = along.y,
                 Angle = angle,
@@ -301,15 +349,18 @@ namespace ArmorFragments
             if (!Pits.TryGetValue(part, out buffer)) Pits[part] = buffer = new PitBuffer();
             if (buffer.Impacts.Count >= MaxPitsPerCloud) return;
 
-            PlateGeometry g = info.Geometry;
             Vector3 normalLocal = part.transform.InverseTransformDirection(normalFacing).normalized;
-            if (Mathf.Abs(Vector3.Dot(g.N, normalLocal)) < BigFaceCos) return;   // an edge or a side of a block: it has no map
+            int axis;
+            float signedFacing;
+            if (!ChooseAxis(info, normalLocal, out axis, out signedFacing)) return;   // an edge or a corner: it has no map
+            PlateGeometry g = info.GeometryOf(axis);
             Vector2 at = g.ToPlane(part.transform.InverseTransformPoint(point));
             buffer.Delay = Mathf.Min(buffer.Delay, delay);
             buffer.Impacts.Add(new PlateImpact
             {
                 Kind = passed ? DamageKind.SmallHole : DamageKind.Pit,
-                Front = Vector3.Dot(g.N, normalLocal) > 0f,
+                Axis = axis,
+                Front = signedFacing > 0f,
                 U = at.x, V = at.y,
                 Caliber = diameterMeters,
                 Strength = strength,
@@ -328,41 +379,59 @@ namespace ArmorFragments
             switch (impact.Kind)
             {
                 case DamageKind.Blocked:
-                    AddDent(state, impact.U, impact.V, caliber * (0.85f + 0.5f * impact.Strength), caliber * (0.08f + 0.32f * impact.Strength));
+                    AddDent(state, impact.Axis, impact.U, impact.V, caliber * (0.85f + 0.5f * impact.Strength), caliber * (0.08f + 0.32f * impact.Strength));
                     break;
 
                 case DamageKind.Penetrated:
                 {
-                    AddDent(state, impact.U, impact.V, caliber * 0.85f, caliber * 0.10f);
-                    AddHole(state, impact.Front, impact.U, impact.V, caliber * 0.5f);
+                    AddDent(state, impact.Axis, impact.U, impact.V, caliber * 0.85f, caliber * 0.10f);
+                    AddHole(state, impact.Axis, impact.Front, impact.U, impact.V, caliber * 0.5f);
 
                     Vector2 dir = new Vector2(impact.DirU, impact.DirV);
                     dir = dir.sqrMagnitude < 0.0001f ? new Vector2(1f, 0f) : dir.normalized;
                     float lateral = Mathf.Min(impact.Thickness * Mathf.Tan(Mathf.Clamp(impact.Angle, 0f, 85f) * Mathf.Deg2Rad), 0.6f);
-                    AddHole(state, !impact.Front, impact.U + dir.x * lateral, impact.V + dir.y * lateral, caliber * 0.5f * 1.15f);
+                    AddHole(state, impact.Axis, !impact.Front, impact.U + dir.x * lateral, impact.V + dir.y * lateral, caliber * 0.5f * 1.15f);
                     break;
                 }
             }
         }
 
-        private static void AddDent(PlateState state, float u, float v, float radius, float depth)
+        private static void AddDent(PlateState state, int axis, float u, float v, float radius, float depth)
         {
             if (state.Dents.Count >= MaxRecords) state.Dents.RemoveAt(0);
-            state.Dents.Add(new Dent { U = u, V = v, R = radius, D = depth });
+            state.Dents.Add(new Dent { Axis = axis, U = u, V = v, R = radius, D = depth });
         }
 
-        private static void AddHole(PlateState state, bool front, float u, float v, float radius)
+        private static void AddHole(PlateState state, int axis, bool front, float u, float v, float radius)
         {
             if (state.Holes.Count >= MaxRecords) state.Holes.RemoveAt(0);
-            state.Holes.Add(new Hole { Front = front, U = u, V = v, R = radius });
+            state.Holes.Add(new Hole { Axis = axis, Front = front, U = u, V = v, R = radius });
         }
 
         // The look: hand the impacts to the worker thread, if the plate can be shown.
         private static void Show(PartScript part, PlateImpact[] impacts, float delay)
         {
+            // The impacts of one burst can be on different faces of a thick block (the plate's own faces and its sides): each goes to its own plate.
+            bool mixed = false;
+            for (int i = 1; i < impacts.Length; i++) if (impacts[i].Axis != impacts[0].Axis) mixed = true;
+            if (!mixed)
+            {
+                ShowOn(part, impacts, delay, impacts.Length > 0 ? impacts[0].Axis : 0);
+                return;
+            }
+            for (int axis = 0; axis <= 2; axis++)
+            {
+                List<PlateImpact> own = new List<PlateImpact>();
+                foreach (PlateImpact impact in impacts) if (impact.Axis == axis) own.Add(impact);
+                if (own.Count > 0) ShowOn(part, own.ToArray(), delay, axis);
+            }
+        }
+
+        private static void ShowOn(PartScript part, PlateImpact[] impacts, float delay, int axis)
+        {
             VehicleMaps maps = VehicleFor(part.Aircraft);
             if (maps == null) return;
-            PlateVisual plate = maps.PlateFor(part);
+            PlateVisual plate = maps.PlateFor(part, axis);
             if (plate == null) return;
 
             DamageWorker.Job job = new DamageWorker.Job
@@ -612,7 +681,7 @@ namespace ArmorFragments
             foreach (VehicleMaps maps in Vehicles.Values)
             {
                 if (maps.Disposed) continue;
-                foreach (PlateVisual plate in maps.Plates.Values)
+                foreach (PlateVisual plate in maps.AllPlates())
                 {
                     if (!plate.Applied || (plate.Cpu.Faces[0] == null && plate.Cpu.Faces[1] == null)) continue;
                     if (turnedOff) plate.RestoreGeometry();
@@ -636,7 +705,7 @@ namespace ArmorFragments
             foreach (VehicleMaps maps in Vehicles.Values)
             {
                 if (maps.Disposed) continue;
-                foreach (PlateVisual plate in maps.Plates.Values)
+                foreach (PlateVisual plate in maps.AllPlates())
                 {
                     if (!plate.HasGeometry) continue;
                     plates++;
@@ -675,7 +744,7 @@ namespace ArmorFragments
                 if (reliefChanged) maps.RefreshRelief();
                 if (!catchUpHeight && !catchUpView) continue;
 
-                foreach (PlateVisual plate in maps.Plates.Values)
+                foreach (PlateVisual plate in maps.AllPlates())
                 {
                     if (!plate.Applied || (plate.Cpu.Faces[0] == null && plate.Cpu.Faces[1] == null)) continue;
                     DamageWorker.Job job = new DamageWorker.Job

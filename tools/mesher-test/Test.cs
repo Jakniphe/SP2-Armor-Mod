@@ -302,6 +302,36 @@ internal static class Test
         Check(lowest >= -0.0061f, "five shots on one spot dent it no deeper than 60% of the plate (" + (lowest * 1000f).ToString("F2") + " mm of 10)");
     }
 
+    // The sides of a thick block as plates: every corner of the block falls inside the side's rectangle, the axes are perpendicular and right-handed.
+    private static void SideTest()
+    {
+        Console.WriteLine("\n== SIDES OF A THICK BLOCK ==");
+        PlateGeometry main = new PlateGeometry
+        {
+            T1 = new Vector3(1, 0, 0), T2 = new Vector3(0, 1, 0), N = new Vector3(0, 0, 1),
+            SizeU = 1.0f, SizeV = 0.6f, Depth = 0.3f, Origin = new Vector3(-0.5f, -0.3f, 0f),
+        };
+        bool inside = true, frame = true;
+        for (int axis = 1; axis <= 2; axis++)
+        {
+            PlateGeometry side = PlateGeometry.Side(main, axis);
+            frame &= Math.Abs(Vector3.Dot(side.T1, side.T2)) < 1e-5f && Math.Abs(Vector3.Dot(side.T1, side.N)) < 1e-5f &&
+                     Vector3.Dot(Vector3.Cross(side.T1, side.T2), side.N) > 0.99f && side.Axis == axis;
+            for (int i = 0; i < 8; i++)
+            {
+                Vector3 corner = new Vector3((i & 1) == 0 ? -0.5f : 0.5f, (i & 2) == 0 ? -0.3f : 0.3f, (i & 4) == 0 ? -0.15f : 0.15f);
+                Vector2 plane = side.ToPlane(corner);
+                inside &= plane.x > -1e-4f && plane.x < side.SizeU + 1e-4f && plane.y > -1e-4f && plane.y < side.SizeV + 1e-4f;
+            }
+            // the origin is on the block's middle plane across the side's normal
+            Vector3 blockCenter = Vector3.zero;
+            Vector3 along = blockCenter - side.Origin;
+            frame &= Math.Abs(Vector3.Dot(along, side.N)) < 1e-4f;   // the origin is on the middle of the thickness across the side's normal
+        }
+        Check(inside, "all eight corners of the block fall inside each side's rectangle");
+        Check(frame, "the side's axes are perpendicular, right-handed, and its origin sits on the middle of its thickness");
+    }
+
     private static int Main()
     {
         Run("shared diagonal, 8 mm", false, 0.008f, 120000);
@@ -311,6 +341,7 @@ internal static class Test
         Run("FINE 3 mm, split seam", true, 0.008f, 120000, 0.003f);
         Run("FINE 3 mm, small budget", false, 0.008f, 3000, 0.003f);
         MipTest();
+        SideTest();
         Console.WriteLine(failures == 0 ? "\nALL CHECKS PASSED" : "\n" + failures + " CHECK(S) FAILED");
         return failures == 0 ? 0 : 1;
     }

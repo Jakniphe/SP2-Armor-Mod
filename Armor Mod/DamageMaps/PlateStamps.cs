@@ -17,6 +17,7 @@ namespace ArmorFragments
     internal struct PlateImpact
     {
         public DamageKind Kind;
+        public int Axis;           // which of the block's plates: 0 = its own big faces, 1 and 2 = its sides (see PlateGeometry.Side)
         public bool Front;         // which face was hit (the other one is where a shell comes out)
         public float U, V;         // where
         public float DirU, DirV;   // the shell's direction along the plate (for a ricochet: the way it bounced off)

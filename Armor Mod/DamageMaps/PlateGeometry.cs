@@ -24,6 +24,7 @@ namespace ArmorFragments
         public float SizeV;
         public float Depth;       // the mesh's extent along N, meters
         public bool Curved;       // the mesh is not a slab: the flat maps only approximate it
+        public int Axis;          // 0 = the plate itself; 1 and 2 = the geometry of the block's sides (see Side)
 
         public Vector2 ToPlane(Vector3 partLocal)
         {
@@ -34,6 +35,25 @@ namespace ArmorFragments
         public Vector2 DirectionToPlane(Vector3 partLocalDirection)
         {
             return new Vector2(Vector3.Dot(partLocalDirection, T1), Vector3.Dot(partLocalDirection, T2));
+        }
+
+        // The sides of a thick block as plates of their own: axis 1 is the pair of faces across T1 (the ends along its length), axis 2 the pair
+        // across T2. Each is a plate whose normal is that axis, so everything that works for the big faces (tiles, marks, the simulation, the
+        // model's holes) works for them unchanged. Right-handed like the main frame.
+        public static PlateGeometry Side(PlateGeometry m, int axis)
+        {
+            float depth = Mathf.Max(m.Depth, 0.01f);
+            if (axis == 1)
+                return new PlateGeometry
+                {
+                    T1 = m.T2, T2 = m.N, N = m.T1, SizeU = m.SizeV, SizeV = depth, Depth = m.SizeU, Axis = 1,
+                    Origin = m.Origin - m.N * (depth * 0.5f) + m.T1 * (m.SizeU * 0.5f),
+                };
+            return new PlateGeometry
+            {
+                T1 = m.N, T2 = m.T1, N = m.T2, SizeU = depth, SizeV = m.SizeU, Depth = m.SizeV, Axis = 2,
+                Origin = m.Origin - m.N * (depth * 0.5f) + m.T2 * (m.SizeV * 0.5f),
+            };
         }
 
         // The geometry of a mesh. 'toPart' takes the mesh's vertices to the part's local frame.

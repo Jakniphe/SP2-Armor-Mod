@@ -60,6 +60,15 @@ namespace ArmorFragments
             }
             if (infos.Count == 0) { LastFailure = "no armor plate with a readable mesh"; return null; }
 
+            // A thick block also gets tiles for its sides (each a plate of its own, so marks can go on them too).
+            List<PlateInfo> all = new List<PlateInfo>();
+            foreach (PlateInfo info in infos)
+            {
+                all.Add(info);
+                for (int axis = 1; axis <= 2; axis++)
+                    if (info.Sides[axis - 1] != null) all.Add(info.ForAxis(axis));
+            }
+
             // The tiles: as dense as the setting says, less dense if they do not fit in the biggest atlas (2048 x 2048 unless the setting allows more).
             float density = Mathf.Max(ArmorFragmentsPlugin.DamageMapsDensity.Value, 16f);
             int maxAtlas = Mathf.Clamp(Mathf.ClosestPowerOfTwo(ArmorFragmentsPlugin.DamageMapsMaxAtlas.Value), 1024, 4096);
@@ -69,11 +78,14 @@ namespace ArmorFragments
             {
                 long area = 0;
                 List<int[]> sizes = new List<int[]>();
-                foreach (PlateInfo info in infos)
+                foreach (PlateInfo info in all)
                 {
                     // Multiples of Align, so the tiles line up with every mip level of the atlas.
-                    int w = (Mathf.CeilToInt(info.Geometry.SizeU * density) + 2 * PlateCpu.Border + PlateCpu.Align - 1) / PlateCpu.Align * PlateCpu.Align;
-                    int h = (Mathf.CeilToInt(info.Geometry.SizeV * density) + 2 * PlateCpu.Border + PlateCpu.Align - 1) / PlateCpu.Align * PlateCpu.Align;
+                    // The sides of thick blocks get half the density (they are small and seen at a slant, and the vehicle's atlas must not get
+                    // coarser for everything else because of them).
+                    float own = info.Geometry.Axis == 0 ? density : density * 0.5f;
+                    int w = (Mathf.CeilToInt(info.Geometry.SizeU * own) + 2 * PlateCpu.Border + PlateCpu.Align - 1) / PlateCpu.Align * PlateCpu.Align;
+                    int h = (Mathf.CeilToInt(info.Geometry.SizeV * own) + 2 * PlateCpu.Border + PlateCpu.Align - 1) / PlateCpu.Align * PlateCpu.Align;
                     sizes.Add(new[] { w, h });
                     area += 2L * w * h;
                 }
@@ -90,9 +102,9 @@ namespace ArmorFragments
             if (tiles == null) { LastFailure = "the plates do not fit in an atlas"; return null; }
 
             VehicleMaps maps = new VehicleMaps(aircraft, theme) { AtlasSize = size, LastUsed = Time.time, Density = density };
-            for (int i = 0; i < infos.Count; i++)
+            for (int i = 0; i < all.Count; i++)
             {
-                PlateInfo info = infos[i];
+                PlateInfo info = all[i];
                 int w = tiles[i][2], h = tiles[i][3];
                 PlateCpu cpu = new PlateCpu
                 {
@@ -104,7 +116,18 @@ namespace ArmorFragments
                 };
                 cpu.TileX[0] = tiles[i][0]; cpu.TileY[0] = tiles[i][1];
                 cpu.TileX[1] = tiles[i][4]; cpu.TileY[1] = tiles[i][5];
-                maps.Plates[info.Part] = new PlateVisual { Info = info, Cpu = cpu, Owner = maps };
+                PlateVisual visual = new PlateVisual { Info = info, Cpu = cpu, Owner = maps };
+                int side = info.Geometry.Axis;
+                if (side == 0)
+                {
+                    maps.Plates[info.Part] = visual;
+                }
+                else
+                {
+                    PlateVisual main = maps.Plates[info.Part];   // the plate's own tiles come first in the list
+                    visual.Main = main;
+                    main.Sides[side - 1] = visual;
+                }
             }
 
             long atlasAt = System.Diagnostics.Stopwatch.GetTimestamp();
@@ -185,6 +208,24 @@ namespace ArmorFragments
         }
 
         // The plate, ready to be stamped: its UV0 and material set. Null if it cannot be shown (merged into its group's mesh...).
+        // The same for one of the plates of a thick block: axis 0 = its own faces, 1 and 2 = its sides (null if it has none).
+        public PlateVisual PlateFor(PartScript part, int axis)
+        {
+            PlateVisual main = PlateFor(part);
+            return main == null || axis == 0 ? main : main.Sides[axis - 1];
+        }
+
+        // Every plate with tiles: the blocks' own and their sides.
+        public IEnumerable<PlateVisual> AllPlates()
+        {
+            foreach (PlateVisual plate in Plates.Values)
+            {
+                yield return plate;
+                foreach (PlateVisual side in plate.Sides)
+                    if (side != null) yield return side;
+            }
+        }
+
         public PlateVisual PlateFor(PartScript part)
         {
             PlateVisual plate;
@@ -438,6 +479,8 @@ namespace ArmorFragments
         public PlateInfo Info;
         public PlateCpu Cpu;
         public VehicleMaps Owner;
+        public PlateVisual Main;                                   // a side of a thick block: the block's own plate (which owns the mesh and the material)
+        public readonly PlateVisual[] Sides = new PlateVisual[2];  // the block's sides, if it has them
         public bool Applied;
         public bool Failed;
         public bool HasHole;
@@ -478,7 +521,7 @@ namespace ArmorFragments
         // Main thread. Can this plate's mesh be rewritten as real geometry? (Reads the mesh the first time, and logs why not.)
         public bool CanRemesh()
         {
-            if (!Applied) return false;
+            if (Main != null || !Applied) return false;   // a side is only a map: the block's own plate is the one whose mesh may be rewritten
             if (Source == null)
             {
                 Source = PlateMeshSource.Read(Info);
@@ -706,6 +749,7 @@ namespace ArmorFragments
             SetMaterial(clone);
             map.ExcludeFromMeshCombine = true;
             Applied = true;
+            foreach (PlateVisual side in Sides) if (side != null) side.Applied = true;
             double setupMs = setupWatch.Elapsed.TotalMilliseconds;
             if (setupMs > 8.0)
                 ArmorFragmentsPlugin.Log.LogInfo("[PERF] first use of plate '" + Info.Part.Part.Name + "' took " + setupMs.ToString("F1") + " ms (" + mesh.vertexCount +
@@ -732,15 +776,28 @@ namespace ArmorFragments
             for (int i = 0; i < count; i++)
             {
                 Vector3 p = Info.ToPart.MultiplyPoint3x4(vertices[i]);
-                float facing = hasNormals ? Vector3.Dot(Info.ToPart.MultiplyVector(normals[i]).normalized, geo.N) : 1f;
-                if (Mathf.Abs(facing) < 0.5f) { uvs.Add(sentinel); continue; }
+                Vector3 n = hasNormals ? Info.ToPart.MultiplyVector(normals[i]).normalized : geo.N;
 
+                // The plate this vertex belongs to: the block's own (its two big faces) or one of its sides, whichever the normal lines up with best.
+                PlateVisual owner = null;
+                float best = 0.5f, facing = 0f;
+                for (int k = -1; k < 2; k++)
+                {
+                    PlateVisual candidate = k < 0 ? this : Sides[k];
+                    if (candidate == null) continue;
+                    float f = Vector3.Dot(n, candidate.Info.Geometry.N);
+                    if (Mathf.Abs(f) >= best && (owner == null || Mathf.Abs(f) > best + 1e-4f)) { owner = candidate; best = Mathf.Abs(f); facing = f; }
+                }
+                if (owner == null) { uvs.Add(sentinel); continue; }
+
+                PlateGeometry g = owner.Info.Geometry;
+                PlateCpu c = owner.Cpu;
                 int face = facing > 0f ? 0 : 1;
-                Vector2 plane = geo.ToPlane(p);
-                float u = Mathf.Clamp01(plane.x / geo.SizeU);
-                float v = Mathf.Clamp01(plane.y / geo.SizeV);
-                uvs.Add(new Vector2((Cpu.TileX[face] + PlateCpu.Border + u * innerW) / atlas,
-                                    (Cpu.TileY[face] + PlateCpu.Border + v * innerH) / atlas));
+                Vector2 plane = g.ToPlane(p);
+                float u = Mathf.Clamp01(plane.x / g.SizeU);
+                float v = Mathf.Clamp01(plane.y / g.SizeV);
+                uvs.Add(new Vector2((c.TileX[face] + PlateCpu.Border + u * (c.Width - 2 * PlateCpu.Border)) / atlas,
+                                    (c.TileY[face] + PlateCpu.Border + v * (c.Height - 2 * PlateCpu.Border)) / atlas));
             }
             mesh.SetUVs(0, uvs);
         }
@@ -757,6 +814,7 @@ namespace ArmorFragments
         // The plate has a hole: from now on it is drawn with the Lit shader, which can cut it out.
         public void EnsureLit()
         {
+            if (Main != null) { Main.EnsureLit(); return; }   // a side is drawn with the block's own material
             if (HasHole || !Applied || Owner.Disposed) return;
             HasHole = true;
 
@@ -807,6 +865,7 @@ namespace ArmorFragments
         // Back to the game's own look (restore) and free what was made.
         public void Release(bool restore)
         {
+            if (Main != null) return;   // a side owns nothing: the block's own plate restores the mesh and the material
             try
             {
                 if (restore && Applied)

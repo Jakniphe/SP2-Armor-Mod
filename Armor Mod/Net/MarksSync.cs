@@ -20,7 +20,7 @@ namespace ArmorFragments
     // fires travel) with everything that makes the mark: which player's vehicle, which part, and the PlateImpact. Every other game with
     // the mod finds that plate and draws the same mark (the same seed gives the same simulation). Players without the mod ignore it.
     //
-    //   M,player,part,kind,front,u,v,dirU,dirV,angle,caliber,strength,thickness,seed,mass,speed,hardness,brittleness,kept,deflection,delay
+    //   M,player,part,kind,front,u,v,dirU,dirV,angle,caliber,strength,thickness,seed,mass,speed,hardness,brittleness,kept,deflection,delay,axis
     //
     // What the sender keeps (up to MaxHistory marks, only for vehicles still alive) goes out again when a new player joins, so they see the
     // marks that were already there; a mark that arrives twice (a repeat for someone who was already here) is drawn once.
@@ -162,6 +162,7 @@ namespace ArmorFragments
                     PlateBrittleness = Num(f[17]),
                     KeptEnergy = Num(f[18]),
                     Deflection = Num(f[19]),
+                    Axis = f.Length > 21 ? (int)Num(f[21]) : 0,
                 };
                 PlateDamageMaps.OnRemoteImpact(part, impact, Num(f[20]));
             }
@@ -195,6 +196,7 @@ namespace ArmorFragments
             s.Append(',').Append(i.Seed);
             foreach (float value in new[] { i.ShellMass, i.Speed, i.PlateHardness, i.PlateBrittleness, i.KeptEnergy, i.Deflection, delay })
                 s.Append(',').Append(F(value));
+            s.Append(',').Append(i.Axis);   // last, so a message from a version before the sides still reads (as the plate's own faces)
             return s.ToString();
         }
 
