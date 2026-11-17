@@ -243,7 +243,7 @@ namespace ArmorFragments
                 }
             }
             if (flex) AddFlex(cpu, impact);
-            LimitDepth(cpu, impact.Thickness);
+            LimitDepth(cpu, impact.Thickness, impact.Caliber);
             PaintImpact(cpu, impact);
         }
 
@@ -502,11 +502,13 @@ namespace ArmorFragments
         // between -0.6 of the thickness (the energy model never takes more than 60% of a plate away for a dent either) and +1.5 (metal pushed out
         // the back, or bent into petals, can stand well proud of a thin plate). Only what changed since the last handing over is looked at, so
         // it costs next to nothing.
-        public static void LimitDepth(PlateCpu c, float thickness)
+        public static void LimitDepth(PlateCpu c, float thickness, float caliber = 0f)
         {
             thickness = Mathf.Max(thickness, c.Thickness);   // a thinned plate (the impact carries its thickness left) still has its own depth
             if (thickness < 0.0005f) return;
-            float low = -0.6f * thickness, high = 1.5f * thickness;
+            // A thin sheet (a 1 mm plate) is bent and torn by a shell, not dented 0.6 mm deep: what a hit may push is also a share of its caliber.
+            float give = Mathf.Min(0.3f * caliber, 0.04f);
+            float low = -Mathf.Max(0.6f * thickness, give), high = Mathf.Max(1.5f * thickness, give);
             for (int index = 0; index < 2; index++)
             {
                 PlateCpu.Face f = c.Faces[index];

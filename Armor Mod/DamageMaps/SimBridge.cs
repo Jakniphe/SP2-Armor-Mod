@@ -144,7 +144,7 @@ namespace ArmorFragments
             PlateStamps.Dirty(faceOut, x0, y0, x1, y1, anyHole);
             if (through && anyHole) ShapeExit(cpu, faceIn, faceOut, impact, sim, petalAmount, plugAmount);
             PlateStamps.AddFlex(cpu, impact);
-            PlateStamps.LimitDepth(cpu, impact.Thickness);
+            PlateStamps.LimitDepth(cpu, impact.Thickness, impact.Caliber);
             PlateStamps.PaintImpact(cpu, impact);
         }
 

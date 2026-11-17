@@ -109,17 +109,28 @@ namespace ArmorFragments
             s.FromPart = info.ToPart.inverse;
             s.PartPositions = new Vector3[count];
             s.PartNormals = new Vector3[count];
-            sbyte[] facing = new sbyte[count];
             for (int i = 0; i < count; i++)
             {
                 s.PartPositions[i] = info.ToPart.MultiplyPoint3x4(s.Vertices[i]);
                 s.PartNormals[i] = info.ToPart.MultiplyVector(s.Normals[i]).normalized;
+            }
+            Classify(s, g);
+        }
+
+        // Which triangles are on the big faces of the plate whose geometry is 'g' (front +N, back -N), by their normals.
+        private static void Classify(PlateMeshSource s, PlateGeometry g)
+        {
+            int count = s.PartNormals.Length;
+            sbyte[] facing = new sbyte[count];
+            for (int i = 0; i < count; i++)
+            {
                 float along = Vector3.Dot(s.PartNormals[i], g.N);
                 facing[i] = (sbyte)(along > 0.8f ? 1 : along < -0.8f ? -1 : 0);
             }
 
             int triangles = s.Triangles.Length / 3;
             s.Face = new sbyte[triangles];
+            s.FaceTriangles = 0;
             for (int t = 0; t < triangles; t++)
             {
                 sbyte a = facing[s.Triangles[3 * t]], b = facing[s.Triangles[3 * t + 1]], c = facing[s.Triangles[3 * t + 2]];
@@ -127,7 +138,32 @@ namespace ArmorFragments
                 else if (a == -1 && b == -1 && c == -1) { s.Face[t] = 1; s.FaceTriangles++; }
                 else s.Face[t] = -1;
             }
-            if (s.FaceTriangles == 0) s.Why = "it has no triangles on its big faces";
+            s.Why = s.FaceTriangles == 0 ? "it has no triangles on its big faces" : null;
+        }
+
+        // The mesh a first pass made (the plate's own faces cut and pushed), read as the source of a second pass for ANOTHER face pair of the same
+        // block (a side): the flat vertices and normals of the first result are the second one's, so a block's faces are cut one pair after the
+        // other and the pushes add up (they are on different triangles). 'g' is the second pair's geometry, 'toPart' the mesh-to-part matrix.
+        public static PlateMeshSource Derive(PlateGeometry g, Matrix4x4 toPart, PlateMeshSource basis, MeshData first)
+        {
+            PlateMeshSource s = new PlateMeshSource();
+            int count = first.BaseVertices.Length;
+            s.Vertices = first.BaseVertices;
+            s.Normals = first.BaseNormals;
+            s.Triangles = first.Triangles;
+            s.Uv0 = first.Uv0;
+            s.Uv1 = first.Uv1; s.Uv1Dimension = basis.Uv1Dimension;
+            s.Uv2 = first.Uv2; s.Uv2Dimension = basis.Uv2Dimension;
+            s.FromPart = basis.FromPart;
+            s.PartPositions = new Vector3[count];
+            s.PartNormals = new Vector3[count];
+            for (int i = 0; i < count; i++)
+            {
+                s.PartPositions[i] = toPart.MultiplyPoint3x4(first.BaseVertices[i]);
+                s.PartNormals[i] = toPart.MultiplyVector(first.BaseNormals[i]).normalized;
+            }
+            Classify(s, g);
+            return s;
         }
     }
 
@@ -157,6 +193,27 @@ namespace ArmorFragments
         public static MeshData Build(PlateCpu cpu, PlateGeometry g, PlateMeshSource s, VehicleMaps owner, float cellMeters, int maxVertices)
         {
             return Build(cpu, g, s, owner, cellMeters, 0f, maxVertices);
+        }
+
+        // The two passes' results as one: 'second' was built from 'first' (PlateMeshSource.Derive), so its vertices begin with first's. A vertex
+        // the first pass pushed (and the second did not) keeps its push.
+        public static MeshData Combine(MeshData first, MeshData second)
+        {
+            bool[] movedBySecond = new bool[second.Vertices.Length];
+            foreach (int i in second.Moved) movedBySecond[i] = true;
+            List<int> moved = new List<int>(second.Moved);
+            foreach (int i in first.Moved)
+            {
+                if (movedBySecond[i]) continue;
+                second.Vertices[i] = first.Vertices[i];
+                second.Normals[i] = first.Normals[i];
+                moved.Add(i);
+            }
+            second.Moved = moved.ToArray();
+            second.Before += first.Before;   // the faces cut in the first pass count too (the second's source holds them as they were left)
+            second.MaxHeight = Mathf.Max(second.MaxHeight, first.MaxHeight);
+            second.BuildMs += first.BuildMs;
+            return second;
         }
 
         // 'fineMeters' (0 = none): around holes and sharp features (cracks, rims) the cut goes down to this size instead.

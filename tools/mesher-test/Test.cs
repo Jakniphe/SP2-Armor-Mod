@@ -299,7 +299,7 @@ internal static class Test
             PlateStamps.Apply(deep, new PlateImpact { Kind = DamageKind.Blocked, Front = true, U = 0.08f, V = 0.08f, Caliber = 0.04f, Strength = 1f, Thickness = 0.01f, Seed = i });
         float lowest = 0f;
         foreach (float v in deep.Faces[0].Height) lowest = Math.Min(lowest, v);
-        Check(lowest >= -0.0061f, "five shots on one spot dent it no deeper than 60% of the plate (" + (lowest * 1000f).ToString("F2") + " mm of 10)");
+        Check(lowest >= -0.01201f, "five shots on one spot dent it no deeper than the bigger of 60% of the plate and 30% of the caliber (" + (lowest * 1000f).ToString("F2") + " mm of 12)");
     }
 
     // Overlapping plates: where another plate is in the way, the marks stay inside the room there is (no dent through the plate behind, no
@@ -345,6 +345,83 @@ internal static class Test
         float deepest = 0f;
         foreach (float v in free.Faces[0].Height) deepest = Math.Min(deepest, v);
         Check(deepest < -0.002f, "a plate with nothing around it is marked as before (" + (deepest * 1000f).ToString("F2") + " mm)");
+    }
+
+    // A thick block: its big faces are cut and pushed, then (a second pass over the first one's result) its side too, in one mesh.
+    private static void FamilyTest()
+    {
+        Console.WriteLine("\n== A BLOCK'S FACES AND ITS SIDE, IN ONE MESH ==");
+        // The box 1.0 x 0.6 x 0.3 (x, y, z): six faces of two triangles, each with its own four vertices and its normal.
+        List<Vector3> vs = new List<Vector3>(), ns = new List<Vector3>();
+        List<int> tris = new List<int>();
+        List<sbyte> face = new List<sbyte>();
+        Vector3[] normals = { Vector3.forward, Vector3.back, Vector3.right, Vector3.left, Vector3.up, Vector3.down };
+        for (int f = 0; f < 6; f++)
+        {
+            Vector3 n = normals[f];
+            Vector3 a = Math.Abs(n.x) > 0.5f ? Vector3.up : Vector3.right;
+            Vector3 b = Vector3.Cross(n, a);
+            Vector3 half = new Vector3(0.5f, 0.3f, 0.15f);
+            Vector3 centre = new Vector3(n.x * half.x, n.y * half.y, n.z * half.z);
+            Vector3 ea = new Vector3(a.x * half.x, a.y * half.y, a.z * half.z), eb = new Vector3(Math.Abs(b.x) * half.x, Math.Abs(b.y) * half.y, Math.Abs(b.z) * half.z);
+            int start = vs.Count;
+            vs.Add(centre - ea - eb); vs.Add(centre + ea - eb); vs.Add(centre + ea + eb); vs.Add(centre - ea + eb);
+            for (int i = 0; i < 4; i++) ns.Add(n);
+            tris.AddRange(new[] { start, start + 1, start + 2, start, start + 2, start + 3 });
+            sbyte which = (sbyte)(f == 0 ? 0 : f == 1 ? 1 : -1);
+            face.Add(which); face.Add(which);
+        }
+        PlateMeshSource source = new PlateMeshSource
+        {
+            Vertices = vs.ToArray(), Normals = ns.ToArray(), Uv0 = new Vector2[vs.Count], Triangles = tris.ToArray(),
+            PartPositions = vs.ToArray(), PartNormals = ns.ToArray(), Face = face.ToArray(), FaceTriangles = 2, FromPart = Matrix4x4.identity,
+        };
+        PlateGeometry main = new PlateGeometry
+        {
+            T1 = Vector3.right, T2 = Vector3.up, N = Vector3.forward, SizeU = 1.0f, SizeV = 0.6f, Depth = 0.3f, Origin = new Vector3(-0.5f, -0.3f, 0f),
+        };
+        PlateGeometry side = PlateGeometry.Side(main, 1);   // the +x / -x faces
+
+        PlateCpu mainCpu = new PlateCpu { Width = 208, Height = 128, PxU = (208 - 2 * PlateCpu.Border) / main.SizeU, PxV = (128 - 2 * PlateCpu.Border) / main.SizeV };
+        PlateCpu sideCpu = new PlateCpu { Width = 160, Height = 96, PxU = (160 - 2 * PlateCpu.Border) / side.SizeU, PxV = (96 - 2 * PlateCpu.Border) / side.SizeV };
+        Dent(mainCpu, 0.5f, 0.3f, -0.008f);   // a dent in the middle of the front face
+        Dent(sideCpu, 0.3f, 0.15f, -0.01f);    // and one in the middle of the +x side
+
+        VehicleMaps owner = new VehicleMaps { AtlasSize = 1024 };
+        MeshData first = PlateMesher.Build(mainCpu, main, source, owner, 0.03f, 0f, 30000);
+        PlateMeshSource second = PlateMeshSource.Derive(side, Matrix4x4.identity, source, first);
+        Check(second.Ok && second.FaceTriangles == 4, "the first pass's result is read for the side: its two faces' triangles are found (" + second.FaceTriangles + ")");
+        MeshData both = PlateMesher.Combine(first, PlateMesher.Build(sideCpu, side, second, owner, 0.03f, 0f, 30000));
+
+        float lowestFront = float.MaxValue, lowestSide = float.MaxValue;
+        bool finite = true;
+        for (int i = 0; i < both.Vertices.Length; i++)
+        {
+            Vector3 p = both.Vertices[i];
+            finite &= !float.IsNaN(p.x + p.y + p.z);
+            Vector3 flat = both.BaseVertices[i];
+            if (Math.Abs(flat.z - 0.15f) < 1e-4f) lowestFront = Math.Min(lowestFront, p.z);
+            if (Math.Abs(flat.x - 0.5f) < 1e-4f) lowestSide = Math.Min(lowestSide, p.x);
+        }
+        Check(finite, "the combined mesh is finite (" + both.Vertices.Length + " vertices, " + both.Moved.Length + " pushed)");
+        Check(both.Vertices.Length > 60, "the faces were cut (" + both.Vertices.Length + " vertices from 24)");
+        Check(lowestFront < 0.15f - 0.006f, "the big face keeps its dent (" + ((0.15f - lowestFront) * 1000f).ToString("F1") + " mm)");
+        Check(lowestSide < 0.5f - 0.008f, "the side has its dent in the same mesh (" + ((0.5f - lowestSide) * 1000f).ToString("F1") + " mm)");
+    }
+
+    // A Gaussian dent on the front face of a plate cpu.
+    private static void Dent(PlateCpu cpu, float cu, float cv, float depth)
+    {
+        PlateCpu.Face front = cpu.Get(0);
+        for (int y = 0; y < cpu.Height; y++)
+        {
+            for (int x = 0; x < cpu.Width; x++)
+            {
+                float u = (x + 0.5f - PlateCpu.Border) / cpu.PxU, v = (y + 0.5f - PlateCpu.Border) / cpu.PxV;
+                float r2 = (u - cu) * (u - cu) + (v - cv) * (v - cv);
+                front.Height[y * cpu.Width + x] = depth * Mathf.Exp(-r2 / (0.05f * 0.05f));
+            }
+        }
     }
 
     // A heavy blow bends the plate it hits: a broad shallow dish on the struck face and a bulge on the other; a light one does not.
@@ -420,6 +497,7 @@ internal static class Test
         SideTest();
         ClearTest();
         FlexTest();
+        FamilyTest();
         Console.WriteLine(failures == 0 ? "\nALL CHECKS PASSED" : "\n" + failures + " CHECK(S) FAILED");
         return failures == 0 ? 0 : 1;
     }

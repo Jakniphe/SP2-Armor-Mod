@@ -673,7 +673,8 @@ namespace ArmorFragments
         // Main thread. Can this plate's mesh be rewritten as real geometry? (Reads the mesh the first time, and logs why not.)
         public bool CanRemesh()
         {
-            if (Main != null || !Applied) return false;   // a side is only a map: the block's own plate is the one whose mesh may be rewritten
+            if (!Applied) return false;
+            if (Main != null) return Main.CanRemesh();   // the block's mesh is one: a side's marks are cut into it too (by the block's own plate)
             if (Source == null)
             {
                 Source = PlateMeshSource.Read(Info);
@@ -784,16 +785,25 @@ namespace ArmorFragments
         {
             Renderer renderer = Info.Map.Renderer;
             if (renderer == null) return;
-            if (Blend <= 0.001f)
-            {
-                renderer.SetPropertyBlock(null);
-                return;
-            }
-            float keep = 1f - Blend;
+            float keep = 1f - Mathf.Clamp01(Blend);
             MaterialPropertyBlock block = new MaterialPropertyBlock();
-            block.SetFloat("_BumpScale", ArmorFragmentsPlugin.DamageMapsNormalStrength.Value * keep);
-            block.SetFloat("_Parallax", Owner.ParallaxAmplitude * keep);
+            block.SetFloat("_Parallax", OwnParallax() * keep);   // always: this plate's tiles are not the vehicle's nominal density
+            if (Blend > 0.001f) block.SetFloat("_BumpScale", ArmorFragmentsPlugin.DamageMapsNormalStrength.Value * keep);
             renderer.SetPropertyBlock(block);
+        }
+
+        // How far the shader's parallax moves the surface for the biggest height the bump map can say, in UV units, FOR THIS PLATE: the tiles are
+        // given out one plate at a time and each has the density it got (the sides of a block half of its own), while one renderer has one value,
+        // so the sparsest tile of the block decides (a tile that is too dense for it only shows a little less relief; one that is too sparse
+        // would show far too much, smeared).
+        private float OwnParallax()
+        {
+            PlateVisual block = Main != null ? Main : this;
+            float least = block.Cpu.Width > 0 ? Mathf.Min(block.Cpu.PxU, block.Cpu.PxV) : float.MaxValue;
+            foreach (PlateVisual side in block.Sides)
+                if (side != null && side.Cpu.Width > 0) least = Mathf.Min(least, Mathf.Min(side.Cpu.PxU, side.Cpu.PxV));
+            if (least == float.MaxValue) return Owner.ParallaxAmplitude;
+            return PlateStamps.HeightRange * least / Mathf.Max(Owner.AtlasSize, 1);
         }
 
         // The mesh as the game made it (and then as the maps left it: with the normal map's UV0), so it can be put back.
@@ -909,6 +919,7 @@ namespace ArmorFragments
             map.ExcludeFromMeshCombine = true;
             Applied = true;
             foreach (PlateVisual side in Sides) if (side != null) side.Applied = true;
+            ApplyMapStrength();   // this plate's own parallax amplitude
             double setupMs = setupWatch.Elapsed.TotalMilliseconds;
             if (setupMs > 8.0)
                 ArmorFragmentsPlugin.Log.LogInfo("[PERF] first use of plate '" + Info.Part.Part.Name + "' took " + setupMs.ToString("F1") + " ms (" + mesh.vertexCount +
@@ -1223,11 +1234,22 @@ namespace ArmorFragments
 
                     // Real geometry: the plate's mesh is rewritten once the last job queued for it is done (the later jobs would
                     // only make this one's work stale).
-                    if (job.Geometry && job.Plate.Source != null && job.Plate.Source.Ok && Volatile.Read(ref job.Plate.PendingJobs) <= 1)
+                    PlateVisual block = job.Plate.Main != null ? job.Plate.Main : job.Plate;   // the mesh is the block's: its sides are cut into it too
+                    int family = Volatile.Read(ref block.PendingJobs);
+                    foreach (PlateVisual side in block.Sides) if (side != null) family += Volatile.Read(ref side.PendingJobs);
+                    if (job.Geometry && block.Source != null && block.Source.Ok && family <= 1)
                     {
-                        MeshData mesh = PlateMesher.Build(job.Plate.Cpu, job.Plate.Info.Geometry, job.Plate.Source, job.Owner,
+                        MeshData mesh = PlateMesher.Build(block.Cpu, block.Info.Geometry, block.Source, job.Owner,
                                                           job.GridMeters, job.FineMeters, job.MaxVertices);
-                        mesh.Plate = job.Plate;
+                        foreach (PlateVisual side in block.Sides)
+                        {
+                            if (side == null || side.Cpu.Width <= 0 || (side.Cpu.Faces[0] == null && side.Cpu.Faces[1] == null)) continue;
+                            PlateMeshSource second = PlateMeshSource.Derive(side.Info.Geometry, side.Info.ToPart, block.Source, mesh);
+                            if (!second.Ok) continue;
+                            MeshData extra = PlateMesher.Build(side.Cpu, side.Info.Geometry, second, job.Owner, job.GridMeters, job.FineMeters, job.MaxVertices);
+                            mesh = PlateMesher.Combine(mesh, extra);
+                        }
+                        mesh.Plate = block;
                         mesh.DeliverAt = job.DeliverAt;
                         Meshes.Enqueue(mesh);
                     }
