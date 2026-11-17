@@ -87,3 +87,15 @@ Also
 - Racks are drawn see-through in the designer with their rounds inside, and show their rounds in the X-ray.
 - Funky Trees: `Ammo_rounds`, `Ammo_fire`, `Ammo_boom` (wire `_boom` to a detacher to throw the turret). Racks with a group name (`g=`) get their own `<group>_` variables.
 - Settings are in the `[AmmoRacks]` section of the config file; `GameDamageExplosions` and `ArmoredStructureDamage` (both off) are under `[Fragments]`.
+
+# Damage marks and impact simulation
+
+0.10.0
+- Armor plates now show what hit them: dents, holes, grooves, fragment pits and HE burst dishes, drawn as normal/height maps (with mip levels) and, near the damage, as real geometry within a per-vehicle vertex budget. Thick blocks get marks on their sides too.
+- Each projectile hit is simulated in 3D (lattice of particles, on the graphics card through OpenCL when available, otherwise the CPU) and drawn when the shell reaches the plate. It is visual only: the energy model still decides the outcome. Quality, threads, queue and time limit are in the "Damage maps" panel; the grid never gets finer than the map can show.
+- The shell's nose shape (AP ogive, APHE capped, HE blunt) shapes the hole. Thin or ductile plates petal outward on the back face; thick or brittle ones shear a clean plug. Brittle plates crack radially; the hole rim is smooth and irregular.
+- Paint: impacts scorch the paint, flake it off to bare steel, and leave a bright steel rim at the hole ("Scorched and flaked paint"; plates with patterned or textured paint lose the pattern).
+- Marks are shared with other players who have the mod, and sent again to players who join later.
+- Fix: the frame rate no longer collapses after visiting the designer and returning to flight.
+- Fix: ammo racks are recognized again after reloading the mod (F6), and armor plates stay out of the game's mesh merge so they can carry marks.
+- Added an impact camera, a vehicle X-ray and a lab app (tools/sim-lab) for studying the simulation.

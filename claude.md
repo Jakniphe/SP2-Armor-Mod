@@ -359,7 +359,7 @@ Armadura por face (Jakniphe, branch `face-armor`). Resumo para o jogador: `PATCH
 ## v0.9.0.1
 Painel da armadura: o peso por face ganha uma linha por face (Front, Back, Left, Right, Top, Bottom; "open" para face aberta) abaixo de "Armor weight", em vez de uma linha só.
 
-## v0.9.1.1 (versão atual)
+## v0.9.1.1
 Correções e acréscimos na armadura por face (Jakniphe, branch `armor-fixes`).
 - **Faces:** `ArmorFaces.Classify` escolhe, para cada pedaço da superfície, a face cuja direção para fora (paredes laterais inclinadas pelo afunilamento e pelo trapézio, pontas ao longo do bloco) é a mais próxima da normal. Uma superfície fatiada ou cortada é uma face só em toda a largura; ponta cortada continua ponta até 45°.
 - **Superfície do bloco (`ArmorSurface.cs`):** só a malha do casco (`JFuselageScript._renderer`), nunca decalques ou textos. Furos de peças de corte (carving) ficam abertos: as paredes do furo não são face (no designer pela camada de pintura ≥ 5 dos submeshes; em voo, onde a malha é uma peça só, por olharem para dentro dos colisores convexos), e onde uma linha cruza o colisor sem superfície visível o furo é aberto (`SurfaceAt`, só em blocos com cortadores). Usado pela cor das faces, pelo peso, pelos raios (`Boundaries`) e pelo primeiro contato (`CannonHitPatch`, `HostResolver`).
@@ -596,3 +596,6 @@ Substitui o "não feito" da seção anterior. Em vez de refatorar tudo para 6 fa
 - **Como:** `PlateCpu.PaintMode`/`Paint` (cor da tinta lida por `VehicleMaps.ReadPaint`, a mesma do `EnsureLit`) e, por face, `Soot`/`Bare` (byte[]). `PlateStamps.PaintImpact` (chamado no fim de `Apply` e de `SimBridge.Apply`) espalha fuligem e lascas por tipo de marca (`Splash`); `PlateStamps.PixelColor` junta tinta → aço nu → fuligem (a fuligem gruda menos no aço). `SimBridge.Apply` marca `Bare` no aro do furo (largura max(0,12 × calibre, 1,5 pixel)). Em modo tinta o atlas de furos vira atlas de COR (RGB = cor, alfa = máscara): `VehicleMaps.BakePaint` grava a tinta de cada placa nos tiles, a placa passa ao material Lit com `_BaseColor` branco (`EnsureLit`) já no primeiro impacto (`Deliver`), e `Flush(..., paint:true)` entrega as cores.
 - **Limitações:** placa com padrão ou textura (texture mod) perde o desenho porque a cor vira uma cor única; o Lit não usa o normal map do `Part - Default` da mesma forma (conferir no jogo); sem sincronização extra (cada cliente pinta a partir dos mesmos `PlateImpact`).
 - **Laboratório:** seletor "Plate paint" e a vista 3D usa as cores por pixel (`PlateStamps.PixelColor`). O laboratório não mostra o shader real do jogo nem a iluminação dele.
+
+## v0.10.0 (versão atual)
+Reúne tudo desde a v0.9.1.1: mapas de dano (normal/altura/furos, mips, geometria real com orçamento, lados de blocos grossos), simulação de impacto 3D (GPU/CPU), forma do nariz, pétalas e tampão, rachaduras, tinta queimada e descascada, sincronização das marcas, correção da queda de FPS depois do designer e dos racks depois do F6, câmera de impacto, raio-x e laboratório. Notas para o jogador em `PATCH_NOTES.md`. Ainda sem teste no jogo para a maior parte.
