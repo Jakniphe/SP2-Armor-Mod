@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.Rendering;
@@ -181,6 +181,8 @@ namespace ArmorFragments
             private const int Block = 4;             // the fine zone is kept in blocks of this many pixels
             private int blocksX, blocksY;
             private readonly bool[][] fine = new bool[2][];
+            private readonly bool[][] zone = new bool[2][];   // the blocks worth real geometry: a hole, or a dent deeper than ZoneDepth (and their surroundings)
+            private const float ZoneDepth = 0.0015f;           // shallower relief (pits, scratches) is left to the normal and bump maps
 
             private readonly List<Vector3> pos;      // base positions and normals, part frame (the originals, then the new ones)
             private readonly List<Vector3> nrm;
@@ -194,7 +196,6 @@ namespace ArmorFragments
             private readonly Dictionary<long, int> midpoints = new Dictionary<long, int>();
             private readonly Queue<int> queue = new Queue<int>();
             private readonly bool[] hasRegion = new bool[2];
-            private readonly float[] regionU0 = new float[2], regionU1 = new float[2], regionV0 = new float[2], regionV1 = new float[2];
             private readonly int original;
 
             public Refiner(PlateCpu cpu, PlateGeometry g, PlateMeshSource s, float cell, float fineCell, int maxVertices)
@@ -237,25 +238,43 @@ namespace ArmorFragments
             {
                 PlateCpu.Face face = cpu.Faces[f];
                 if (face == null) return;
+                blocksX = (cpu.Width + Block - 1) / Block;
+                blocksY = (cpu.Height + Block - 1) / Block;
+                bool[] marks = new bool[blocksX * blocksY];
                 int x0 = int.MaxValue, y0 = int.MaxValue, x1 = -1, y1 = -1;
+                bool any = false;
                 for (int y = 0; y < cpu.Height; y++)
                 {
                     for (int x = 0; x < cpu.Width; x++)
                     {
                         int at = y * cpu.Width + x;
-                        if (Mathf.Abs(face.Height[at]) < 0.00002f && face.Mask[at] >= 128) continue;
+                        bool hole = face.Mask[at] < 255;
+                        if (!hole && Mathf.Abs(face.Height[at]) < ZoneDepth) continue;
+                        marks[(y / Block) * blocksX + x / Block] = true;
+                        any = true;
                         if (x < x0) x0 = x; if (x > x1) x1 = x;
                         if (y < y0) y0 = y; if (y > y1) y1 = y;
                     }
                 }
-                if (x1 < 0) return;
-                if (fineCell > 0f) FindFine(f, x0, y0, x1, y1);
-                float margin = cell * 2f;
+                if (!any) return;   // only shallow relief: the maps show it, the mesh stays as it is
+
+                // Grown by about two cells so the push has somewhere to fall off to.
+                int grow = Mathf.Max(1, Mathf.CeilToInt(cell * 2f * cpu.PxU / Block));
+                bool[] grown = new bool[marks.Length];
+                for (int by = 0; by < blocksY; by++)
+                    for (int bx = 0; bx < blocksX; bx++)
+                    {
+                        if (!marks[by * blocksX + bx]) continue;
+                        for (int dy = -grow; dy <= grow; dy++)
+                            for (int dx = -grow; dx <= grow; dx++)
+                            {
+                                int nx = bx + dx, ny = by + dy;
+                                if (nx >= 0 && ny >= 0 && nx < blocksX && ny < blocksY) grown[ny * blocksX + nx] = true;
+                            }
+                    }
+                zone[f] = grown;
                 hasRegion[f] = true;
-                regionU0[f] = (x0 - PlateCpu.Border) / cpu.PxU - margin;
-                regionU1[f] = (x1 + 1 - PlateCpu.Border) / cpu.PxU + margin;
-                regionV0[f] = (y0 - PlateCpu.Border) / cpu.PxV - margin;
-                regionV1[f] = (y1 + 1 - PlateCpu.Border) / cpu.PxV + margin;
+                if (fineCell > 0f) FindFine(f, x0, y0, x1, y1);
             }
 
             // Where the fine zone is: the blocks (of Block x Block pixels) that hold a hole or its soft edge, or a sharp feature (a crack or a
@@ -264,8 +283,6 @@ namespace ArmorFragments
             private void FindFine(int f, int x0, int y0, int x1, int y1)
             {
                 PlateCpu.Face face = cpu.Faces[f];
-                blocksX = (cpu.Width + Block - 1) / Block;
-                blocksY = (cpu.Height + Block - 1) / Block;
                 bool[] marks = new bool[blocksX * blocksY];
                 int ex0 = Mathf.Max(0, x0 - 3), ey0 = Mathf.Max(0, y0 - 3), ex1 = Mathf.Min(cpu.Width - 1, x1 + 3), ey1 = Mathf.Min(cpu.Height - 1, y1 + 3);
                 for (int y = ey0; y <= ey1; y++)
@@ -306,7 +323,23 @@ namespace ArmorFragments
                             }
                     }
                 }
+                for (int i = 0; i < grown.Length; i++) grown[i] &= zone[f][i];   // fine only where the geometry is
                 fine[f] = grown;
+            }
+
+            // Does the triangle touch a block of the zone worth real geometry?
+            private bool InZone(int f, float minU, float maxU, float minV, float maxV)
+            {
+                bool[] z = zone[f];
+                if (z == null) return false;
+                int bx0 = Mathf.Clamp((int)((PlateCpu.Border + minU * cpu.PxU) / Block), 0, blocksX - 1);
+                int bx1 = Mathf.Clamp((int)((PlateCpu.Border + maxU * cpu.PxU) / Block), 0, blocksX - 1);
+                int by0 = Mathf.Clamp((int)((PlateCpu.Border + minV * cpu.PxV) / Block), 0, blocksY - 1);
+                int by1 = Mathf.Clamp((int)((PlateCpu.Border + maxV * cpu.PxV) / Block), 0, blocksY - 1);
+                for (int by = by0; by <= by1; by++)
+                    for (int bx = bx0; bx <= bx1; bx++)
+                        if (z[by * blocksX + bx]) return true;
+                return false;
             }
 
             // The cell size that applies to a triangle: the fine one if it touches the fine zone.
@@ -425,7 +458,7 @@ namespace ArmorFragments
                     if (u < minU) minU = u; if (u > maxU) maxU = u;
                     if (v < minV) minV = v; if (v > maxV) maxV = v;
                 }
-                if (!(maxU >= regionU0[f] && minU <= regionU1[f] && maxV >= regionV0[f] && minV <= regionV1[f])) return false;
+                if (!InZone(f, minU, maxU, minV, maxV)) return false;
                 return longest > CellOf(t, minU, maxU, minV, maxV);
             }
 
