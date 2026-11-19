@@ -851,7 +851,7 @@ namespace ArmorFragments
         private static void NextGroup(CameraManagerScript cm)
         {
             if (sight) LeaveSight(cm);
-            int current = 0;
+            int current = -1;   // (none controlled: the first group is next)
             for (int i = 0; i < groupIds.Count; i++) if (controlled.Contains(groupIds[i])) { current = i; break; }
             controlled.Clear();
             controlled.Add(groupIds[(current + 1) % groupIds.Count]);
@@ -933,18 +933,13 @@ namespace ArmorFragments
 
         // A click on one of a group's two options (ground, air; both lit together = both): a group that is controlled by hand leaves the manual
         // control and is set to just that option; a group already on automatic has that option switched on or off (all off = the group holds).
-        // One group always stays under the mouse aim.
+        // (Every group may be on automatic or held: none has to follow the mouse aim.)
         internal static void SetAuto(int id, GroupAuto option)
         {
             if (!Active || !groupIds.Contains(id)) return;
             GroupAuto mode;
             if (controlled.Contains(id))
             {
-                if (controlled.Count <= 1)
-                {
-                    Notice("one turret group has to stay controlled");
-                    return;
-                }
                 controlled.Remove(id);
                 CameraManagerScript cm = CameraManagerScript.Instance;
                 if (sight && cm != null) LeaveSight(cm);
@@ -966,19 +961,11 @@ namespace ArmorFragments
             ArmorFragmentsPlugin.Log.LogInfo("Turret aim: group " + NameOf(id) + " is now " + what);
         }
 
-        // A click on a group's bar: it joins the groups that follow the mouse aim, or leaves them (one group always stays controlled).
+        // A click on a group's bar: it joins the groups that follow the mouse aim, or leaves them (all may leave).
         internal static void ToggleGroup(int id)
         {
             if (!Active || !groupIds.Contains(id)) return;
-            if (controlled.Contains(id))
-            {
-                if (controlled.Count <= 1)
-                {
-                    Notice("one turret group has to stay controlled");
-                    return;
-                }
-                controlled.Remove(id);
-            }
+            if (controlled.Contains(id)) controlled.Remove(id);   // (no group at all may be controlled by hand)
             else
             {
                 controlled.Add(id);
@@ -988,7 +975,7 @@ namespace ArmorFragments
             if (sight && cm != null) LeaveSight(cm);
             ResetControlState();
             int count = GroupCount();
-            Notice("controlling group " + ControlledLabel + " (" + count + (count == 1 ? " turret)" : " turrets)"));
+            Notice(controlled.Count == 0 ? "no group is controlled by hand" : "controlling group " + ControlledLabel + " (" + count + (count == 1 ? " turret)" : " turrets)"));
             ArmorFragmentsPlugin.Log.LogInfo("Turret aim: the groups controlled now: " + ControlledLabel + " (" + count + " turret(s))");
         }
 
@@ -1193,14 +1180,24 @@ namespace ArmorFragments
                 if (!Active) return;
             }
 
+            // With no group controlled by hand there is no lead turret: the camera still orbits, and only the groups on automatic turn.
             Gun leadGun = Lead();
-            if (leadGun == null)
+            Gun anyGun = leadGun;
+            if (anyGun == null)
+                foreach (Gun gun in guns)
+                    if (Live(gun)) { anyGun = gun; break; }
+            if (anyGun == null || (leadGun == null && controlled.Count > 0))
             {
                 Deactivate("the cannons of the turret group are gone");
                 return;
             }
-            CannonScript pointer = leadGun.Cannon;
-            hullBody = leadGun.Hull;
+            CannonScript pointer = leadGun != null ? leadGun.Cannon : null;
+            hullBody = anyGun.Hull;
+            if (leadGun == null)
+            {
+                haveDesired = false;
+                if (sight) LeaveSight(cm);
+            }
 
             Key lookKey = ArmorFragmentsPlugin.TurretLookKey.Value;
             bool look = keyboard != null && lookKey != Key.None && keyboard[lookKey].isPressed;
@@ -1289,8 +1286,12 @@ namespace ArmorFragments
 
             // The wanted direction: from the cannon's muzzle to what the camera sees at the middle of the screen (the camera is behind and above the
             // gun, so the gun must aim from where it is, not parallel to the camera).
-            Vector3 muzzle = pointer.TipPosition;
-            if (sight)
+            Vector3 muzzle = pointer != null ? pointer.TipPosition : Vector3.zero;
+            if (pointer == null)
+            {
+                // nothing is aimed by the cursor
+            }
+            else if (sight)
             {
                 // Through the sight the mouse turns the wanted direction itself (the sight camera sits on the gun, so it can't say where to aim):
                 // right turns it right and up turns it up, about the sight camera's own axes, less when zoomed in.
@@ -1338,12 +1339,13 @@ namespace ArmorFragments
             {
                 nextStatus = Time.unscaledTime + 0.25f;
                 string state = !calibrated ? "Calibrating the turret..."
+                    : leadGun == null ? "No group is controlled by hand"
                     : decoupled ? "Free look (the turret holds its aim)"
                     : atLimit ? "At the turret's limit"
                     : errorDegrees < 0.5f ? "On target"
                     : "Turning (" + errorDegrees.ToString("F1") + " deg off)";
                 Status = notice != null && Time.unscaledTime < noticeUntil ? notice
-                    : (groupIds.Count > 1 ? "Group " + ControlledLabel + ": " : "") + (sight ? "Sight: " : "") + state;
+                    : (leadGun != null && groupIds.Count > 1 ? "Group " + ControlledLabel + ": " : "") + (sight ? "Sight: " : "") + state;
             }
 
             // RELEASE-STRIP-BEGIN
@@ -1798,8 +1800,7 @@ namespace ArmorFragments
         private static void Step(float dt)
         {
             RememberAngles(Time.fixedTime);
-            Gun lead = Lead();
-            if (lead == null) return;
+            Gun lead = Lead();   // null when no group is controlled by hand (the groups on automatic still work)
 
             if (!calibrated)
             {
@@ -1835,7 +1836,7 @@ namespace ArmorFragments
             // Every turret of a set is turned toward the same point: the lead along the wanted direction, the others from where they are to the
             // point the lead's line reaches at the aim distance. The sets: the controlled groups (the cursor), then each group on automatic (its
             // target). The rotators of the groups that are held keep their place.
-            if (haveDesired)
+            if (haveDesired && lead != null)
             {
                 RememberDesired(desiredTime, desiredDirection, desired, now);
                 aimIsMoving = Vector3.Angle(desired, DesiredAt(desiredTime, desiredDirection, desired, now - 0.3f)) > 1f;

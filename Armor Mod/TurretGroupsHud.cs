@@ -16,7 +16,7 @@ namespace ArmorFragments
     // dark and half transparent with rounded corners (the game's "btn btn-flight" look, clipped by the button's mask), and blue (the game's
     // primary color) when lit; there is no fill of their own while they are off.
     //   The bar: blue = the group follows the mouse aim now (or is on an automatic mode), dark = it holds. A click switches it (several groups
-    //   can be controlled together, at least one stays).
+    //   can be controlled together, or none at all).
     //   The two buttons: the group's automatic aim (ground targets, air targets, or both when both are lit). They are put out (darker) while the
     //   group is controlled by hand; a click on one takes the group off the manual control and sets it to that alone, and after that each click
     //   switches that option on or off (both off = the group holds). The bar then says what the group is shooting at.
