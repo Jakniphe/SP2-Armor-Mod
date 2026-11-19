@@ -188,6 +188,12 @@ namespace ArmorFragments
 
         // The gain never goes below this per physics step (0.4 a second), however many turrets share a hull and however often the swing detector cut it.
         private const float MinimumGain = 0.004f;
+
+        // The lag the predictor assumes is never less than this, whatever was measured. A turret whose joint is springy measures a tiny lag in the
+        // slow calibration move (20 ms in a recording) yet rings at 2-3 Hz when asked to reverse (its barrel moved three times as far as the ring
+        // angle, and the lone turret swung for 7 s until the swing detector had added enough lag by itself). In a model of a springy joint, a
+        // predictor that assumes about 130 ms ends the swing for every damping from 0.1 to 0.9 and costs a quarter of a second on a 5 degree move.
+        private const float MinimumAssumedLag = 0.13f;
         private const float SmallestGapDegrees = 0.12f;   // below this gap the turret rests (the settled gap is noisy by about a tenth of a degree)
         private const float MicroStepDegrees = 0.02f;     // the least a step asks for above it
 
@@ -1453,7 +1459,7 @@ namespace ArmorFragments
             // WILL be once it has arrived. Without this it keeps asking for what is already on its way, overshoots, and the turret swings.
             float pendingDegrees = 0f;
             float now = Time.fixedTime;
-            float lagUsed = gun.Lag + gun.LagBoost;
+            float lagUsed = Mathf.Max(gun.Lag, MinimumAssumedLag) + gun.LagBoost;
             if (gun.Lag > 0.005f && use.Count > 0)
             {
                 Vector3 settled = barrel;
@@ -1749,10 +1755,10 @@ namespace ArmorFragments
                 gun.Flips.Clear();
                 gun.LastSwing = now;
                 string what;
-                if (gun.Lag > 0.005f && gun.LagBoost < 0.12f)
+                if (gun.Lag > 0.005f && gun.LagBoost < 0.06f)
                 {
-                    gun.LagBoost = Mathf.Min(0.12f, gun.LagBoost + 0.03f);
-                    what = "it now assumes the barrel is " + ((gun.Lag + gun.LagBoost) * 1000f).ToString("F0") + " ms late";
+                    gun.LagBoost = Mathf.Min(0.06f, gun.LagBoost + 0.03f);
+                    what = "it now assumes the barrel is " + ((Mathf.Max(gun.Lag, MinimumAssumedLag) + gun.LagBoost) * 1000f).ToString("F0") + " ms late";
                 }
                 else
                 {
