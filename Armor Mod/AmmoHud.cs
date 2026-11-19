@@ -33,6 +33,8 @@ namespace ArmorFragments
             public int Start = -1;
             public bool Relative;
             public bool Warning;
+            public float ReleaseAt;   // when the "pressed" look of a shot ends
+            public string Pressed;    // the class that gives it
         }
 
         private static readonly List<Pill> pills = new List<Pill>();
@@ -157,6 +159,24 @@ namespace ArmorFragments
             {
                 Pill pill = pills[i];
                 AmmoRacks.RackHud entry = racks[i];
+
+                // A shot out of the rack: the button plays its click animation (the game's pressed look, for a moment).
+                if (pill.Pressed != null && Time.unscaledTime >= pill.ReleaseAt)
+                {
+                    pill.Root.RemoveClass(pill.Pressed);
+                    pill.Pressed = null;
+                }
+                if (pill.Rounds >= 0 && entry.Rounds < pill.Rounds && !entry.Warning && pill.Pressed == null)
+                {
+                    string press = pill.Root.PressClass;
+                    if (!string.IsNullOrEmpty(press))
+                    {
+                        pill.Root.AddClass(press);
+                        pill.Pressed = press;
+                        pill.ReleaseAt = Time.unscaledTime + 0.12f;
+                    }
+                }
+
                 if (pill.Rounds == entry.Rounds && pill.Start == entry.Start && pill.Relative == relative && pill.Warning == entry.Warning) continue;
 
                 pill.Rounds = entry.Rounds;
@@ -168,7 +188,9 @@ namespace ArmorFragments
                 if (pill.Fill != null)
                 {
                     pill.Fill.Image.fillAmount = fraction;
-                    pill.Fill.Color.Base = entry.Warning || fraction < 0.2f ? Low : Normal;
+                    Color color = entry.Warning || fraction < 0.2f ? Low : Normal;   // red while the rack burns
+                    pill.Fill.Color.Base = color;
+                    pill.Fill.Image.color = color;
                 }
                 if (pill.Value != null)
                     pill.Value.Text = relative ? Mathf.RoundToInt(fraction * 100f).ToString(CultureInfo.InvariantCulture) + "%"
