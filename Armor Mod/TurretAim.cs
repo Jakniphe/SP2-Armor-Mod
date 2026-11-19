@@ -429,7 +429,17 @@ namespace ArmorFragments
         {
             if (!result || !Active) return;
             GameInputs inputs = GameInputs.Instance;
-            if (inputs != null && (ReferenceEquals(input, inputs.NextView) || ReferenceEquals(input, inputs.PreviousView))) result = false;
+            if (inputs == null) return;
+            // The right button toggles the game's "mouse as joystick" (a saved setting!): it is the zoom here.
+            if (ReferenceEquals(input, inputs.NextView) || ReferenceEquals(input, inputs.PreviousView) || ReferenceEquals(input, inputs.ToggleMouseJoystick))
+                result = false;
+        }
+
+        // Smoothstep between two edges (Mathf.SmoothStep is not that: it eases between two values by a 0..1 amount).
+        private static float Edge(float from, float to, float x)
+        {
+            float t = Mathf.Clamp01((x - from) / (to - from));
+            return t * t * (3f - 2f * t);
         }
 
         // Fire Weapons: the left mouse button, or the player's own button.
@@ -744,9 +754,9 @@ namespace ArmorFragments
         {
             DestroyHud();
             if (ringTexture == null)
-                ringTexture = MakeTexture(128, r => 1f - Mathf.SmoothStep(0.03f, 0.075f, Mathf.Abs(r - 0.88f)));
+                ringTexture = MakeTexture(128, r => 1f - Edge(0.03f, 0.075f, Mathf.Abs(r - 0.88f)));
             if (dotTexture == null)
-                dotTexture = MakeTexture(48, r => (1f - Mathf.SmoothStep(0.5f, 0.7f, r)) * 0.9f + (1f - Mathf.SmoothStep(0.86f, 0.95f, Mathf.Abs(r - 0.9f))) * 0.3f);
+                dotTexture = MakeTexture(48, r => (1f - Edge(0.5f, 0.7f, r)) * 0.9f + (1f - Edge(0.04f, 0.12f, Mathf.Abs(r - 0.86f))) * 0.3f);
 
             hudRoot = new GameObject("ArmorFragments turret aim");
             Canvas canvas = hudRoot.AddComponent<Canvas>();
