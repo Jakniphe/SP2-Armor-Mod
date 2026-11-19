@@ -1115,6 +1115,26 @@ namespace ArmorFragments
             }
         }
 
+        // A text box has the keyboard (the multiplayer chat, a field in the mod's panels or the designer): typing must not switch the aim on or off,
+        // fire, or change group. The game's own chat input is a TextMeshPro input field that the event system has selected while it is open.
+        private static bool TextFieldFocused()
+        {
+            try
+            {
+                UnityEngine.EventSystems.EventSystem events = UnityEngine.EventSystems.EventSystem.current;
+                GameObject selected = events != null ? events.currentSelectedGameObject : null;
+                if (selected == null || !selected.activeInHierarchy) return false;
+                TMPro.TMP_InputField field = selected.GetComponent<TMPro.TMP_InputField>();
+                if (field != null) return field.isFocused;
+                UnityEngine.UI.InputField legacy = selected.GetComponent<UnityEngine.UI.InputField>();
+                return legacy != null && legacy.isFocused;
+            }
+            catch (Exception)
+            {
+                return false;
+            }
+        }
+
         public static void Tick()
         {
             try
@@ -1128,7 +1148,7 @@ namespace ArmorFragments
                 if (keyboard != null)
                 {
                     Key key = ArmorFragmentsPlugin.TurretAimKey.Value;
-                    if (key != Key.None && keyboard[key].wasPressedThisFrame) Toggle();
+                    if (key != Key.None && keyboard[key].wasPressedThisFrame && !TextFieldFocused()) Toggle();
                 }
                 if (Active) Frame();
                 else if (Time.unscaledTime >= nextRepair)
@@ -1170,10 +1190,11 @@ namespace ArmorFragments
             Keyboard keyboard = Keyboard.current;
             Mouse mouse = Mouse.current;
             bool alt = keyboard != null && (keyboard.leftAltKey.isPressed || keyboard.rightAltKey.isPressed);
+            bool typing = TextFieldFocused();   // the chat (or any text box) has the keyboard: none of this code's keys act
             Key groupKey = ArmorFragmentsPlugin.TurretGroupKey.Value;
-            if (keyboard != null && groupKey != Key.None && groupIds.Count > 1 && keyboard[groupKey].wasPressedThisFrame) NextGroup(cm);
+            if (keyboard != null && !typing && groupKey != Key.None && groupIds.Count > 1 && keyboard[groupKey].wasPressedThisFrame) NextGroup(cm);
             Key sightKey = ArmorFragmentsPlugin.TurretSightKey.Value;
-            if (keyboard != null && sightKey != Key.None && keyboard[sightKey].wasPressedThisFrame)
+            if (keyboard != null && !typing && sightKey != Key.None && keyboard[sightKey].wasPressedThisFrame)
             {
                 if (sight) LeaveSight(cm);
                 else EnterSight(cm);
@@ -1200,7 +1221,7 @@ namespace ArmorFragments
             }
 
             Key lookKey = ArmorFragmentsPlugin.TurretLookKey.Value;
-            bool look = keyboard != null && lookKey != Key.None && keyboard[lookKey].isPressed;
+            bool look = keyboard != null && !typing && lookKey != Key.None && keyboard[lookKey].isPressed;
             InteractiveCameraController viewer = sight ? sightController : controller;   // the view C frees
             bool paused = PauseManager.Paused;
             bool free = alt || paused;
@@ -1280,7 +1301,7 @@ namespace ArmorFragments
                 : ArmorFragmentsPlugin.TurretFireMouseButton.Value == TurretFireMouse.Middle ? mouse.middleButton : mouse.leftButton;
             Key fireKeyCode = ArmorFragmentsPlugin.TurretFireKey.Value;
             fireMouse = canFire && fireButton != null && fireButton.isPressed;
-            fireKey = canFire && keyboard != null && fireKeyCode != Key.None && keyboard[fireKeyCode].isPressed;
+            fireKey = canFire && keyboard != null && !typing && fireKeyCode != Key.None && keyboard[fireKeyCode].isPressed;
             if (fireMouse || fireKey) FireGuns();
             FireAuto();   // the groups on automatic aim fire by themselves (the player's fire input does not matter to them)
 

@@ -94,6 +94,7 @@ namespace ArmorFragments
                     Rebuild();
                 }
                 Refresh();
+                KeepBehind();
             }
             catch (Exception e)
             {
@@ -133,6 +134,7 @@ namespace ArmorFragments
                 Widget layout = mainUi.Context.CreateWidget(BlockXml(i, group), mainUi, mainUi.Stylesheet);
                 if (layout == null) continue;
                 blocks.Add(layout);
+                layout.transform.SetAsFirstSibling();   // under the game's other menus
                 Pill pill = new Pill
                 {
                     Fill = layout.FindWidget<ImageWidget>(IdPrefix + "fill-" + i),
@@ -220,6 +222,20 @@ namespace ArmorFragments
         }
 
         // Each frame: the colors and texts, only touching the widgets when something changed.
+        // Drawn under the game's other menus: a widget made later sits above the earlier ones among its siblings, so each block is kept first.
+        private static float nextOrder;
+
+        private static void KeepBehind()
+        {
+            if (Time.unscaledTime < nextOrder) return;
+            nextOrder = Time.unscaledTime + 0.5f;
+            foreach (Widget block in blocks)
+            {
+                Transform t = block != null ? block.transform : null;
+                if (t != null && t.GetSiblingIndex() != 0) t.SetAsFirstSibling();
+            }
+        }
+
         private static void Refresh()
         {
             for (int i = 0; i < pills.Count && i < groups.Count; i++)

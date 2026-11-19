@@ -79,6 +79,7 @@ namespace ArmorFragments
                     Rebuild(scene, aircraft);
                 }
                 Refresh();
+                KeepBehind();
             }
             catch (Exception e)
             {
@@ -124,6 +125,7 @@ namespace ArmorFragments
                 };
                 if (pill.Name != null) pill.Name.Text = entry.Name;
                 widget.Clicked += OnClicked;
+                if (widget.transform != null) widget.transform.SetAsFirstSibling();   // under the game's other menus
                 pills.Add(pill);
             }
             parent = mainUi;
@@ -153,6 +155,20 @@ namespace ArmorFragments
         }
 
         // Each frame: the bar and the number, only touching the widgets when something changed.
+        // Drawn under the game's other menus: a widget made later sits above the earlier ones among its siblings, so each bar is kept first.
+        private static float nextOrder;
+
+        private static void KeepBehind()
+        {
+            if (Time.unscaledTime < nextOrder) return;
+            nextOrder = Time.unscaledTime + 0.5f;
+            foreach (Pill pill in pills)
+            {
+                Transform t = pill.Root != null ? pill.Root.transform : null;
+                if (t != null && t.GetSiblingIndex() != 0) t.SetAsFirstSibling();
+            }
+        }
+
         private static void Refresh()
         {
             bool relative = ArmorFragmentsPlugin.AmmoHudRelative.Value;
