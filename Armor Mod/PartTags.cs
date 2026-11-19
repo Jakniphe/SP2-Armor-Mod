@@ -92,6 +92,10 @@ namespace ArmorFragments
 
         // a: ids of the auxiliary cannons: the turrets they sit on are aimed at the same point at the same time as this cannon's own turret.
         public List<int> Aux = new List<int>();
+
+        // s: ids of the cannons of the turret group (this one and the auxiliary ones) that fire with the second fire input (a key) instead of the
+        // mouse button.
+        public List<int> Alt = new List<int>();
     }
 
     // A carving part (hole cutter): the walls of the holes it carves into armor blocks are plates of this thickness.
@@ -221,6 +225,7 @@ namespace ArmorFragments
                     {
                         Camera = values.TryGetValue("c", out camera) && camera >= 0f ? Mathf.RoundToInt(camera) : (int?)null,
                         Aux = ReadIds(ReadText(block.Groups[2].Value, "a")),
+                        Alt = ReadIds(ReadText(block.Groups[2].Value, "s")),
                     };
                 }
                 else if (kind == "CRW")
@@ -284,7 +289,7 @@ namespace ArmorFragments
                 Append(name, "[TUR]");
             if (tags.Pointer != null)
                 Append(name, "[PTR" + (tags.Pointer.Camera.HasValue ? " c=" + tags.Pointer.Camera.Value.ToString(CultureInfo.InvariantCulture) : "") +
-                       IdsPair(tags.Pointer.Aux, "a") + "]");
+                       IdsPair(tags.Pointer.Aux, "a") + IdsPair(tags.Pointer.Alt, "s") + "]");
 
             return name.Length == 0 ? fallback : name.ToString();
         }
@@ -302,13 +307,13 @@ namespace ArmorFragments
         }
 
         // The name with only the [PTR] block's c= (the sight camera's part id) and a= (the auxiliary cannons' ids) replaced; the rest is kept.
-        public static string WithPointerLinks(string name, int? camera, IList<int> aux)
+        public static string WithPointerLinks(string name, int? camera, IList<int> aux, IList<int> alt)
         {
             string text = name ?? "";
             Match block = PointerBlock.Match(text);
             if (!block.Success) return text;
-            string pairs = AuxPair.Replace(CameraPair.Replace(block.Groups[1].Value, ""), "") +
-                           (camera.HasValue ? " c=" + camera.Value.ToString(CultureInfo.InvariantCulture) : "") + IdsPair(aux, "a");
+            string pairs = AltPair.Replace(AuxPair.Replace(CameraPair.Replace(block.Groups[1].Value, ""), ""), "") +
+                           (camera.HasValue ? " c=" + camera.Value.ToString(CultureInfo.InvariantCulture) : "") + IdsPair(aux, "a") + IdsPair(alt, "s");
             return text.Substring(0, block.Index) + "[PTR" + pairs + "]" + text.Substring(block.Index + block.Length);
         }
 
@@ -316,12 +321,13 @@ namespace ArmorFragments
         public static string WithPointerCamera(string name, int? camera)
         {
             PointerTag pointer = ParseCopy(name).Pointer;
-            return WithPointerLinks(name, camera, pointer != null ? pointer.Aux : null);
+            return WithPointerLinks(name, camera, pointer != null ? pointer.Aux : null, pointer != null ? pointer.Alt : null);
         }
 
         private static readonly Regex PointerBlock = new Regex(@"\[PTR((?:\s+[a-z]+=[^\s\]]+)*)\s*\]");
         private static readonly Regex CameraPair = new Regex(@"\s+c=[^\s\]]+");
         private static readonly Regex AuxPair = new Regex(@"\s+a=[^\s\]]+");
+        private static readonly Regex AltPair = new Regex(@"\s+s=[^\s\]]+");
 
         private static readonly Regex CannonBlock = new Regex(@"\[CAN((?:\s+[a-z]+=[^\s\]]+)*)\s*\]");
         private static readonly Regex RacksPair = new Regex(@"\s+r=[^\s\]]+");

@@ -37,7 +37,14 @@ namespace ArmorFragments
                     if (keptAux != id) linksChanged = true;
                     if (!aux.Contains(keptAux)) aux.Add(keptAux);
                 }
-                if (linksChanged) SetName(part, TagCodec.WithPointerLinks(part.Name, camera, aux));
+                List<int> alt = new List<int>();
+                foreach (int id in pointer.Alt)
+                {
+                    int keptAlt = idMap.TryGetValue(id, out mapped) ? mapped : id;
+                    if (keptAlt != id) linksChanged = true;
+                    if (!alt.Contains(keptAlt)) alt.Add(keptAlt);
+                }
+                if (linksChanged) SetName(part, TagCodec.WithPointerLinks(part.Name, camera, aux, alt));
             }
 
             CannonTag cannon = TagCodec.Parse(part.Name).Cannon;
@@ -62,11 +69,13 @@ namespace ArmorFragments
             {
                 if (part == null) continue;
                 PointerTag pointer = TagCodec.Parse(part.Name).Pointer;
-                if (pointer != null && (pointer.Camera == removedId || pointer.Aux.Contains(removedId)))
+                if (pointer != null && (pointer.Camera == removedId || pointer.Aux.Contains(removedId) || pointer.Alt.Contains(removedId)))
                 {
                     List<int> aux = new List<int>(pointer.Aux);
                     aux.Remove(removedId);
-                    SetName(part, TagCodec.WithPointerLinks(part.Name, pointer.Camera == removedId ? null : pointer.Camera, aux));
+                    List<int> alt = new List<int>(pointer.Alt);
+                    alt.Remove(removedId);
+                    SetName(part, TagCodec.WithPointerLinks(part.Name, pointer.Camera == removedId ? null : pointer.Camera, aux, alt));
                 }
 
                 CannonTag cannon = TagCodec.Parse(part.Name).Cannon;

@@ -5,16 +5,20 @@ using Assets.Scripts.Craft.Parts;
 using Assets.Scripts.Craft.Parts.Modifiers;
 using Assets.Scripts.Craft.Parts.Modifiers.Weapons;
 using Assets.Scripts.Flight;
+using Assets.Scripts.Flight.Combat;
 using Assets.Scripts.Flight.Cameras;
 using Assets.Scripts.Input;
 using BepInEx.Configuration;
 using HarmonyLib;
 using UnityEngine;
 using UnityEngine.InputSystem;
+using UnityEngine.InputSystem.Controls;
 using UnityEngine.UI;
 
 namespace ArmorFragments
 {
+    internal enum TurretFireMouse { Left, Middle }
+
     // Mouse aim for turrets, in the style of War Thunder's third person view.
     //
     //  - Rotators marked [TUR] (the designer's "Turret" toggle) are turned by this code; cannons marked [PTR] ("Pointer" toggle)
@@ -58,6 +62,8 @@ namespace ArmorFragments
             public Rigidbody Hull;
             public Vector3 PreviousBarrel;
             public bool BarrelKnown;
+            public bool FiresByKey;    // fires with the fire key instead of the mouse button
+            public float NextFire;     // Time.time of the next shot
             public Vector3 Spin;       // the barrel's angular velocity (rad/s), smoothed
             public Vector3 HullSpin;   // the hull's angular velocity (rad/s), smoothed
         }
@@ -106,7 +112,7 @@ namespace ArmorFragments
         private static bool decoupled, returning;
         private static Vector2 savedRotation;
         private static float returnVelocityX, returnVelocityY, fovVelocity;
-        private static bool fireHeld;
+        private static bool fireMouse, fireKey;   // the two fire inputs, as read this frame
         private static float nextStatus;
 
         // ---- Access to the game's private members (looked up once) ----------------------------------------------
@@ -445,7 +451,6 @@ namespace ArmorFragments
                 }
 
                 craft = aircraft;
-                craft.Controls.SetInputOverride(GameInputs.Instance.FireWeapons, FireFunc);
                 TakePivot(controller as OrbitCameraController);
 
                 commands.Clear();
@@ -462,7 +467,7 @@ namespace ArmorFragments
                 stepFailed = false;
                 haveDesired = false;
                 decoupled = returning = false;
-                fireHeld = false;
+                fireMouse = fireKey = false;
                 fovVelocity = 0f;
                 atLimit = false;
                 errorDegrees = 0f;
@@ -489,6 +494,7 @@ namespace ArmorFragments
             sightScript = null;
             int sightId = -1;
             List<int> auxIds = new List<int>();
+            List<int> altIds = new List<int>();
             foreach (PartData data in aircraft.Aircraft.Assembly.Parts)
             {
                 PartScript part = data != null ? data.PartScript : null;
@@ -514,12 +520,13 @@ namespace ArmorFragments
                         pointers.Add(cannon);
                         if (sightId < 0 && tags.Pointer.Camera.HasValue) sightId = tags.Pointer.Camera.Value;
                         foreach (int id in tags.Pointer.Aux) if (!auxIds.Contains(id)) auxIds.Add(id);
+                        foreach (int id in tags.Pointer.Alt) if (!altIds.Contains(id)) altIds.Add(id);
                     }
                 }
             }
 
             // The guns: the pointer cannon first (found again at every step, since the first one may be lost), then the auxiliary ones.
-            guns.Add(new Gun());
+            guns.Add(new Gun { Cannon = pointers.Count > 0 ? pointers[0] : null });
             foreach (int id in auxIds)
             {
                 foreach (PartData data in aircraft.Aircraft.Assembly.Parts)
@@ -532,6 +539,8 @@ namespace ArmorFragments
                     break;
                 }
             }
+            foreach (Gun gun in guns)
+                gun.FiresByKey = gun.Cannon != null && gun.Cannon.PartScript != null && gun.Cannon.PartScript.Part != null && altIds.Contains(gun.Cannon.PartScript.Part.Id);
             foreach (Turret turret in turrets) turret.Signs = new float[guns.Count];
             if (sightId >= 0)
             {
@@ -551,17 +560,10 @@ namespace ArmorFragments
             // RELEASE-STRIP-BEGIN
             StopRecording();
             // RELEASE-STRIP-END
-            try
-            {
-                if (craft != null && craft.Controls != null && GameInputs.Instance != null)
-                    craft.Controls.SetInputOverride(GameInputs.Instance.FireWeapons, null);
-            }
-            catch (Exception) { }
-
             commands.Clear();
             calibration = null;
             haveDesired = false;
-            fireHeld = false;
+            fireMouse = fireKey = false;
             try
             {
                 if (sight && sightController != null)
@@ -824,7 +826,15 @@ namespace ArmorFragments
             else sensitivityRef(controller) = Mathf.Clamp(fov / Mathf.Max(baseFov, 1f), 0.08f, 1f);
 
             // Left button: fire (read by the override of the Fire Weapons input).
-            fireHeld = mouse != null && mouse.leftButton.isPressed && !free && !returning;
+            // The turret group's cannons are fired here, one by one, by the fire inputs: the game's own weapon selection is not used (see
+            // TurretGameFirePatch).
+            bool canFire = !free && !returning;
+            ButtonControl fireButton = mouse == null ? null
+                : ArmorFragmentsPlugin.TurretFireMouseButton.Value == TurretFireMouse.Middle ? mouse.middleButton : mouse.leftButton;
+            Key fireKeyCode = ArmorFragmentsPlugin.TurretFireKey.Value;
+            fireMouse = canFire && fireButton != null && fireButton.isPressed;
+            fireKey = canFire && keyboard != null && fireKeyCode != Key.None && keyboard[fireKeyCode].isPressed;
+            if (fireMouse || fireKey) FireGuns();
 
             // The wanted direction: from the cannon's muzzle to what the camera sees at the middle of the screen (the camera is behind and above the
             // gun, so the gun must aim from where it is, not parallel to the camera).
@@ -931,17 +941,39 @@ namespace ArmorFragments
             return t * t * (3f - 2f * t);
         }
 
-        // Fire Weapons: the left mouse button, or the player's own button.
-        private static float? FireFunc()
+        // Fires each cannon of the group whose input is held and whose own delay is over: the Firing Delay (stretched by the crew's load) and the
+        // game's checks (ammo, barrel clear of the last shell; a rack-fed cannon needs a round and a loader in its own patch of CannonScript.Fire).
+        private static void FireGuns()
         {
-            bool real = false;
-            try
+            float now = Time.time;
+            foreach (Gun gun in guns)
             {
-                GameInputs inputs = GameInputs.Instance;
-                real = inputs != null && inputs.FireWeapons.Enabled && inputs.FireWeapons.GetButton();
+                CannonScript cannon = gun.Cannon;
+                if (cannon == null || cannon.PartScript == null || !(gun.FiresByKey ? fireKey : fireMouse)) continue;
+                if (now < gun.NextFire) continue;
+                IWeapon weapon = cannon;
+                if (weapon.IsDestroyed || weapon.CurrentAmmo <= 0 || !cannon.CanFire || !AmmoRacks.CanFire(cannon)) continue;
+                try
+                {
+                    weapon.Fire(null);
+                    gun.NextFire = now + Mathf.Max(cannon.FiringDelay * Crew.ReloadFactor(cannon), 0.02f);
+                }
+                catch (Exception e)
+                {
+                    gun.NextFire = now + 1f;
+                    ArmorFragmentsPlugin.Log.LogWarning("Turret aim: a cannon could not fire: " + e.Message);
+                }
             }
-            catch (Exception) { }
-            return fireHeld || real ? 1f : 0f;
+        }
+
+        // While the aim is on, the game's weapon systems fire no cannon of this vehicle (the selection of the game is ignored: only the cannons
+        // of the turret group fire, by their own inputs).
+        internal static bool BlocksGameCannons(CannonWeaponSystem system)
+        {
+            if (!Active || craft == null || system == null) return false;
+            foreach (WeaponPart weapon in system.Weapons)
+                return weapon.Part != null && weapon.Part.Aircraft == craft;
+            return false;
         }
 
         // ---- The turret ------------------------------------------------------------------------------------------
@@ -1601,6 +1633,18 @@ namespace ArmorFragments
             {
                 GL.PopMatrix();
             }
+        }
+    }
+
+    // In mouse aim the turret group fires its own cannons (TurretAim.FireGuns); the game's weapon systems fire no cannon of the vehicle.
+    [HarmonyPatch(typeof(CannonWeaponSystem), "Fire")]
+    internal static class TurretGameFirePatch
+    {
+        private static bool Prefix(CannonWeaponSystem __instance, ref WeaponPart __result)
+        {
+            if (!TurretAim.BlocksGameCannons(__instance)) return true;
+            __result = null;
+            return false;
         }
     }
 

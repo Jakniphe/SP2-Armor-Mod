@@ -175,6 +175,8 @@ namespace ArmorFragments
         internal static ConfigEntry<float> TurretSightZoom;
         internal static ConfigEntry<float> TurretSightSensitivity;
         internal static ConfigEntry<bool> TurretCrosshairFlipY;
+        internal static ConfigEntry<TurretFireMouse> TurretFireMouseButton;
+        internal static ConfigEntry<UnityEngine.InputSystem.Key> TurretFireKey;
 
         // Crew ([CRW] seats, see Crew.cs).
         internal static ConfigEntry<bool> CrewEnabled;
@@ -327,6 +329,10 @@ namespace ArmorFragments
             TurretCameraHeight = Config.Bind("TurretAim", "PivotHeight", 0.5f,
                 new ConfigDescription("The point the camera turns around (where it sits at full zoom) is centered on the vehicle and this many meters above its highest point.",
                     new AcceptableValueRange<float>(0f, 10f)));
+            TurretFireMouseButton = Config.Bind("TurretAim", "FireMouseButton", TurretFireMouse.Left,
+                "In mouse aim, the mouse button that fires the cannons of the turret group that are not set to fire by key (Left or Middle; the right button is the zoom).");
+            TurretFireKey = Config.Bind("TurretAim", "FireKey", UnityEngine.InputSystem.Key.Space,
+                "In mouse aim, the key that fires the cannons of the turret group that are set to fire by key in the designer (Pointer > Fire by key). 'None' disables it.");
             TurretSightKey = Config.Bind("TurretAim", "SightKey", UnityEngine.InputSystem.Key.LeftShift,
                 "Press it to switch to the pointer cannon's sight camera (picked in the designer: Pointer > Pick sight camera) and back. 'None' disables it.");
             TurretSightZoom = Config.Bind("TurretAim", "SightZoom", 6f,

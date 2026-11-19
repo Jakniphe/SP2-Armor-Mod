@@ -608,6 +608,20 @@ namespace ArmorFragments.UI
                     if (tags.Pointer.Aux.Count > 0)
                         auxButtons.Add(new KeyValuePair<string, Action>("Remove auxiliary turret", () => PickAuxiliary(auxCannon, false)));
                     builder.Buttons(auxButtons);
+
+                    // Which fire input each turret of the group uses: the mouse button (off) or the key (on).
+                    builder.Toggle("Fire by key: " + SightLabel(part.Part),
+                        "In mouse aim this cannon fires with the fire key (Space by default) instead of the mouse button. Only the cannons of the group fire; the game's own weapon selection is ignored.",
+                        tags.Pointer.Alt.Contains(part.Part.Id),
+                        on => Switch(tags, () => SetFiresByKey(tags.Pointer, part.Part.Id, on)));
+                    foreach (PartData auxiliary in aux)
+                    {
+                        int auxiliaryId = auxiliary.Id;
+                        builder.Toggle("Fire by key: " + SightLabel(auxiliary) + " (aux.)",
+                            "In mouse aim this auxiliary cannon fires with the fire key (Space by default) instead of the mouse button.",
+                            tags.Pointer.Alt.Contains(auxiliaryId),
+                            on => Switch(tags, () => SetFiresByKey(tags.Pointer, auxiliaryId, on)));
+                    }
                 }
             }
         }
@@ -939,6 +953,13 @@ namespace ArmorFragments.UI
         {
             string label = TagCodec.Parse(camera.Name).Label;
             return string.IsNullOrEmpty(label) ? camera.PartType.Name : label;
+        }
+
+        private static void SetFiresByKey(PointerTag pointer, int id, bool byKey)
+        {
+            if (pointer == null) return;
+            pointer.Alt.Remove(id);
+            if (byKey) pointer.Alt.Add(id);
         }
 
         private static bool IsCannonPart(PartData candidate)

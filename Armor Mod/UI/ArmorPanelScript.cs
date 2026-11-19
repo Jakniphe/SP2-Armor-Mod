@@ -292,11 +292,19 @@ namespace ArmorFragments.UI
             Live("Aim key", () => TurretAim.KeyText(ArmorFragmentsPlugin.TurretAimKey));
             Live("Free look key", () => TurretAim.KeyText(ArmorFragmentsPlugin.TurretLookKey));
             Live("Sight key", () => TurretAim.KeyText(ArmorFragmentsPlugin.TurretSightKey));
+            Live("Fire mouse button", () => ArmorFragmentsPlugin.TurretFireMouseButton.Value.ToString());
+            Live("Fire key", () => TurretAim.KeyText(ArmorFragmentsPlugin.TurretFireKey));
             builder.Buttons(new List<KeyValuePair<string, Action>>
             {
                 new KeyValuePair<string, Action>("Change aim key", () => TurretAim.CaptureKey(ArmorFragmentsPlugin.TurretAimKey)),
                 new KeyValuePair<string, Action>("Change free look key", () => TurretAim.CaptureKey(ArmorFragmentsPlugin.TurretLookKey)),
                 new KeyValuePair<string, Action>("Change sight key", () => TurretAim.CaptureKey(ArmorFragmentsPlugin.TurretSightKey)),
+            });
+            builder.Buttons(new List<KeyValuePair<string, Action>>
+            {
+                new KeyValuePair<string, Action>("Change fire mouse button", () =>
+                    ArmorFragmentsPlugin.TurretFireMouseButton.Value = ArmorFragmentsPlugin.TurretFireMouseButton.Value == TurretFireMouse.Left ? TurretFireMouse.Middle : TurretFireMouse.Left),
+                new KeyValuePair<string, Action>("Change fire key", () => TurretAim.CaptureKey(ArmorFragmentsPlugin.TurretFireKey)),
             });
             FloatSetting(ArmorFragmentsPlugin.TurretZoom, "Zoom",
                 "How many times the right mouse button zooms in (held: gradually in, let go: gradually out).", 0.5f, " x");
