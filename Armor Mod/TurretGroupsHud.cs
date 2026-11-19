@@ -205,7 +205,7 @@ namespace ArmorFragments
             StringBuilder xml = new StringBuilder();
             xml.Append("<Empty id='" + IdPrefix + "block-" + i + "' anchor='BottomRight' position='-" + Number(RightMargin) + " " + Number(FirstBottom + i * BlockPitch) + "' width='" + Number(PillWidth) +
                        "' height='" + Number(BlockHeight) + "'>");
-            xml.Append("<Button id='" + IdPrefix + i + "' class='btn btn-flight' type='Simple' anchor='TopRight' position='0 0' width='" + Number(PillWidth) + "' height='" + Number(BarHeight) + "' mask='EnabledAndShown' tooltipPosition='Left' " +
+            xml.Append("<Button id='" + IdPrefix + i + "' class='btn btn-flight' anchor='TopRight' position='0 0' width='" + Number(PillWidth) + "' height='" + Number(BarHeight) + "' mask='EnabledAndShown' tooltipPosition='Left' " +
                        "tooltip='Turret group " + Escape(group.Name) + "\\nClick: control it with the mouse aim, or let it hold. Several groups can be controlled together.\\nHold Alt to free the cursor.'>" +
                        "<Image id='" + IdPrefix + "fill-" + i + "' sprite='@SpriteWhite' color='#28599E' type='Filled' fillMethod='Horizontal' fillAmount='0' />" +
                        "<Text id='" + IdPrefix + "name-" + i + "' fontSize='18' alignment='Left' color='White' margin-left='12' />" +
@@ -215,7 +215,7 @@ namespace ArmorFragments
                        "' childControlHeight='false' childControlWidth='false' childForceExpandHeight='false' childForceExpandWidth='false'>");
             for (int k = 0; k < 3; k++)
             {
-                xml.Append("<Button id='" + IdPrefix + "opt-" + i + "-" + k + "' class='btn btn-flight' type='Simple' anchor='BottomRight' width='" + Number(OptionWidth) + "' height='" + Number(OptionHeight) + "' mask='EnabledAndShown' " +
+                xml.Append("<Button id='" + IdPrefix + "opt-" + i + "-" + k + "' class='btn btn-flight' anchor='BottomRight' width='" + Number(OptionWidth) + "' height='" + Number(OptionHeight) + "' mask='EnabledAndShown' " +
                            "tooltipPosition='Left' tooltip='Automatic aim: " + OptionNames[k].ToLowerInvariant() + " targets\\nA click takes the group off the manual control and sets this mode (the aiming itself comes later); a click on the lit one turns it off.'>" +
                            "<Image id='" + IdPrefix + "optfill-" + i + "-" + k + "' sprite='@SpriteWhite' color='#28599E' type='Filled' fillMethod='Horizontal' fillAmount='0' />" +
                            OptionIconsXml(i, k) +
