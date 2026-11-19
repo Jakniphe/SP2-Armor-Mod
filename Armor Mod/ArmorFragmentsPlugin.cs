@@ -323,7 +323,7 @@ namespace ArmorFragments
             TurretSightKey = Config.Bind("TurretAim", "SightKey", UnityEngine.InputSystem.Key.LeftShift,
                 "Press it to switch to the pointer cannon's sight camera (picked in the designer: Pointer > Pick sight camera) and back. 'None' disables it.");
             TurretSightZoom = Config.Bind("TurretAim", "SightZoom", 6f,
-                new ConfigDescription("How many times the right mouse button zooms in through the sight.",
+                new ConfigDescription("How many times the right mouse button zooms in through the sight, on top of the zoom set with the mouse wheel.",
                     new AcceptableValueRange<float>(1.5f, 30f)));
             TurretSightSensitivity = Config.Bind("TurretAim", "SightSensitivity", 0.06f,
                 new ConfigDescription("Degrees the aim turns for each mouse count through the sight (less when zoomed in).",

@@ -253,6 +253,7 @@ namespace ArmorFragments
         private static CameraVantageScript sightScript;
         private static InteractiveCameraController sightController;
         private static bool sight;
+        private static float sightBase = -1f;   // the sight's normal field of view, set with the wheel (-1: the game's)
         private static string notice;
         private static float noticeUntil;
 
@@ -306,6 +307,13 @@ namespace ArmorFragments
         private static void LeaveSight(CameraManagerScript cm)
         {
             if (!sight) return;
+            // The sight view goes back to looking along the gun for next time.
+            if (sightController != null)
+            {
+                sightController.MouseLook = false;
+                rotationRef(sightController) = Vector2.zero;
+            }
+            decoupled = returning = false;
             sight = false;
             sightController = null;
             fovVelocity = 0f;
@@ -455,6 +463,15 @@ namespace ArmorFragments
             calibration = null;
             haveDesired = false;
             fireHeld = false;
+            try
+            {
+                if (sight && sightController != null)
+                {
+                    sightController.MouseLook = false;
+                    rotationRef(sightController) = Vector2.zero;
+                }
+            }
+            catch (Exception) { }
             sight = false;
             sightController = null;
             DestroyHud();
@@ -596,7 +613,8 @@ namespace ArmorFragments
             }
 
             Key lookKey = ArmorFragmentsPlugin.TurretLookKey.Value;
-            bool look = !sight && keyboard != null && lookKey != Key.None && keyboard[lookKey].isPressed;
+            bool look = keyboard != null && lookKey != Key.None && keyboard[lookKey].isPressed;
+            InteractiveCameraController viewer = sight ? sightController : controller;   // the view C frees
             bool paused = PauseManager.Paused;
             bool free = alt || paused;
 
@@ -606,7 +624,7 @@ namespace ArmorFragments
             {
                 decoupled = true;
                 returning = false;
-                savedRotation = rotationRef(controller);
+                savedRotation = sight ? Vector2.zero : rotationRef(controller);   // through the sight the view comes back to looking along the gun
             }
             else if (!look && decoupled && !returning)
             {
@@ -615,11 +633,11 @@ namespace ArmorFragments
             }
             if (returning)
             {
-                Vector2 current = rotationRef(controller);
+                Vector2 current = rotationRef(viewer);
                 float targetY = current.y + Mathf.DeltaAngle(current.y, savedRotation.y);
                 float x = Mathf.SmoothDamp(current.x, savedRotation.x, ref returnVelocityX, 0.3f);
                 float y = Mathf.SmoothDamp(current.y, targetY, ref returnVelocityY, 0.3f);
-                rotationRef(controller) = new Vector2(x, y);
+                rotationRef(viewer) = new Vector2(x, y);
                 if (Mathf.Abs(x - savedRotation.x) < 0.4f && Mathf.Abs(Mathf.DeltaAngle(y, savedRotation.y)) < 0.4f)
                 {
                     returning = false;
@@ -633,6 +651,10 @@ namespace ArmorFragments
             {
                 Cursor.lockState = alt ? CursorLockMode.None : CursorLockMode.Locked;
                 Cursor.visible = alt;
+                // Held C: the game's own mouse look turns the view about the sight camera (to look round the inside of the tank) while the turret
+                // keeps its aim. Otherwise the view stays on the gun and the mouse turns the aim.
+                bool wantLook = look && !returning && !alt;
+                if (sightController.MouseLook != wantLook) sightController.MouseLook = wantLook;
             }
             else
             {
@@ -643,11 +665,24 @@ namespace ArmorFragments
             // Right button: gradual zoom (and a slower mouse while zoomed, so the aim stays fine).
             float baseFov = cm.CurrentCameraFieldOfView;
             bool zoom = mouse != null && mouse.rightButton.isPressed && !free && !returning;
+            float restFov = baseFov;
+            if (sight)
+            {
+                // Through the sight the wheel sets the normal zoom (it stays), and the right button zooms in further while it is held.
+                if (sightBase <= 0f || sightBase > baseFov) sightBase = baseFov;
+                float wheel = mouse != null && !free ? mouse.scroll.ReadValue().y : 0f;
+                if (Mathf.Abs(wheel) > 0.01f) sightBase = Mathf.Clamp(sightBase * (wheel > 0f ? 0.85f : 1f / 0.85f), 2f, baseFov);
+                restFov = sightBase;
+            }
             float zoomTimes = sight ? ArmorFragmentsPlugin.TurretSightZoom.Value : ArmorFragmentsPlugin.TurretZoom.Value;
-            float targetFov = zoom ? Mathf.Max(baseFov / zoomTimes, 2f) : baseFov;
+            float targetFov = zoom ? Mathf.Max(restFov / zoomTimes, 2f) : restFov;
             float fov = Mathf.SmoothDamp(cam.fieldOfView, targetFov, ref fovVelocity, 0.35f, float.PositiveInfinity, Time.unscaledDeltaTime);
             cm.SetCameraFov(fov);
-            if (sight) fovTargetRef(sightController) = fov;   // the first-person view eases its own zoom toward this: keep it where it is
+            if (sight)
+            {
+                fovTargetRef(sightController) = fov;   // the first-person view eases its own zoom toward this: keep it where it is
+                sensitivityRef(sightController) = Mathf.Clamp(fov / Mathf.Max(baseFov, 1f), 0.03f, 1f);   // for the free look
+            }
             else sensitivityRef(controller) = Mathf.Clamp(fov / Mathf.Max(baseFov, 1f), 0.08f, 1f);
 
             // Left button: fire (read by the override of the Fire Weapons input).
@@ -660,7 +695,7 @@ namespace ArmorFragments
             {
                 // Through the sight the mouse turns the wanted direction itself (the sight camera sits on the gun, so it can't say where to aim):
                 // right turns it right and up turns it up, about the sight camera's own axes, less when zoomed in.
-                if (mouse != null && !free)
+                if (mouse != null && !free && !decoupled)
                 {
                     Vector2 delta = mouse.delta.ReadValue();
                     float degrees = ArmorFragmentsPlugin.TurretSightSensitivity.Value * Mathf.Clamp(fov / Mathf.Max(baseFov, 1f), 0.03f, 1f);
