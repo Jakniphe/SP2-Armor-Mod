@@ -173,7 +173,7 @@ namespace ArmorFragments
         internal static ConfigEntry<float> TurretDamping;
         internal static ConfigEntry<float> TurretDerivative;
         internal static ConfigEntry<bool> TurretFireOnTarget, TurretLineOfFire, TurretShareHull;
-        internal static ConfigEntry<float> TurretShareStrength;
+        internal static ConfigEntry<float> TurretShareStrength, TurretErrorFilter;
         internal static ConfigEntry<bool> TurretTestSingle;
         internal static ConfigEntry<float> TurretFireTolerance, TurretFireStagger, TurretMoveStagger;
         internal static ConfigEntry<UnityEngine.InputSystem.Key> TurretSightKey;
@@ -355,11 +355,15 @@ namespace ArmorFragments
             TurretTestSingle = Config.Bind("TurretAim", "TestOneTurret", false,
                 "For testing: in mouse aim only ONE turret of the active group is controlled and fires (the others hold where they are), so its behavior can be told apart from " +
                 "the effect of many turrets on one hull. The panel has < and > buttons to pick which one.");
-            TurretShareStrength = Config.Bind("TurretAim", "SharedHullStrength", 0.5f,
-                new ConfigDescription("How much SlowSharedHull slows each turret: the gain is divided by (the number of turrets in the group) to this power. 1 = divided by the number " +
-                    "(14 turrets: 14 times slower; the turrets stopped answering small errors), 0.5 = by its square root (14 turrets: 3.7 times), 0 = not at all. " +
-                    "A turret that swings still lowers its own gain, so a gentler value is safe.",
-                    new AcceptableValueRange<float>(0f, 1f)));
+            TurretShareStrength = Config.Bind("TurretAim", "SharedHullFullGain", 1.9f,
+                new ConfigDescription("With SlowSharedHull: how many turrets of the group can work at full gain on one hull. With more, each turret's gain is this number divided by the number " +
+                    "of turrets (14 turrets: 1.9 / 14 = a seventh of the gain). A model of 14 turrets on a ship (and a recording of one) put the limit of a steady aim at about " +
+                    "1 turn a second of gain for 14 turrets; fewer turrets can have more.",
+                    new AcceptableValueRange<float>(1f, 20f)));
+            TurretErrorFilter = Config.Bind("TurretAim", "ErrorFilterSeconds", 0.4f,
+                new ConfigDescription("When several turrets share a hull, the gap each one is closing is smoothed over this many seconds, so a hull that rocks (2 times a second) is not chased " +
+                    "by the turrets, which would rock it more. In the model it lets the gain be 4 times higher for the same steadiness. 0 = off. A single turret is never smoothed.",
+                    new AcceptableValueRange<float>(0f, 1.5f)));
             TurretFireOnTarget = Config.Bind("TurretAim", "FireOnlyOnTarget", true,
                 "In mouse aim, a turret fires only when its gun points within FireToleranceDegrees of where it should (the cursor). Turrets still turning, or stopped at their limit, hold fire while the others shoot.");
             TurretFireTolerance = Config.Bind("TurretAim", "FireToleranceDegrees", 2f,

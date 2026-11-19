@@ -329,8 +329,10 @@ namespace ArmorFragments.UI
             });
             ToggleSetting(ArmorFragmentsPlugin.TurretShareHull, "Slow turrets sharing a hull",
                 "Each turret's gain is divided by the number of turrets of the group on the same hull body: many turrets pushing one hull together made it rock. Off for turrets on a heavy hull that does not move.");
-            FloatSetting(ArmorFragmentsPlugin.TurretShareStrength, "Shared-hull slowing",
-                "How much turrets sharing a hull slow each other: the gain is divided by the number of turrets to this power (1 = by the number, 0.5 = by its square root, 0 = not at all).", 0.05f, "");
+            FloatSetting(ArmorFragmentsPlugin.TurretShareStrength, "Turrets at full gain per hull",
+                "How many turrets of the group can work at full gain on one hull; with more, each one's gain is this number divided by the number of turrets (14 turrets: a seventh).", 0.1f, "");
+            FloatSetting(ArmorFragmentsPlugin.TurretErrorFilter, "Gap smoothing (many turrets)",
+                "When several turrets share a hull, the gap each is closing is smoothed over this many seconds, so a rocking hull is not chased (which rocked it more). 0 = off. A single turret is never smoothed.", 0.05f, " s");
             ToggleSetting(ArmorFragmentsPlugin.TurretFireOnTarget, "Fire only turrets on target",
                 "A turret fires only when its gun points within the tolerance of the cursor. Turrets still turning, or stopped at their limit, hold fire while the others shoot.");
             FloatSetting(ArmorFragmentsPlugin.TurretFireTolerance, "On-target tolerance",

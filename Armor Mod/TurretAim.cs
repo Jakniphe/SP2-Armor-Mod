@@ -53,6 +53,8 @@ namespace ArmorFragments
             public float[] Signs;        // per gun: +1 / -1 the gun's barrel turns this way about Axis when the angle grows, 0 = does not move it
             public float[] Scales;       // per gun: how many degrees the barrel turns for a degree of the angle (measured; a bit under 1)
             public float[] Lags;         // per gun: how long (s) the barrel takes to follow the angle (measured; 0 = not known)
+            public float GapFilter;      // the smoothed gap this rotator is closing (radians), while several turrets share the hull
+            public bool GapFilterKnown;
             public bool Solo;            // the batch test could not place it: it is turned alone
             public HashSet<int> Expect;  // the guns it should move, from the way the bodies are joined (null = can't tell)
             public readonly List<float> HistoryTime = new List<float>();    // the angle the rotator had, step by step (the last second)
@@ -1515,7 +1517,7 @@ namespace ArmorFragments
 
             // Turrets on one hull body push it together: the more of them, the gentler each is (the hull rocked 5 degrees at 2 Hz in a recording of
             // 14 turrets, even with the ship on land, and a model fitted to it says the push grows with the number of turrets that turn at once).
-            float share = ArmorFragmentsPlugin.TurretShareHull.Value ? Mathf.Pow(Mathf.Max(1, gun.Share), -ArmorFragmentsPlugin.TurretShareStrength.Value) : 1f;
+            float share = ArmorFragmentsPlugin.TurretShareHull.Value ? Mathf.Min(1f, ArmorFragmentsPlugin.TurretShareStrength.Value / Mathf.Max(1, gun.Share)) : 1f;
             float baseGain = 1f - Mathf.Exp(-dt / Mathf.Max(ArmorFragmentsPlugin.TurretResponse.Value, 0.02f));
             // The hull rocking at 2 Hz (all the turrets on it pushing it and being pushed): a detector on the hull's own spin, which does not need
             // the cursor to be still (the ring detector below is switched off while the cursor moves, and the player moves it all the time).
@@ -1528,15 +1530,29 @@ namespace ArmorFragments
                 hullShake = WatchHull(gun.Hull, (float)hullRawSpin[strongest] * Mathf.Rad2Deg);
             }
             float gain = Mathf.Max(baseGain * share * gun.GainScale * hullShake, Mathf.Min(baseGain, MinimumGain));
+
+            // With several turrets on one hull, the gap each closes is smoothed: the hull rocks at about 2 Hz (as the barrel's gap does with it), the
+            // turrets cannot follow that and chasing it rocks the hull more (a model of 14 turrets: a gain of 2 a second rocks it for ever, and with
+            // the gap smoothed over 0.4 s the same gain is steady, for hull delays from 50 to 80 ms). One turret is never smoothed.
+            float smoothing = ArmorFragmentsPlugin.TurretErrorFilter.Value * Mathf.Clamp01((gun.Share - 1) / 3f);
+            float smoothingStep = smoothing > 0.001f ? 1f - Mathf.Exp(-dt / smoothing) : 1f;
             for (int i = 0; i < use.Count; i++)
             {
                 Turret turret = use[i];
+                float rawGap = (float)theta[i];
+                if (smoothing > 0.001f)
+                {
+                    turret.GapFilter = turret.GapFilterKnown ? turret.GapFilter + (rawGap - turret.GapFilter) * smoothingStep : rawGap;
+                    turret.GapFilterKnown = true;
+                }
+                else turret.GapFilterKnown = false;
+                float gapUsed = smoothing > 0.001f ? turret.GapFilter : rawGap;
                 float current = angleRef(turret.Script);
                 // A very small error asks for a very small step (gain x error), which the joint may not answer at all (friction, the game's own
                 // rounding): the turret then stops short of the cursor. So a step is never smaller than a hundredth of a degree, or the error
                 // itself when that is smaller (it never overshoots). It was a twentieth, which made every turret creep at 5 degrees a second
                 // all the time (fourteen of them shook the ship).
-                float step = ((float)theta[i] - brake * (float)speed[i]) * gain;
+                float step = (gapUsed - brake * (float)speed[i]) * gain;
                 float smallest = Mathf.Min(Mathf.Abs((float)theta[i]), 0.01f * Mathf.Deg2Rad);
                 if (brake <= 0f && Mathf.Abs(step) < smallest) step = Mathf.Sign((float)theta[i]) * smallest;
 
@@ -1545,7 +1561,10 @@ namespace ArmorFragments
                 // and the step goes the right way, a step is at least 0.02 degrees (2 degrees a second), or the gap itself when that is smaller.
                 // The gap is the settled one (what is still on its way is already taken off), so this ends where the gap does and does not creep.
                 float gap = (float)theta[i];
-                if (Mathf.Abs(gap) > SmallestGapDegrees * Mathf.Deg2Rad && Mathf.Sign(step) == Mathf.Sign(gap) && Mathf.Abs(step) < MicroStepDegrees * Mathf.Deg2Rad)
+                // Only when the turret has its hull to itself (or nearly): with many on a hull this step is a relay (always 2 degrees a second
+                // whichever way the gap points), and a relay on a rocking hull keeps it rocking (the recording of 14 turrets: the rings moved
+                // 0.3 degrees and the hull spun 23 degrees a second for as long as it lasted).
+                if (gun.Share <= 2 && Mathf.Abs(gap) > SmallestGapDegrees * Mathf.Deg2Rad && Mathf.Sign(step) == Mathf.Sign(gap) && Mathf.Abs(step) < MicroStepDegrees * Mathf.Deg2Rad)
                     step = Mathf.Sign(gap) * Mathf.Min(Mathf.Abs(gap), MicroStepDegrees * Mathf.Deg2Rad);
                 float target = current + turret.Signs[index] * (step + (float)hull[i] * dt * share) * Mathf.Rad2Deg;
                 if (!turret.Wraps)
@@ -1605,7 +1624,8 @@ namespace ArmorFragments
             text.AppendLine("Braking seconds (BrakingSeconds): " + ArmorFragmentsPlugin.TurretDerivative.Value);
             text.AppendLine("Damping seconds (DampingSeconds): " + ArmorFragmentsPlugin.TurretDamping.Value);
             text.AppendLine("Slow turrets sharing a hull (SlowSharedHull): " + ArmorFragmentsPlugin.TurretShareHull.Value);
-            text.AppendLine("Shared-hull strength (SharedHullStrength): " + ArmorFragmentsPlugin.TurretShareStrength.Value);
+            text.AppendLine("Turrets at full gain per hull (SharedHullFullGain): " + ArmorFragmentsPlugin.TurretShareStrength.Value);
+            text.AppendLine("Gap smoothing (ErrorFilterSeconds): " + ArmorFragmentsPlugin.TurretErrorFilter.Value);
             text.AppendLine("Turret start stagger (MoveStaggerSeconds): " + ArmorFragmentsPlugin.TurretMoveStagger.Value);
             text.AppendLine("Fire only on target (FireOnlyOnTarget): " + ArmorFragmentsPlugin.TurretFireOnTarget.Value + ", tolerance " + ArmorFragmentsPlugin.TurretFireTolerance.Value + " deg");
             text.AppendLine("Salvo ripple (FireStaggerSeconds): " + ArmorFragmentsPlugin.TurretFireStagger.Value);
