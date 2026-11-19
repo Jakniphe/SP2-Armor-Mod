@@ -303,13 +303,17 @@ namespace ArmorFragments.UI
             bool canCrew = Has<SeatData>() || tags.Crew != null;
             // Rotators (hinge, small rotator, rotator) can be turned by the crew's Aim job.
             bool canAim = Has<JointRotatorData>() || tags.Aim != null;
+            // The mouse aim turns rotators marked as turret and points the cannons marked as pointer (TurretAim.cs). A part of another kind already
+            // marked keeps its toggle, so the mark can be taken off.
+            bool canTurret = Has<JointRotatorData>() || tags.Turret != null;
+            bool canPointer = canCannon || tags.Pointer != null;
             // A hole cutter that cuts into armor can armor its holes' walls (a cutter already marked keeps its toggle,
             // so the mark can be taken off); one that cuts no armor shows nothing.
             builtIsCutter = Has<MeshModifierBaseData>();
             builtCutArmor = builtIsCutter ? ArmoredBlocksCut(part) : null;
             bool canHole = builtIsCutter && ((builtCutArmor != null && builtCutArmor.Count > 0) || tags.Hole != null);
 
-            if (!canArmor && !canCannon && !canModule && !canVent && !canCrew && !canAim && !canHole)
+            if (!canArmor && !canCannon && !canModule && !canVent && !canCrew && !canAim && !canHole && !canTurret && !canPointer)
             {
                 container.Visible = false;
                 return;
@@ -558,6 +562,22 @@ namespace ArmorFragments.UI
                         ? "100% (no crew)"
                         : CrewModel.Percent(CrewModel.JobEfficiency(seats, CrewJobs.Aim)));
                 }
+            }
+
+            if (canTurret)
+            {
+                builder.Toggle("Turret",
+                    "For a turret ring or gun elevation: in mouse aim (see the panel's Tools) this rotator turns by itself so that the pointer cannons point where the circle is on the screen.",
+                    tags.Turret != null,
+                    on => Switch(tags, () => tags.Turret = on ? new TurretTag() : null));
+            }
+
+            if (canPointer)
+            {
+                builder.Toggle("Pointer",
+                    "In mouse aim the turret turns until this cannon points where the circle is on the screen, and a small marker shows where it really points.",
+                    tags.Pointer != null,
+                    on => Switch(tags, () => tags.Pointer = on ? new PointerTag() : null));
             }
         }
 

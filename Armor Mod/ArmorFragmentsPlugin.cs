@@ -164,6 +164,12 @@ namespace ArmorFragments
         internal static ConfigEntry<bool> ShowRacksInDesigner;   // local: only changes what you see
         internal static ConfigEntry<bool> DebugDumpShape;        // local: diagnostic file
 
+        // Mouse aim for turrets (see TurretAim.cs). Local: only your own controls.
+        internal static ConfigEntry<UnityEngine.InputSystem.Key> TurretAimKey;
+        internal static ConfigEntry<UnityEngine.InputSystem.Key> TurretLookKey;
+        internal static ConfigEntry<float> TurretZoom;
+        internal static ConfigEntry<float> TurretResponse;
+
         // Crew ([CRW] seats, see Crew.cs).
         internal static ConfigEntry<bool> CrewEnabled;
         internal static ConfigEntry<float> CrewSwitchSeconds;
@@ -212,6 +218,7 @@ namespace ArmorFragments
             ImpactCamera.Tick(); PerfMonitor.Lap("ImpactCamera");
             PlateDamageMaps.Tick(); PerfMonitor.Lap("PlateDamageMaps");
             ImpactEffects.Tick(); PerfMonitor.Lap("ImpactEffects");
+            TurretAim.Tick(); PerfMonitor.Lap("TurretAim");
             PerfMonitor.End();
         }
 
@@ -297,6 +304,18 @@ namespace ArmorFragments
                 "Shows a small camera in the top right corner when a shell you fired hits another vehicle.");
             ImpactCameraKey = Config.Bind("ImpactCamera", "ToggleKey", UnityEngine.InputSystem.Key.F9,
                 "Key that switches the impact camera on and off. 'None' disables the key.");
+            TurretAimKey = Config.Bind("TurretAim", "ToggleKey", UnityEngine.InputSystem.Key.F7,
+                "Key that switches the mouse aim on and off (also the panel's Tools button). 'None' disables the key.");
+            TurretLookKey = Config.Bind("TurretAim", "LookKey", UnityEngine.InputSystem.Key.C,
+                "Hold it to free the camera from the turret: the turret keeps pointing where it was while you look around the vehicle; " +
+                "let go and the camera comes back. 'None' disables it.");
+            TurretZoom = Config.Bind("TurretAim", "Zoom", 4f,
+                new ConfigDescription("How many times the right mouse button zooms in (held: gradually in, let go: gradually out).",
+                    new AcceptableValueRange<float>(1.5f, 12f)));
+            TurretResponse = Config.Bind("TurretAim", "ResponseSeconds", 0.12f,
+                new ConfigDescription("How quickly the turret closes on the cursor, in seconds (the time the gap takes to shrink to a third). " +
+                    "Smaller is snappier; if the gun swings back and forth around the cursor, raise it.",
+                    new AcceptableValueRange<float>(0.03f, 1f)));
             ImpactCameraSwitchTargets = Config.Bind("ImpactCamera", "SwitchTargets", true,
                 "If true, hitting another vehicle while the camera is open moves it to that vehicle. If false it stays on the first one until it closes.");
             ShellLeadIn = Config.Bind("ImpactCamera", "LeadInDistance", 10f,

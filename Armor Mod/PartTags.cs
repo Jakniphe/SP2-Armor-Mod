@@ -76,6 +76,18 @@ namespace ArmorFragments
         public CrewTag Crew;
         public AimTag Aim;
         public HoleTag Hole;           // null = the walls of the holes this cutter carves are no armor
+        public TurretTag Turret;       // a rotator the mouse aim turns (see TurretAim.cs)
+        public PointerTag Pointer;     // a cannon the mouse aim points at the cursor, with its marker on the screen
+    }
+
+    // Rotator (turret ring, gun elevation) that the mouse aim turns so that the pointer cannons point at the cursor.
+    internal sealed class TurretTag
+    {
+    }
+
+    // Cannon the mouse aim points at the cursor; the screen shows where it really points.
+    internal sealed class PointerTag
+    {
     }
 
     // A carving part (hole cutter): the walls of the holes it carves into armor blocks are plates of this thickness.
@@ -125,7 +137,7 @@ namespace ArmorFragments
     {
         // [ARM t=20 h=100]   -> kind + a list of key=value pairs
         private static readonly Regex Block =
-            new Regex(@"\[(ARM|CAN|MOD|AMM|VNT|CRW|AIM|HOL)((?:\s+[a-z]+=[^\s\]]+)*)\s*\]");
+            new Regex(@"\[(ARM|CAN|MOD|AMM|VNT|CRW|AIM|HOL|TUR|PTR)((?:\s+[a-z]+=[^\s\]]+)*)\s*\]");
         private static readonly Regex Pair = new Regex(@"([a-z]+)=([^\s\]]+)");
         private static readonly Regex ExtraSpaces = new Regex(@"\s{2,}");
 
@@ -194,6 +206,14 @@ namespace ArmorFragments
                 {
                     tags.Hole = new HoleTag { Thickness = Get(values, "t", 20f) };
                 }
+                else if (kind == "TUR")
+                {
+                    tags.Turret = new TurretTag();
+                }
+                else if (kind == "PTR")
+                {
+                    tags.Pointer = new PointerTag();
+                }
                 else if (kind == "CRW")
                 {
                     tags.Crew = new CrewTag
@@ -251,6 +271,10 @@ namespace ArmorFragments
                 Append(name, "[AIM]");
             if (tags.Hole != null)
                 Append(name, "[HOL t=" + Number(tags.Hole.Thickness) + "]");
+            if (tags.Turret != null)
+                Append(name, "[TUR]");
+            if (tags.Pointer != null)
+                Append(name, "[PTR]");
 
             return name.Length == 0 ? fallback : name.ToString();
         }

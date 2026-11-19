@@ -474,10 +474,12 @@ namespace ArmorFragments.UI
         private void BuildTools()
         {
             builder.Header("Tools");
+            Live("Turret aim", () => TurretAim.Status);
             ToggleSetting(ArmorFragmentsPlugin.MirrorLogToGameConsole, "Log to game console",
                 "Also print this plugin's log lines to the game's developer console.");
             builder.Buttons(new List<KeyValuePair<string, Action>>
             {
+                new KeyValuePair<string, Action>("Turret mouse aim", TurretAim.Toggle),
                 new KeyValuePair<string, Action>("Reset to defaults", ResetToDefaults),
                 new KeyValuePair<string, Action>("Clear rays", ClearRays),
                 // RELEASE-STRIP-BEGIN
