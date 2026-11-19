@@ -423,6 +423,15 @@ namespace ArmorFragments
             return from + direction * Far;
         }
 
+        // While the aim is on, the game's keys that switch the camera view (C by default) do nothing: C is the free look key, and a view switch
+        // would end the aim. (CameraManagerScript.Update reads them with GetButtonDownIfEnabled.)
+        internal static void BlockViewKeys(object input, ref bool result)
+        {
+            if (!result || !Active) return;
+            GameInputs inputs = GameInputs.Instance;
+            if (inputs != null && (ReferenceEquals(input, inputs.NextView) || ReferenceEquals(input, inputs.PreviousView))) result = false;
+        }
+
         // Fire Weapons: the left mouse button, or the player's own button.
         private static float? FireFunc()
         {
@@ -789,6 +798,24 @@ namespace ArmorFragments
                 : atLimit ? new Color(1f, 0.3f, 0.25f, 0.95f)
                 : errorDegrees < 0.6f ? new Color(0.35f, 1f, 0.45f, 0.95f)
                 : new Color(1f, 0.8f, 0.25f, 0.95f);
+        }
+    }
+
+    [HarmonyPatch(typeof(GameInput), "GetButtonDownIfEnabled")]
+    internal static class TurretViewKeyPatch
+    {
+        private static void Postfix(GameInput __instance, ref bool __result)
+        {
+            TurretAim.BlockViewKeys(__instance, ref __result);
+        }
+    }
+
+    [HarmonyPatch(typeof(GameInput), "GetButtonDown")]
+    internal static class TurretViewKeyDownPatch
+    {
+        private static void Postfix(GameInput __instance, ref bool __result)
+        {
+            TurretAim.BlockViewKeys(__instance, ref __result);
         }
     }
 

@@ -304,11 +304,11 @@ namespace ArmorFragments
                 "Shows a small camera in the top right corner when a shell you fired hits another vehicle.");
             ImpactCameraKey = Config.Bind("ImpactCamera", "ToggleKey", UnityEngine.InputSystem.Key.F9,
                 "Key that switches the impact camera on and off. 'None' disables the key.");
-            TurretAimKey = Config.Bind("TurretAim", "ToggleKey", UnityEngine.InputSystem.Key.F10,
+            TurretAimKey = Config.Bind("TurretAim", "ToggleKey", UnityEngine.InputSystem.Key.Backspace,
                 "Key that switches the mouse aim on and off (also the panel's Tools button). 'None' disables the key.");
-            TurretLookKey = Config.Bind("TurretAim", "LookKey", UnityEngine.InputSystem.Key.Backspace,
+            TurretLookKey = Config.Bind("TurretAim", "LookKey", UnityEngine.InputSystem.Key.C,
                 "Hold it to free the camera from the turret: the turret keeps pointing where it was while you look around the vehicle; " +
-                "let go and the camera comes back. 'None' disables it. (The game's own keys, like C, switch the camera view, which ends the aim.)");
+                "let go and the camera comes back. 'None' disables it. While the aim is on, the game's view-switching keys do nothing.");
             TurretZoom = Config.Bind("TurretAim", "Zoom", 4f,
                 new ConfigDescription("How many times the right mouse button zooms in (held: gradually in, let go: gradually out).",
                     new AcceptableValueRange<float>(1.5f, 12f)));
