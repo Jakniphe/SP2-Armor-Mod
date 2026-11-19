@@ -92,6 +92,7 @@ namespace ArmorFragments
         private static System.Reflection.MethodInfo selectCamera;
         private static AccessTools.FieldRef<OrbitCameraController, Func<Transform>> orbitTargetRef;
         private static AccessTools.FieldRef<OrbitCameraController, bool> orbitCenterRef;
+        private static AccessTools.FieldRef<CameraManagerScript, OrbitCameraController> orbitCameraRef;
         private static AccessTools.FieldRef<CameraVantageScript, CameraController> vantageControllerRef;
         private static AccessTools.FieldRef<InteractiveCameraController, float> fovTargetRef;
         private static bool refsTried, refsOk, orbitRefsOk;
@@ -130,6 +131,7 @@ namespace ArmorFragments
             {
                 orbitTargetRef = AccessTools.FieldRefAccess<OrbitCameraController, Func<Transform>>("_targetTransform");
                 orbitCenterRef = AccessTools.FieldRefAccess<OrbitCameraController, bool>("_centerOnRigidBody");
+                orbitCameraRef = AccessTools.FieldRefAccess<CameraManagerScript, OrbitCameraController>("_orbitCamera");
                 orbitRefsOk = true;
             }
             catch (Exception e)
@@ -151,17 +153,23 @@ namespace ArmorFragments
         private static readonly List<Collider> bodyColliders = new List<Collider>();
         private static float nextColliders;
 
+        // What the camera's Update gets for one call: the game's own target and centering are put back at the end of the call.
+        internal sealed class PivotSwap
+        {
+            public Func<Transform> Target;
+            public bool Center;
+        }
+
+        private static Func<Transform> pivotTarget;
+
         private static void TakePivot(OrbitCameraController controllerToMove)
         {
             if (!orbitRefsOk || controllerToMove == null) return;
             orbit = controllerToMove;
-            originalTarget = orbitTargetRef(orbit);
-            originalCenter = orbitCenterRef(orbit);
             pivot = new GameObject("ArmorFragments turret camera pivot");
             pivot.transform.position = craft.transform.position;
             Transform pivotTransform = pivot.transform;
-            orbitTargetRef(orbit) = () => pivotTransform;
-            orbitCenterRef(orbit) = false;
+            pivotTarget = () => pivotTransform;
             nextColliders = 0f;
             pivotYKnown = false;
             UpdatePivot();
@@ -169,20 +177,50 @@ namespace ArmorFragments
 
         private static void ReleasePivot()
         {
-            try
-            {
-                if (orbit != null && orbitRefsOk)
-                {
-                    if (originalTarget != null) orbitTargetRef(orbit) = originalTarget;
-                    orbitCenterRef(orbit) = originalCenter;
-                }
-            }
-            catch (Exception) { }
             if (pivot != null) UnityEngine.Object.Destroy(pivot);
             pivot = null;
+            pivotTarget = null;
             orbit = null;
-            originalTarget = null;
             bodyColliders.Clear();
+        }
+
+        internal static PivotSwap SwapPivotIn(OrbitCameraController instance)
+        {
+            if (!Active || pivot == null || pivotTarget == null || !orbitRefsOk || instance != orbit) return null;
+            PivotSwap swap = new PivotSwap { Target = orbitTargetRef(instance), Center = orbitCenterRef(instance) };
+            orbitTargetRef(instance) = pivotTarget;
+            orbitCenterRef(instance) = false;
+            return swap;
+        }
+
+        internal static void SwapPivotOut(OrbitCameraController instance, PivotSwap swap)
+        {
+            if (swap == null || instance == null) return;
+            orbitTargetRef(instance) = swap.Target;
+            orbitCenterRef(instance) = swap.Center;
+        }
+
+        // An earlier copy of the plugin (before the pivot was swapped only for the duration of a call) replaced the orbit camera's target for
+        // good, and when it was reloaded without taking it back, the camera kept following a pivot that stayed where it was while the vehicle
+        // drove away. Whatever target comes from this plugin's code is put back as the game makes it: the main cockpit, centered on its body.
+        private static float nextRepair;
+
+        private static void RepairOrbitCamera(CameraManagerScript cm)
+        {
+            if (!orbitRefsOk || cm == null || orbitCameraRef == null) return;
+            OrbitCameraController found = orbitCameraRef(cm);
+            if (found == null) return;
+            Func<Transform> target = orbitTargetRef(found);
+            if (target == null || target.Method == null || target.Method.DeclaringType == null) return;
+            if (target.Method.DeclaringType.Assembly.GetName().Name != typeof(TurretAim).Assembly.GetName().Name) return;
+
+            FlightSceneScript scene = FlightSceneScript.Instance;
+            AircraftScript aircraft = scene != null && scene.LocalPlayer != null ? scene.LocalPlayer.Aircraft : null;
+            PartScript cockpit = aircraft != null ? aircraft.MainCockpit : null;
+            if (cockpit == null) return;
+            orbitTargetRef(found) = () => cockpit.transform;
+            orbitCenterRef(found) = true;
+            ArmorFragmentsPlugin.Log.LogInfo("Turret aim: the orbit camera was still following a pivot an earlier copy of the plugin left behind; it follows the vehicle again");
         }
 
         private static void UpdatePivot()
@@ -602,6 +640,11 @@ namespace ArmorFragments
                     if (key != Key.None && keyboard[key].wasPressedThisFrame) Toggle();
                 }
                 if (Active) Frame();
+                else if (Time.unscaledTime >= nextRepair)
+                {
+                    nextRepair = Time.unscaledTime + 2f;
+                    if (EnsureRefs()) RepairOrbitCamera(CameraManagerScript.Instance);
+                }
             }
             catch (Exception e)
             {
@@ -1363,6 +1406,52 @@ namespace ArmorFragments
             {
                 GL.PopMatrix();
             }
+        }
+    }
+
+    // The sight view turns the game's mouse look off, and its controller would then free the cursor every frame.
+    [HarmonyPatch(typeof(InteractiveCameraController), "UpdateCursor")]
+    internal static class TurretCursorPatch
+    {
+        private static bool Prefix(InteractiveCameraController __instance)
+        {
+            return !TurretAim.OwnsCursor(__instance);
+        }
+    }
+
+    // While the aim is on, the game's keys that switch the camera view (C by default) and the right button's mouse-joystick toggle do nothing.
+    [HarmonyPatch(typeof(GameInput), "GetButtonDownIfEnabled")]
+    internal static class TurretViewKeyPatch
+    {
+        private static void Postfix(GameInput __instance, ref bool __result)
+        {
+            TurretAim.BlockViewKeys(__instance, ref __result);
+        }
+    }
+
+    [HarmonyPatch(typeof(GameInput), "GetButtonDown")]
+    internal static class TurretViewKeyDownPatch
+    {
+        private static void Postfix(GameInput __instance, ref bool __result)
+        {
+            TurretAim.BlockViewKeys(__instance, ref __result);
+        }
+    }
+
+    // The orbit camera turns around the aim's own pivot while the aim is on. The swap lasts one call of the camera's Update and is undone at its
+    // end (also if it throws), so nothing stays changed in the game's camera when the aim is switched off or the plugin is reloaded.
+    [HarmonyPatch(typeof(OrbitCameraController), "Update")]
+    internal static class TurretPivotPatch
+    {
+        private static void Prefix(OrbitCameraController __instance, out TurretAim.PivotSwap __state)
+        {
+            __state = TurretAim.SwapPivotIn(__instance);
+        }
+
+        private static Exception Finalizer(Exception __exception, OrbitCameraController __instance, TurretAim.PivotSwap __state)
+        {
+            TurretAim.SwapPivotOut(__instance, __state);
+            return __exception;
         }
     }
 
