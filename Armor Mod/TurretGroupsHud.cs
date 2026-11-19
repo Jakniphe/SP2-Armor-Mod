@@ -12,14 +12,14 @@ namespace ArmorFragments
 {
     // The turret groups, on the flight screen (bottom right, above the game's row of buttons: recenter view, enter/exit, change view). For each
     // group two things, one above the other: a bar made like the game's own pills (the same classes and the same way the ammo bars are made,
-    // see AmmoHud.cs) and, right under it, three small buttons: Ground / Air / Both. They are made like the other pills of the flight screen:
+    // see AmmoHud.cs) and, right under it, two small buttons: Ground and Air (both lit together = both). They are made like the other pills of the flight screen:
     // dark and half transparent with rounded corners (the game's "btn btn-flight" look, clipped by the button's mask), and blue (the game's
     // primary color) when lit; there is no fill of their own while they are off.
     //   The bar: blue = the group follows the mouse aim now (or is on an automatic mode), dark = it holds. A click switches it (several groups
     //   can be controlled together, at least one stays).
-    //   The three buttons: the group's automatic aim (ground targets, air targets or both). They are put out (darker) while the group is
-    //   controlled by hand; a click on one takes the group off the manual control and sets it to that mode, and a click on the lit one turns it
-    //   off. Only the setting exists so far: the aiming itself comes later.
+    //   The two buttons: the group's automatic aim (ground targets, air targets, or both when both are lit). They are put out (darker) while the
+    //   group is controlled by hand; a click on one takes the group off the manual control and sets it to that alone, and after that each click
+    //   switches that option on or off (both off = the group holds). The bar then says what the group is shooting at.
     // Each group is one block (an empty container of a fixed size, 70 high) with the bar at its top and the options at its bottom, and the blocks
     // are stacked at a fixed pitch, so the groups never overlap each other whatever the buttons' own heights come out as. (A single vertical layout
     // holding everything was tried and the game did not draw it at all.) Only while the mouse aim is on. The cursor is locked in mouse aim: hold
@@ -30,31 +30,32 @@ namespace ArmorFragments
         private const float RightMargin = 15f;     // like the game's row of buttons (position "-15 15")
         private const float FirstBottom = 95f;     // above the row (50 high; 75 for the buttons that only show on a catapult or an elevator)
         private const float OptionHeight = 32f;     // as high as the bar: the button's corner radius then reads as the pills' rounded rectangle (24 high it was an oval)
-        private const float Gap = 4f;              // between the bar and its options, and between the three options
+        private const float Gap = 4f;              // between the two options
         private const float BarHeight = 32f;
         private const float BlockGap = 10f;        // between one group and the next
         private const float BlockHeight = BarHeight + 6f + OptionHeight;            // the container of one group
         private const float BlockPitch = BlockHeight + BlockGap;
         private const float PillWidth = 230f;
-        private const float OptionWidth = (PillWidth - 2f * Gap) / 3f;
+        private const float OptionWidth = (PillWidth - Gap) / 2f;
 
-        private static readonly string[] OptionNames = { "Ground", "Air", "Both" };
+        private static readonly string[] OptionNames = { "Ground", "Air" };
 
-        // The game's own sprites for the options (the paths used in its Xml): the checkered flag of the menu's Activities button for ground, the
-        // aircraft of the menu's Change craft button for air, and both of them side by side for both.
+        // The game's own sprites for the options (the paths used in its Xml): the checkered flag of the menu's Activities button for ground and the
+        // aircraft of the menu's Change craft button for air.
         private const string SpriteGround = "Sprites/Common/IconActivity";
         private const string SpriteAir = "Sprites/Flight/IconLoad";
         private const float IconSize = 22f;
-        private static readonly TurretAim.GroupAuto[] OptionModes = { TurretAim.GroupAuto.Ground, TurretAim.GroupAuto.Air, TurretAim.GroupAuto.Both };
+        private static readonly TurretAim.GroupAuto[] OptionModes = { TurretAim.GroupAuto.Ground, TurretAim.GroupAuto.Air };
 
         private sealed class Pill
         {
             public ImageWidget Fill;
             public TextWidget Name, State;
-            public ImageWidget[] OptionFill = new ImageWidget[3];
+            public ImageWidget[] OptionFill = new ImageWidget[2];
             public readonly List<ImageWidget> OptionIcons = new List<ImageWidget>();
             public int Group;
             public int Controlled = -1, Live = -1, OnTarget = -1, Total = -1, Blocked = -1, Auto = -1;
+            public string AutoText;
         }
 
         private static readonly List<Pill> pills = new List<Pill>();
@@ -143,14 +144,11 @@ namespace ArmorFragments
                 int id = group.Id;
                 Widget bar = layout.FindWidget(IdPrefix + i);
                 if (bar != null) bar.Clicked += w => TurretAim.ToggleGroup(id);
-                for (int k = 0; k < 3; k++)
+                for (int k = 0; k < 2; k++)
                 {
                     pill.OptionFill[k] = layout.FindWidget<ImageWidget>(IdPrefix + "optfill-" + i + "-" + k);
-                    for (int j = 0; j < 2; j++)
-                    {
-                        ImageWidget icon = layout.FindWidget<ImageWidget>(IdPrefix + "optico-" + i + "-" + k + "-" + j);
-                        if (icon != null) pill.OptionIcons.Add(icon);
-                    }
+                    ImageWidget icon = layout.FindWidget<ImageWidget>(IdPrefix + "optico-" + i + "-" + k);
+                    if (icon != null) pill.OptionIcons.Add(icon);
                     Widget button = layout.FindWidget(IdPrefix + "opt-" + i + "-" + k);
                     TurretAim.GroupAuto mode = OptionModes[k];
                     if (button != null) button.Clicked += w => TurretAim.SetAuto(id, mode);
@@ -186,20 +184,16 @@ namespace ArmorFragments
             return System.Security.SecurityElement.Escape(text ?? "");
         }
 
-        // The icon(s) of option k: ground = the flag, air = the aircraft, both = the two of them side by side.
+        // The icon of option k: ground = the flag, air = the aircraft.
         private static string OptionIconsXml(int i, int k)
         {
-            string id = IdPrefix + "optico-" + i + "-" + k + "-";
-            string size = " width='" + Number(IconSize) + "' height='" + Number(IconSize) + "' anchor='MiddleCenter' color='White' raycastTarget='false' ";
-            if (k == 0) return "<Image id='" + id + "0' sprite='" + SpriteGround + "'" + size + "/>";
-            if (k == 1) return "<Image id='" + id + "0' sprite='" + SpriteAir + "'" + size + "/>";
-            return "<Image id='" + id + "0' sprite='" + SpriteAir + "' position='-14 0'" + size + "/>" +
-                   "<Image id='" + id + "1' sprite='" + SpriteGround + "' position='14 0'" + size + "/>";
+            return "<Image id='" + IdPrefix + "optico-" + i + "-" + k + "' sprite='" + (k == 0 ? SpriteGround : SpriteAir) + "' width='" + Number(IconSize) + "' height='" + Number(IconSize) +
+                   "' anchor='MiddleCenter' color='White' raycastTarget='false' />";
         }
 
         // One group's block: an empty container anchored at the bottom right above the game's row of buttons, with the bar at its top (a rounded
         // button with its mask, a fill that is only shown while lit, and two texts: made like the fuel pill in Xml/Flight/FlightUI) and, at its
-        // bottom, the row of three options (a horizontal layout like the game's row of buttons).
+        // bottom, the row of two options (a horizontal layout like the game's row of buttons).
         private static XElement BlockXml(int i, TurretAim.GroupHud group)
         {
             StringBuilder xml = new StringBuilder();
@@ -213,10 +207,10 @@ namespace ArmorFragments
                        "</Button>");
             xml.Append("<HorizontalLayout anchor='BottomRight' position='0 0' childAlignment='LowerRight' sizeFitter='Horizontal' spacing='" + Number(Gap) +
                        "' childControlHeight='false' childControlWidth='false' childForceExpandHeight='false' childForceExpandWidth='false'>");
-            for (int k = 0; k < 3; k++)
+            for (int k = 0; k < 2; k++)
             {
                 xml.Append("<Button id='" + IdPrefix + "opt-" + i + "-" + k + "' class='btn btn-flight' anchor='BottomRight' width='" + Number(OptionWidth) + "' height='" + Number(OptionHeight) + "' mask='EnabledAndShown' " +
-                           "tooltipPosition='Left' tooltip='Automatic aim: " + OptionNames[k].ToLowerInvariant() + " targets\\nA click takes the group off the manual control and sets this mode (the aiming itself comes later); a click on the lit one turns it off.'>" +
+                           "tooltipPosition='Left' tooltip='Automatic aim at " + OptionNames[k].ToLowerInvariant() + " targets\\nThe group aims and fires by itself. A click takes a group off the manual control and sets just this; after that a click switches it on or off, and with both lit the group takes both kinds. A vehicle that belongs to a player counts as air above a set height or speed (see the panel).'>" +
                            "<Image id='" + IdPrefix + "optfill-" + i + "-" + k + "' sprite='@SpriteWhite' color='#28599E' type='Filled' fillMethod='Horizontal' fillAmount='0' />" +
                            OptionIconsXml(i, k) +
                            "</Button>");
@@ -234,13 +228,14 @@ namespace ArmorFragments
                 TurretAim.GroupHud group = groups[i];
                 int controlled = group.Controlled ? 1 : 0;
                 int auto = (int)group.Auto;
-                if (pill.Controlled == controlled && pill.Live == group.Live && pill.OnTarget == group.OnTarget && pill.Total == group.Total && pill.Blocked == group.Blocked && pill.Auto == auto) continue;
+                if (pill.Controlled == controlled && pill.Live == group.Live && pill.OnTarget == group.OnTarget && pill.Total == group.Total && pill.Blocked == group.Blocked && pill.Auto == auto && pill.AutoText == group.AutoText) continue;
                 pill.Controlled = controlled;
                 pill.Live = group.Live;
                 pill.OnTarget = group.OnTarget;
                 pill.Total = group.Total;
                 pill.Blocked = group.Blocked;
                 pill.Auto = auto;
+                pill.AutoText = group.AutoText;
 
                 bool automatic = !group.Controlled && group.Auto != TurretAim.GroupAuto.Off;
                 bool lit = group.Controlled || automatic;
@@ -256,17 +251,17 @@ namespace ArmorFragments
                     pill.State.Text = group.Live == 0 ? "destroyed"
                         : group.Controlled ? group.OnTarget.ToString(CultureInfo.InvariantCulture) + "/" + group.Live.ToString(CultureInfo.InvariantCulture) + " aimed" +
                                              (group.Blocked > 0 ? " (" + group.Blocked.ToString(CultureInfo.InvariantCulture) + " blocked)" : "")
-                        : automatic ? "auto " + group.Auto.ToString().ToLowerInvariant()
+                        : automatic ? (string.IsNullOrEmpty(group.AutoText) ? "auto" : group.AutoText)
                         : group.Live.ToString(CultureInfo.InvariantCulture) + " held";
                 }
 
-                // The options: the one the group has is blue; while the group is controlled by hand all three are put out (darkened); otherwise
+                // The options: the ones the group has are blue; while the group is controlled by hand both are put out (darkened); otherwise
                 // they have no fill (the button's own dark half-transparent look).
-                for (int k = 0; k < 3; k++)
+                for (int k = 0; k < 2; k++)
                 {
                     ImageWidget fill = pill.OptionFill[k];
                     if (fill == null) continue;
-                    bool active = !group.Controlled && group.Auto == OptionModes[k];
+                    bool active = !group.Controlled && (group.Auto & OptionModes[k]) != 0;
                     Color option = active ? Blue : PutOut;
                     fill.Color.Base = option;
                     fill.Image.color = option;

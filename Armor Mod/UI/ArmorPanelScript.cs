@@ -345,6 +345,23 @@ namespace ArmorFragments.UI
                 "A cannon does not fire while its barrel points at a part of its own vehicle within 20 meters.");
             FloatSetting(ArmorFragmentsPlugin.TurretMoveStagger, "Turret start stagger",
                 "The turrets of a group start following the cursor one after another, each this many seconds after the one before, so they don't all push the hull at once. 0 = together.", 0.005f, " s");
+            builder.Text("Automatic aim", "The Ground and Air buttons under a turret group's bar (with both lit the group takes both) make the group aim and fire by itself at the nearest target it can reach. A vehicle of a player counts as air above the height or speed below, otherwise as ground; the game's own NPC aircraft, ground vehicles and ships say what they are.");
+            ToggleSetting(ArmorFragmentsPlugin.TurretAutoFire, "Automatic groups fire",
+                "A group on automatic aim fires by itself, one cannon at a time, when its gun is on the target (within the on-target tolerance), clear of its own vehicle and the target is in range. Off: it only aims.");
+            FloatSetting(ArmorFragmentsPlugin.TurretAutoRange, "Automatic aim range",
+                "Targets further than this many meters from the group's lead turret are left alone.", 50f, " m");
+            ToggleSetting(ArmorFragmentsPlugin.TurretAutoLead, "Lead moving targets",
+                "Aim ahead of a moving target, allowing for the vehicle's own speed too. Off: aim at where the target is now.");
+            ToggleSetting(ArmorFragmentsPlugin.TurretAutoDrop, "Allow for shell drop",
+                "Aim above the target by as much as the shell falls on the way (gravity and the shell's drag, as the game's physics does it). Off: the barrel points straight at the target.");
+            ToggleSetting(ArmorFragmentsPlugin.TurretAutoClearView, "Only targets in clear view",
+                "Leave out targets hidden behind the ground, so the turrets don't shoot at a hill.");
+            ToggleSetting(ArmorFragmentsPlugin.TurretAutoSkipFriendly, "Skip friendly targets",
+                "Leave out targets of your own team and friendly NPCs. Off: every vehicle but your own is a target (also other players').");
+            FloatSetting(ArmorFragmentsPlugin.TurretAutoAirAgl, "Player vehicle is air above",
+                "A vehicle of a player higher than this above the ground counts as air (the game does not say what it is).", 1f, " m");
+            FloatSetting(ArmorFragmentsPlugin.TurretAutoAirSpeed, "Player vehicle is air above speed",
+                "A vehicle of a player faster than this and more than 3 meters above the ground counts as air, however low it flies.", 5f, " m/s");
             FloatSetting(ArmorFragmentsPlugin.TurretZoom, "Zoom",
                 "How many times the right mouse button zooms in (held: gradually in, let go: gradually out).", 0.5f, " x");
             FloatSetting(ArmorFragmentsPlugin.TurretSightZoom, "Sight zoom",

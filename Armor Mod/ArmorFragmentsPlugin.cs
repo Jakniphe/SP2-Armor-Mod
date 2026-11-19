@@ -177,6 +177,8 @@ namespace ArmorFragments
         internal static ConfigEntry<bool> TurretGroupsHudEnabled;
         internal static ConfigEntry<bool> TurretTestSingle;
         internal static ConfigEntry<float> TurretFireTolerance, TurretFireStagger, TurretMoveStagger;
+        internal static ConfigEntry<bool> TurretAutoFire, TurretAutoLead, TurretAutoDrop, TurretAutoClearView, TurretAutoSkipFriendly;
+        internal static ConfigEntry<float> TurretAutoRange, TurretAutoAirAgl, TurretAutoAirSpeed;
         internal static ConfigEntry<UnityEngine.InputSystem.Key> TurretSightKey;
         internal static ConfigEntry<float> TurretSightZoom;
         internal static ConfigEntry<float> TurretSightSensitivity;
@@ -381,7 +383,25 @@ namespace ArmorFragments
             TurretMoveStagger = Config.Bind("TurretAim", "MoveStaggerSeconds", 0.02f,
                 new ConfigDescription("The turrets of a group start following the cursor one after another, each this many seconds after the one before, so they don't all push the hull at the same instant. 0 = together.",
                     new AcceptableValueRange<float>(0f, 0.1f)));
-            TurretFireKey = Config.Bind("TurretAim", "FireKey", UnityEngine.InputSystem.Key.Space,
+            TurretAutoFire = Config.Bind("TurretAim", "AutoFire", true,
+                "A turret group on automatic aim (the Ground / Air buttons under its bar) also fires by itself at its target, one cannon at a time, when its gun points at it (FireToleranceDegrees), " +
+                "the line of fire is clear of its own vehicle and the target is within AutoRange. Off: the group only aims.");
+            TurretAutoRange = Config.Bind("TurretAim", "AutoRange", 2000f,
+                new ConfigDescription("Automatic aim only picks targets within this many meters of the group's lead turret.", new AcceptableValueRange<float>(100f, 6000f)));
+            TurretAutoLead = Config.Bind("TurretAim", "AutoLead", true,
+                "Automatic aim aims ahead of a moving target (and allows for the vehicle's own speed, which the shell has too). Off: it aims at where the target is now.");
+            TurretAutoDrop = Config.Bind("TurretAim", "AutoDrop", true,
+                "Automatic aim aims above the target by as much as the shell falls on the way (gravity and the shell's drag, flown like the game's physics does). Off: the barrel points straight at the target.");
+            TurretAutoClearView = Config.Bind("TurretAim", "AutoClearView", true,
+                "Automatic aim leaves out targets that are hidden behind the ground (the game's own occlusion layer), so the turrets don't shoot at a hill.");
+            TurretAutoSkipFriendly = Config.Bind("TurretAim", "AutoSkipFriendly", false,
+                "Automatic aim leaves out targets of your own team and friendly NPCs (the game's team rules). Off: only your own vehicle is left alone (every other player's vehicle is a target).");
+            TurretAutoAirAgl = Config.Bind("TurretAim", "AutoAirHeight", 12f,
+                new ConfigDescription("The game does not say whether a player's vehicle is a plane or a tank. One higher than this above the ground counts as air (for the Air button), otherwise as ground.",
+                    new AcceptableValueRange<float>(2f, 200f)));
+            TurretAutoAirSpeed = Config.Bind("TurretAim", "AutoAirSpeed", 70f,
+                new ConfigDescription("A player's vehicle faster than this (m/s) and more than 3 m above the ground counts as air, however low it flies.", new AcceptableValueRange<float>(10f, 400f)));
+            TurretFireKey = Config.Bind("TurretAim", "FireKey",UnityEngine.InputSystem.Key.Space,
                 "In mouse aim, the key that fires the cannons of the turret group that are set to fire by key in the designer (Pointer > Fire by key). 'None' disables it.");
             TurretSightKey = Config.Bind("TurretAim", "SightKey", UnityEngine.InputSystem.Key.LeftShift,
                 "Press it to switch to the pointer cannon's sight camera (picked in the designer: Pointer > Pick sight camera) and back. 'None' disables it.");

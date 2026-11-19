@@ -112,8 +112,10 @@ namespace ArmorFragments
             return groupNames.TryGetValue(id, out name) ? name : GroupNames.Default(id);
         }
 
-        // The automatic aim a group is set to (only the interface exists so far: the aiming comes later). A group that follows the mouse aim has none.
-        internal enum GroupAuto { Off, Ground, Air, Both }
+        // The automatic aim a group is set to: ground targets, air targets, or both (the two buttons lit together). A group that follows the mouse
+        // aim has none.
+        [Flags]
+        internal enum GroupAuto { Off = 0, Ground = 1, Air = 2, Both = 3 }
 
         private static readonly Dictionary<int, GroupAuto> autoModes = new Dictionary<int, GroupAuto>();
 
@@ -121,6 +123,46 @@ namespace ArmorFragments
         {
             GroupAuto mode;
             return autoModes.TryGetValue(id, out mode) ? mode : GroupAuto.Off;
+        }
+
+        // A group on automatic aim: its target, and where its barrels must point to hit it (worked out by AutoAim a few times a second; the
+        // turrets are turned toward it every physics step like toward the cursor).
+        private sealed class AutoState
+        {
+            public AutoTarget Target;           // null = nothing to shoot at
+            public bool Has;                    // Desired and Distance are a solution for Target
+            public Vector3 Desired;             // the lead turret's barrel direction
+            public float Distance;              // from the lead's muzzle to the virtual aim point: what the other turrets of the group aim at
+            public float TargetDistance, FlightTime;
+            public float NextScan, NextSolve, RetargetAt, Gate;
+            public int FireStart;
+            public List<Shooter> Shooters;      // the group's cannons (built the first time they are needed)
+            public readonly List<float> HistoryTime = new List<float>();             // where the aim pointed in the last second (for the staggered start)
+            public readonly List<Vector3> HistoryDirection = new List<Vector3>();
+        }
+
+        private static readonly Dictionary<int, AutoState> autoStates = new Dictionary<int, AutoState>();
+        private static readonly List<AutoTarget> scanBuffer = new List<AutoTarget>();
+
+        // The group is on automatic aim now (not controlled by hand; not while a single turret is under test).
+        private static bool IsAuto(int group)
+        {
+            return !controlled.Contains(group) && AutoModeOf(group) != GroupAuto.Off && !ArmorFragmentsPlugin.TurretTestSingle.Value;
+        }
+
+        private static Gun AutoLeadOf(int group)
+        {
+            foreach (Gun gun in guns)
+                if (gun.GroupId == group && Live(gun)) return gun;
+            return null;
+        }
+
+        // A turret is being aimed now: it follows the mouse aim, or its group is on automatic and has a target.
+        private static bool Engaged(Gun gun)
+        {
+            if (InActiveGroup(gun)) return true;
+            AutoState state;
+            return autoStates.TryGetValue(gun.GroupId, out state) && state.Has && IsAuto(gun.GroupId);
         }
         private static readonly HashSet<int> controlled = new HashSet<int>();   // the groups that follow the mouse aim now (the others hold)
         private static Gun sightGun;                    // the turret whose sight camera is the view now
@@ -634,6 +676,8 @@ namespace ArmorFragments
                 controlled.Clear();
                 controlled.Add(groupIds[0]);
                 autoModes.Clear();
+                autoStates.Clear();
+                AutoAim.Forget();
                 sightGun = null;
 
                 CameraManagerScript cm = CameraManagerScript.Instance;
@@ -784,6 +828,11 @@ namespace ArmorFragments
             hulls.Clear();
             desiredTime.Clear();
             desiredDirection.Clear();
+            foreach (AutoState state in autoStates.Values)
+            {
+                state.HistoryTime.Clear();
+                state.HistoryDirection.Clear();
+            }
         }
 
         // ---- The groups, for the flight screen (TurretGroupsHud) -------------------------------------------------------------------------
@@ -795,6 +844,21 @@ namespace ArmorFragments
             public GroupAuto Auto;
             public int Total, Live, OnTarget, Blocked;
             public bool Controlled;
+            public string AutoText;   // what a group on automatic is doing: "ground 850 m", "searching"
+        }
+
+        private static string RangeText(float meters)
+        {
+            return meters >= 1000f ? (meters / 1000f).ToString("F1", System.Globalization.CultureInfo.InvariantCulture) + " km"
+                                   : (Mathf.Round(meters / 10f) * 10f).ToString("F0", System.Globalization.CultureInfo.InvariantCulture) + " m";
+        }
+
+        private static string AutoTextOf(int id)
+        {
+            if (!calibrated) return "calibrating";
+            AutoState state;
+            if (!autoStates.TryGetValue(id, out state) || state.Target == null || !state.Has) return "searching";
+            return (state.Target.Air ? "air " : "ground ") + RangeText(state.TargetDistance);
         }
 
         private static float nextBlockedCheck;
@@ -810,7 +874,8 @@ namespace ArmorFragments
             }
             foreach (int id in groupIds)
             {
-                GroupHud group = new GroupHud { Id = id, Name = NameOf(id), Auto = AutoModeOf(id), Controlled = controlled.Contains(id) };
+                GroupHud group = new GroupHud { Id = id, Name = NameOf(id), Auto = AutoModeOf(id), Controlled = controlled.Contains(id), AutoText = "" };
+                if (!group.Controlled && group.Auto != GroupAuto.Off) group.AutoText = AutoTextOf(id);
                 foreach (Gun gun in guns)
                 {
                     if (gun.GroupId != id) continue;
@@ -824,13 +889,13 @@ namespace ArmorFragments
             }
         }
 
-        // A click on one of a group's three options (ground / air / both): the group leaves the manual control and is set to that automatic aim; a
-        // click on the option it already has takes it off (the group then holds). Only the setting for now: nothing aims automatically yet, so
-        // a group on automatic holds where it is. One group always stays under the mouse aim.
-        internal static void SetAuto(int id, GroupAuto mode)
+        // A click on one of a group's two options (ground, air; both lit together = both): a group that is controlled by hand leaves the manual
+        // control and is set to just that option; a group already on automatic has that option switched on or off (all off = the group holds).
+        // One group always stays under the mouse aim.
+        internal static void SetAuto(int id, GroupAuto option)
         {
             if (!Active || !groupIds.Contains(id)) return;
-            if (AutoModeOf(id) == mode) mode = GroupAuto.Off;
+            GroupAuto mode;
             if (controlled.Contains(id))
             {
                 if (controlled.Count <= 1)
@@ -842,10 +907,21 @@ namespace ArmorFragments
                 CameraManagerScript cm = CameraManagerScript.Instance;
                 if (sight && cm != null) LeaveSight(cm);
                 ResetControlState();
+                mode = option;
             }
+            else mode = AutoModeOf(id) ^ option;
             if (mode == GroupAuto.Off) autoModes.Remove(id); else autoModes[id] = mode;
-            Notice(NameOf(id) + ": " + (mode == GroupAuto.Off ? "held" : "automatic " + mode.ToString().ToLowerInvariant() + " (aiming not implemented yet)"));
-            ArmorFragmentsPlugin.Log.LogInfo("Turret aim: group " + NameOf(id) + " is now " + (mode == GroupAuto.Off ? "held" : "automatic " + mode));
+            AutoState state;
+            if (autoStates.TryGetValue(id, out state))
+            {
+                // A new mode looks for its target again at once.
+                state.Target = null;
+                state.Has = false;
+                state.NextScan = 0f;
+            }
+            string what = mode == GroupAuto.Off ? "held" : "automatic aim at " + (mode == GroupAuto.Both ? "ground and air targets" : mode == GroupAuto.Ground ? "ground targets" : "air targets");
+            Notice(NameOf(id) + ": " + what);
+            ArmorFragmentsPlugin.Log.LogInfo("Turret aim: group " + NameOf(id) + " is now " + what);
         }
 
         // A click on a group's bar: it joins the groups that follow the mouse aim, or leaves them (one group always stays controlled).
@@ -885,6 +961,7 @@ namespace ArmorFragments
             calibration = null;
             haveDesired = false;
             fireMouse = fireKey = false;
+            autoStates.Clear();
             try
             {
                 if (sight && sightController != null)
@@ -1166,6 +1243,7 @@ namespace ArmorFragments
             fireMouse = canFire && fireButton != null && fireButton.isPressed;
             fireKey = canFire && keyboard != null && fireKeyCode != Key.None && keyboard[fireKeyCode].isPressed;
             if (fireMouse || fireKey) FireGuns();
+            FireAuto();   // the groups on automatic aim fire by themselves (the player's fire input does not matter to them)
 
             // The wanted direction: from the cannon's muzzle to what the camera sees at the middle of the screen (the camera is behind and above the
             // gun, so the gun must aim from where it is, not parallel to the camera).
@@ -1346,6 +1424,11 @@ namespace ArmorFragments
             return calibrated && Time.fixedTime - owner.AimStamp < 0.25f && owner.AimError <= ArmorFragmentsPlugin.TurretFireTolerance.Value;
         }
 
+        private static bool OnTargetStrict(Gun owner)
+        {
+            return calibrated && Time.fixedTime - owner.AimStamp < 0.25f && owner.AimError <= ArmorFragmentsPlugin.TurretFireTolerance.Value;
+        }
+
         // Nothing of the cannon's own vehicle within a few meters in front of the muzzle (a turret's roof, another turret).
         private static bool LineClear(CannonScript cannon)
         {
@@ -1361,13 +1444,14 @@ namespace ArmorFragments
             return true;
         }
 
-        private static bool TryFire(CannonScript cannon, bool byKey, Gun owner, float now, ref float nextFire)
+        // 'automatic': a group on automatic aim fires without the fire input, and always only when on target.
+        private static bool TryFire(CannonScript cannon, bool byKey, Gun owner, float now, ref float nextFire, bool automatic = false)
         {
-            if (cannon == null || cannon.PartScript == null || !(byKey ? fireKey : fireMouse)) return false;
+            if (cannon == null || cannon.PartScript == null || (!automatic && !(byKey ? fireKey : fireMouse))) return false;
             if (now < nextFire) { refuseReload++; return false; }
             IWeapon weapon = cannon;
             if (weapon.IsDestroyed || weapon.CurrentAmmo <= 0 || !cannon.CanFire || !AmmoRacks.CanFire(cannon)) { refuseAmmo++; return false; }
-            if (!OnTarget(owner)) { refuseTarget++; return false; }
+            if (automatic ? !OnTargetStrict(owner) : !OnTarget(owner)) { refuseTarget++; return false; }
             if (!LineClear(cannon)) { refuseLine++; return false; }
             try
             {
@@ -1477,32 +1561,33 @@ namespace ArmorFragments
 
         private static bool aimIsMoving;   // the cursor moved more than a degree in the last 0.3 s: a gap that changes side is the cursor, not a swing
 
-        private static void RememberDesired(float now)
+        // (The history is the cursor's for the controlled groups and each automatic group's own for that group.)
+        private static void RememberDesired(List<float> times, List<Vector3> directions, Vector3 value, float now)
         {
-            desiredTime.Add(now);
-            desiredDirection.Add(desired);
+            times.Add(now);
+            directions.Add(value);
             int old = 0;
-            while (old < desiredTime.Count - 2 && now - desiredTime[old] > 1f) old++;
+            while (old < times.Count - 2 && now - times[old] > 1f) old++;
             if (old > 0)
             {
-                desiredTime.RemoveRange(0, old);
-                desiredDirection.RemoveRange(0, old);
+                times.RemoveRange(0, old);
+                directions.RemoveRange(0, old);
             }
         }
 
-        private static Vector3 DesiredAt(float time)
+        private static Vector3 DesiredAt(List<float> times, List<Vector3> directions, Vector3 fallback, float time)
         {
-            int n = desiredTime.Count;
-            if (n == 0) return desired;
-            if (time <= desiredTime[0]) return desiredDirection[0];
+            int n = times.Count;
+            if (n == 0) return fallback;
+            if (time <= times[0]) return directions[0];
             for (int i = n - 1; i > 0; i--)
             {
-                if (desiredTime[i - 1] > time) continue;
-                float span = desiredTime[i] - desiredTime[i - 1];
-                float f = span > 1e-6f ? Mathf.Clamp01((time - desiredTime[i - 1]) / span) : 1f;
-                return Vector3.Slerp(desiredDirection[i - 1], desiredDirection[i], f).normalized;
+                if (times[i - 1] > time) continue;
+                float span = times[i] - times[i - 1];
+                float f = span > 1e-6f ? Mathf.Clamp01((time - times[i - 1]) / span) : 1f;
+                return Vector3.Slerp(directions[i - 1], directions[i], f).normalized;
             }
-            return desiredDirection[0];
+            return directions[0];
         }
 
         private static void Step(float dt)
@@ -1516,16 +1601,6 @@ namespace ArmorFragments
                 Calibrate(dt);
                 return;
             }
-            if (!haveDesired)
-            {
-                HoldAll();
-                return;
-            }
-
-            // Every turret of the active group is turned toward the same point: the lead along the wanted direction, the others from where they are
-            // to the point the lead's line reaches at the aim distance. The rotators of the other groups keep their place.
-            Vector3 leadTip = lead.Cannon.TipPosition;
-            Vector3 aimPoint = leadTip + desired * aimDistance;
             HashSet<Turret> driven = new HashSet<Turret>();
             bool limit = false;
             float now = Time.fixedTime;
@@ -1536,28 +1611,61 @@ namespace ArmorFragments
                 recordCamera = recorded != null ? recorded.transform.position : Vector3.zero;
             }
             // RELEASE-STRIP-END
-            RememberDesired(now);
-            aimIsMoving = Vector3.Angle(desired, DesiredAt(now - 0.3f)) > 1f;
+
+            // The groups on automatic aim look for a target and work out where to point (a few times a second); the turrets then follow it the same
+            // way they follow the cursor.
+            UpdateAutoGroups(now);
+
+            // The turrets being aimed now (the controlled groups, and the groups on automatic that have a target) are on one vehicle, and the bodies
+            // of a vehicle are joined (in a recording of 14 turrets on a ship, 13 sat on one body and the lead on another joined to it: the lone one
+            // kept the full gain and was the only one that swung), so the share of the hull is all of them.
+            int share = 0;
+            foreach (Gun gun in guns)
+                if (Live(gun) && Engaged(gun)) share++;
+            foreach (Gun gun in guns)
+                if (Live(gun) && Engaged(gun)) gun.Share = Mathf.Max(1, share);
+
+            // Every turret of a set is turned toward the same point: the lead along the wanted direction, the others from where they are to the
+            // point the lead's line reaches at the aim distance. The sets: the controlled groups (the cursor), then each group on automatic (its
+            // target). The rotators of the groups that are held keep their place.
+            if (haveDesired)
+            {
+                RememberDesired(desiredTime, desiredDirection, desired, now);
+                aimIsMoving = Vector3.Angle(desired, DesiredAt(desiredTime, desiredDirection, desired, now - 0.3f)) > 1f;
+                StepSet(lead, -1, desired, aimDistance, desiredTime, desiredDirection, true, now, dt, driven, ref limit);
+            }
+            foreach (KeyValuePair<int, AutoState> pair in autoStates)
+            {
+                AutoState state = pair.Value;
+                if (!state.Has || !IsAuto(pair.Key)) continue;
+                Gun autoLead = AutoLeadOf(pair.Key);
+                if (autoLead == null) continue;
+                RememberDesired(state.HistoryTime, state.HistoryDirection, state.Desired, now);
+                aimIsMoving = Vector3.Angle(state.Desired, DesiredAt(state.HistoryTime, state.HistoryDirection, state.Desired, now - 0.3f)) > 1f;
+                StepSet(autoLead, pair.Key, state.Desired, state.Distance, state.HistoryTime, state.HistoryDirection, false, now, dt, driven, ref limit);
+            }
+
+            foreach (Turret turret in turrets)
+                if (!driven.Contains(turret) && turret.Script != null) commands[turret.Script] = angleRef(turret.Script);
+            atLimit = limit;
+        }
+
+        // One set of turrets aimed together: group -1 = the controlled groups (the cursor), otherwise the one group on automatic.
+        private static void StepSet(Gun setLead, int group, Vector3 wanted, float distance, List<float> historyTime, List<Vector3> historyDirection,
+                                    bool manual, float now, float dt, HashSet<Turret> driven, ref bool limit)
+        {
+            Vector3 leadTip = setLead.Cannon.TipPosition;
+            Vector3 aimPoint = leadTip + wanted * distance;
             float stagger = ArmorFragmentsPlugin.TurretMoveStagger.Value;
             int rank = 0;
-            foreach (Gun gun in guns)
-            {
-                if (!InActiveGroup(gun) || !Live(gun)) continue;
-                // The turrets of a group are on one vehicle, and the bodies of a vehicle are joined (in a recording of 14 turrets on a ship, 13
-                // sat on one body and the lead on another joined to it: the lone one kept the full gain and was the only one that swung).
-                int share = 0;
-                foreach (Gun other in guns)
-                    if (InActiveGroup(other) && Live(other)) share++;
-                gun.Share = Mathf.Max(1, share);
-            }
             for (int g = 0; g < guns.Count; g++)
             {
                 Gun gun = guns[g];
-                if (!InActiveGroup(gun) || !Live(gun)) continue;
+                if (!(group < 0 ? InActiveGroup(gun) : gun.GroupId == group) || !Live(gun)) continue;
 
-                // Where the gun should point, for judging whether it may fire: the cursor itself.
-                Vector3 want = desired;
-                if (gun != lead)
+                // Where the gun should point, for judging whether it may fire: the cursor (or the target's aim point) itself.
+                Vector3 want = wanted;
+                if (gun != setLead)
                 {
                     Vector3 toPoint = aimPoint - gun.Cannon.TipPosition;
                     if (toPoint.sqrMagnitude > 1f) want = toPoint.normalized;
@@ -1566,22 +1674,164 @@ namespace ArmorFragments
                 gun.AimError = Vector3.Angle(gun.Cannon.transform.forward, want);
                 gun.AimStamp = now;
 
-                // The turrets of a group start one after another: each follows the cursor as it was a few hundredths of a second earlier than the
+                // The turrets of a group start one after another: each follows the aim as it was a few hundredths of a second earlier than the
                 // one before it (the lead follows it live), so fourteen of them do not push the hull at the same instant.
-                int mine = gun == lead ? 0 : ++rank;
+                int mine = gun == setLead ? 0 : ++rank;
                 if (gun.Drivers.Count == 0) continue;
                 Vector3 follow = want;
                 if (stagger > 0f && mine > 0)
                 {
-                    Vector3 toPoint = leadTip + DesiredAt(now - mine * stagger) * aimDistance - gun.Cannon.TipPosition;
+                    Vector3 toPoint = leadTip + DesiredAt(historyTime, historyDirection, wanted, now - mine * stagger) * distance - gun.Cannon.TipPosition;
                     if (toPoint.sqrMagnitude > 1f) follow = toPoint.normalized;
                 }
-                StepGun(g, gun, gun == lead, follow, dt, driven, ref limit);
+                StepGun(g, gun, manual && gun == setLead, follow, dt, driven, ref limit);
+            }
+        }
+
+        // ---- Automatic aim ----------------------------------------------------------------------------------------------------
+
+        // For each group on automatic: keep its target, and every 0.05 s work out where its lead turret's barrel must point (AutoAim.Solve:
+        // the shell's flight, the target's motion). A target is looked for four times a second (the nearest the group's mode allows and the shell
+        // can reach), kept while it is valid, and changed for another only when that one is much nearer (and not more than once in 3 s).
+        private static void UpdateAutoGroups(float now)
+        {
+            bool lead = ArmorFragmentsPlugin.TurretAutoLead.Value, drop = ArmorFragmentsPlugin.TurretAutoDrop.Value;
+            foreach (int id in groupIds)
+            {
+                AutoState state;
+                if (!autoStates.TryGetValue(id, out state)) autoStates[id] = state = new AutoState();
+                Gun autoLead = IsAuto(id) ? AutoLeadOf(id) : null;
+                if (autoLead == null)
+                {
+                    if (state.Target != null || state.Has || state.HistoryTime.Count > 0)
+                    {
+                        state.Target = null;
+                        state.Has = false;
+                        state.HistoryTime.Clear();
+                        state.HistoryDirection.Clear();
+                    }
+                    continue;
+                }
+
+                Vector3 muzzle = autoLead.Cannon.TipPosition;
+                if (state.Target != null)
+                {
+                    Vector3 position, velocity;
+                    AircraftScript aircraft;
+                    if (AutoAim.Read(state.Target.Source, craft, out position, out velocity, out aircraft))
+                    {
+                        state.Target.Position = position;
+                        state.Target.Velocity = velocity;
+                    }
+                    else
+                    {
+                        state.Target = null;
+                        state.Has = false;
+                        state.NextScan = 0f;
+                    }
+                }
+                if (now >= state.NextScan)
+                {
+                    state.NextScan = now + 0.25f;
+                    ChooseTarget(id, state, autoLead, muzzle, lead, drop, now);
+                }
+                if (state.Target == null)
+                {
+                    state.Has = false;
+                    continue;
+                }
+                if (now >= state.NextSolve)
+                {
+                    state.NextSolve = now + 0.05f;
+                    AutoTarget target = state.Target;
+                    AimSolution solution = AutoAim.Solve(AutoAim.ShellOf(autoLead.Cannon, craft.Velocity), target.Position, target.Velocity, lead, drop);
+                    if (!solution.Ok)
+                    {
+                        state.Target = null;
+                        state.Has = false;
+                        state.NextScan = 0f;
+                        continue;
+                    }
+                    state.Has = true;
+                    state.Desired = solution.Direction;
+                    state.Distance = solution.Range;
+                    state.FlightTime = solution.FlightTime;
+                    state.TargetDistance = (target.Position - muzzle).magnitude;
+                }
+            }
+        }
+
+        private static void ChooseTarget(int id, AutoState state, Gun autoLead, Vector3 muzzle, bool lead, bool drop, float now)
+        {
+            AutoAim.Scan(craft, muzzle, AutoModeOf(id), scanBuffer);
+            ShellModel shell = AutoAim.ShellOf(autoLead.Cannon, craft.Velocity);
+
+            AutoTarget keep = null;
+            if (state.Target != null)
+                foreach (AutoTarget candidate in scanBuffer)
+                    if (candidate.Source == state.Target.Source) { keep = candidate; break; }
+            if (keep != null && !AutoAim.Solve(shell, keep.Position, keep.Velocity, lead, drop).Ok) keep = null;
+
+            AutoTarget best = null;
+            int tried = 0;
+            foreach (AutoTarget candidate in scanBuffer)
+            {
+                if (++tried > 6) break;   // the nearest few: the rest are further and the shell may not reach them either
+                if (AutoAim.Solve(shell, candidate.Position, candidate.Velocity, lead, drop).Ok) { best = candidate; break; }
             }
 
-            foreach (Turret turret in turrets)
-                if (!driven.Contains(turret) && turret.Script != null) commands[turret.Script] = angleRef(turret.Script);
-            atLimit = limit;
+            AutoTarget chosen = keep != null && (best == null || best == keep || best.Distance >= keep.Distance * 0.6f || now < state.RetargetAt) ? keep : best;
+            if (chosen != null && (state.Target == null || chosen.Source != state.Target.Source))
+            {
+                state.RetargetAt = now + 3f;
+                ArmorFragmentsPlugin.Log.LogInfo("Turret aim: group " + NameOf(id) + " now aims at '" + chosen.Name + "' (" + (chosen.Air ? "air" : "ground") + ", " +
+                                                 chosen.Distance.ToString("F0") + " m, " + chosen.Velocity.magnitude.ToString("F0") + " m/s)");
+            }
+            else if (chosen == null && state.Target != null)
+                ArmorFragmentsPlugin.Log.LogInfo("Turret aim: group " + NameOf(id) + " has no target now");
+            state.Target = chosen;
+            if (chosen == null) state.Has = false;
+        }
+
+        // The groups on automatic fire at their targets by themselves (AutoFire): a cannon at a time, when its barrel is within the tolerance of
+        // the aim (always required here, whatever FireOnlyOnTarget says: nothing shoots while still turning), clear of the vehicle, in range.
+        private static void FireAuto()
+        {
+            if (!ArmorFragmentsPlugin.TurretAutoFire.Value || PauseManager.Paused) return;
+            float now = Time.time;
+            float range = ArmorFragmentsPlugin.TurretAutoRange.Value;
+            float stagger = ArmorFragmentsPlugin.TurretFireStagger.Value;
+            foreach (KeyValuePair<int, AutoState> pair in autoStates)
+            {
+                AutoState state = pair.Value;
+                if (!state.Has || state.Target == null || !IsAuto(pair.Key) || state.TargetDistance > range) continue;
+                if (state.Shooters == null)
+                {
+                    state.Shooters = new List<Shooter>();
+                    foreach (Gun gun in guns)
+                    {
+                        if (gun.GroupId != pair.Key) continue;
+                        state.Shooters.Add(new Shooter { Cannon = gun.Cannon, ByKey = gun.FiresByKey, Owner = gun });
+                        foreach (FixedCannon fixedCannon in gun.FixedCannons)
+                            state.Shooters.Add(new Shooter { Cannon = fixedCannon.Cannon, ByKey = fixedCannon.ByKey, Owner = gun, Fixed = fixedCannon });
+                    }
+                }
+                int count = state.Shooters.Count;
+                if (count == 0) continue;
+                if (state.FireStart >= count) state.FireStart = 0;
+                for (int k = 0; k < count; k++)
+                {
+                    int index = (state.FireStart + k) % count;
+                    Shooter shooter = state.Shooters[index];
+                    if (!Live(shooter.Owner)) continue;
+                    if (stagger > 0f && now < state.Gate) break;
+                    bool fired = shooter.Fixed != null ? TryFire(shooter.Cannon, shooter.ByKey, shooter.Owner, now, ref shooter.Fixed.NextFire, true)
+                                                       : TryFire(shooter.Cannon, shooter.ByKey, shooter.Owner, now, ref shooter.Owner.NextFire, true);
+                    if (!fired) continue;
+                    state.FireStart = (index + 1) % count;
+                    if (stagger > 0f) state.Gate = now + stagger;
+                }
+            }
         }
 
         private static void StepGun(int index, Gun gun, bool isLead, Vector3 want, float dt, HashSet<Turret> driven, ref bool limit)
