@@ -65,6 +65,7 @@ namespace ArmorFragments.UI
                 BuildStatus();
                 BuildSimulation();
                 BuildMultiplayer();
+                BuildMouseAim();
                 BuildImpactCamera();
                 BuildXRayPerformance();
                 BuildEnergyModel();
@@ -272,6 +273,31 @@ namespace ArmorFragments.UI
                 "How much wider the cone is along the plane of incidence (1 = round).", 0.1f, "x");
         }
 
+        // Mouse aim for turrets (TurretAim.cs): rotators marked Turret and cannons marked Pointer in the designer follow the circle on the screen.
+        private void BuildMouseAim()
+        {
+            builder.Header("Mouse aim", collapsed: true);
+            Live("Status", () => TurretAim.Status);
+            builder.Buttons(new List<KeyValuePair<string, Action>>
+            {
+                new KeyValuePair<string, Action>("Mouse aim on / off", TurretAim.Toggle),
+            });
+            Live("Aim key", () => TurretAim.KeyText(ArmorFragmentsPlugin.TurretAimKey));
+            Live("Free look key", () => TurretAim.KeyText(ArmorFragmentsPlugin.TurretLookKey));
+            builder.Buttons(new List<KeyValuePair<string, Action>>
+            {
+                new KeyValuePair<string, Action>("Change aim key", () => TurretAim.CaptureKey(ArmorFragmentsPlugin.TurretAimKey)),
+                new KeyValuePair<string, Action>("Change free look key", () => TurretAim.CaptureKey(ArmorFragmentsPlugin.TurretLookKey)),
+            });
+            FloatSetting(ArmorFragmentsPlugin.TurretZoom, "Zoom",
+                "How many times the right mouse button zooms in (held: gradually in, let go: gradually out).", 0.5f, " x");
+            FloatSetting(ArmorFragmentsPlugin.TurretResponse, "Turret response",
+                "Seconds the turret takes to close the gap to the circle. Smaller is snappier; if the gun swings back and forth around the circle, raise it.", 0.01f, " s");
+            FloatSetting(ArmorFragmentsPlugin.TurretCameraHeight, "Camera pivot height",
+                "The point the camera turns around (where it sits at full zoom) is centered on the vehicle and this many meters above its highest point.", 0.1f, " m");
+            builder.Text("How to", "Designer: Turret on the rotators, Pointer on the cannon. Alt: cursor. Free look key: orbit the camera. Right: zoom. Left: fire.");
+        }
+
         private void BuildImpactCamera()
         {
             builder.Header("Impact camera", collapsed: true);
@@ -474,12 +500,10 @@ namespace ArmorFragments.UI
         private void BuildTools()
         {
             builder.Header("Tools");
-            Live("Turret aim", () => TurretAim.Status);
             ToggleSetting(ArmorFragmentsPlugin.MirrorLogToGameConsole, "Log to game console",
                 "Also print this plugin's log lines to the game's developer console.");
             builder.Buttons(new List<KeyValuePair<string, Action>>
             {
-                new KeyValuePair<string, Action>("Turret mouse aim", TurretAim.Toggle),
                 new KeyValuePair<string, Action>("Reset to defaults", ResetToDefaults),
                 new KeyValuePair<string, Action>("Clear rays", ClearRays),
                 // RELEASE-STRIP-BEGIN

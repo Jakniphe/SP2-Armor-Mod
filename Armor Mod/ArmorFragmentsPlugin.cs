@@ -313,7 +313,7 @@ namespace ArmorFragments
             TurretZoom = Config.Bind("TurretAim", "Zoom", 4f,
                 new ConfigDescription("How many times the right mouse button zooms in (held: gradually in, let go: gradually out).",
                     new AcceptableValueRange<float>(1.5f, 12f)));
-            TurretCameraHeight = Config.Bind("TurretAim", "CameraHeight", 1f,
+            TurretCameraHeight = Config.Bind("TurretAim", "PivotHeight", 0.5f,
                 new ConfigDescription("The point the camera turns around (where it sits at full zoom) is centered on the vehicle and this many meters above its highest point.",
                     new AcceptableValueRange<float>(0f, 10f)));
             TurretResponse = Config.Bind("TurretAim", "ResponseSeconds", 0.12f,

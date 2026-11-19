@@ -7,6 +7,7 @@ using Assets.Scripts.Craft.Parts.Modifiers.Weapons;
 using Assets.Scripts.Flight;
 using Assets.Scripts.Flight.Cameras;
 using Assets.Scripts.Input;
+using BepInEx.Configuration;
 using HarmonyLib;
 using UnityEngine;
 using UnityEngine.InputSystem;
@@ -364,11 +365,46 @@ namespace ArmorFragments
 
         // ---- Every frame ----------------------------------------------------------------------------------------
 
+        // ---- Changing a key from the panel: the next key pressed is the new one (Escape cancels) --------------------
+
+        private static ConfigEntry<Key> capturing;
+
+        public static void CaptureKey(ConfigEntry<Key> entry)
+        {
+            capturing = entry;
+        }
+
+        public static string KeyText(ConfigEntry<Key> entry)
+        {
+            return capturing == entry ? "Press the new key... (Esc cancels)" : entry.Value.ToString();
+        }
+
+        private static void TickCapture(Keyboard keyboard)
+        {
+            if (keyboard == null) return;
+            foreach (UnityEngine.InputSystem.Controls.KeyControl control in keyboard.allKeys)
+            {
+                if (!control.wasPressedThisFrame) continue;
+                if (control.keyCode != Key.Escape)
+                {
+                    capturing.Value = control.keyCode;
+                    ArmorFragmentsPlugin.Log.LogInfo("Turret aim: " + capturing.Definition.Key + " is now " + control.keyCode);
+                }
+                capturing = null;
+                return;
+            }
+        }
+
         public static void Tick()
         {
             try
             {
                 Keyboard keyboard = Keyboard.current;
+                if (capturing != null)
+                {
+                    TickCapture(keyboard);
+                    return;
+                }
                 if (keyboard != null)
                 {
                     Key key = ArmorFragmentsPlugin.TurretAimKey.Value;
