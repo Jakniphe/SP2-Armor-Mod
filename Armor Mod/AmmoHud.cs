@@ -21,6 +21,8 @@ namespace ArmorFragments
         private const float FirstBottom = 105f;    // above the fire buttons (75 high)
         private const float Spacing = 40f;         // a bar is 32 high
         private const float PillWidth = 215f;
+        private const float ClickLength = 0.18f;   // seconds, for shots that are not close together
+        private const float ClickDepth = 0.07f;    // how much the button shrinks
 
         private sealed class Pill
         {
@@ -33,8 +35,7 @@ namespace ArmorFragments
             public int Start = -1;
             public bool Relative;
             public bool Warning;
-            public float ReleaseAt;   // when the "pressed" look of a shot ends
-            public string Pressed;    // the class that gives it
+            public float PulseStart, PulseLength, LastShot = -10f;   // the click of a shot
         }
 
         private static readonly List<Pill> pills = new List<Pill>();
@@ -160,21 +161,29 @@ namespace ArmorFragments
                 Pill pill = pills[i];
                 AmmoRacks.RackHud entry = racks[i];
 
-                // A shot out of the rack: the button plays its click animation (the game's pressed look, for a moment).
-                if (pill.Pressed != null && Time.unscaledTime >= pill.ReleaseAt)
+                // A shot out of the rack: the button plays a click (it dips and comes back). A slow rate plays it at the usual length; a fast one
+                // plays it faster, so that it always finishes before the next shot.
+                float now = Time.unscaledTime;
+                if (pill.PulseLength > 0f)
                 {
-                    pill.Root.RemoveClass(pill.Pressed);
-                    pill.Pressed = null;
-                }
-                if (pill.Rounds >= 0 && entry.Rounds < pill.Rounds && !entry.Warning && pill.Pressed == null)
-                {
-                    string press = pill.Root.PressClass;
-                    if (!string.IsNullOrEmpty(press))
+                    float t = (now - pill.PulseStart) / pill.PulseLength;
+                    if (t >= 1f)
                     {
-                        pill.Root.AddClass(press);
-                        pill.Pressed = press;
-                        pill.ReleaseAt = Time.unscaledTime + 0.12f;
+                        pill.PulseLength = 0f;
+                        pill.Root.Rect.localScale = Vector3.one;
                     }
+                    else
+                    {
+                        float scale = 1f - ClickDepth * Mathf.Sin(Mathf.PI * t);
+                        pill.Root.Rect.localScale = new Vector3(scale, scale, 1f);
+                    }
+                }
+                if (pill.Rounds >= 0 && entry.Rounds < pill.Rounds && !entry.Warning)
+                {
+                    float gap = now - pill.LastShot;
+                    pill.LastShot = now;
+                    pill.PulseStart = now;
+                    pill.PulseLength = gap < ClickLength / 0.9f ? Mathf.Max(gap * 0.9f, 0.03f) : ClickLength;
                 }
 
                 if (pill.Rounds == entry.Rounds && pill.Start == entry.Start && pill.Relative == relative && pill.Warning == entry.Warning) continue;
