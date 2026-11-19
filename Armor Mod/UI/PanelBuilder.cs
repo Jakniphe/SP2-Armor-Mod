@@ -65,6 +65,31 @@ namespace ArmorFragments.UI
             return control;
         }
 
+        // A row with a label and a box where text can be typed (the game's own "control-spinner-input-label" with a plain text box). changed runs
+        // when the typing is finished (Enter, or the box loses the focus), with the text as typed.
+        public TMPro.TMP_InputField TextInput(string label, string tooltip, string value, int maxLength, Action<string> changed)
+        {
+            List<XAttribute> attributes = new List<XAttribute>
+            {
+                new XAttribute("label", label),
+                new XAttribute("contentType", "Standard"),
+                new XAttribute("placeholderText", "Enter a name..."),
+            };
+            if (!string.IsNullOrEmpty(tooltip)) attributes.Add(new XAttribute("tooltip", tooltip));
+            Widget row = Parent.Context.CreateWidgetFromTemplate("control-spinner-input-label", Parent, attributes);
+            TMPro.TMP_InputField field = row != null ? row.GetComponentInChildren<TMPro.TMP_InputField>(true) : null;
+            if (field == null) return null;
+            field.text = value ?? "";
+            field.characterLimit = maxLength;
+            string typedFrom = field.text;
+            field.onSelect.AddListener(text => typedFrom = field.text);
+            field.onEndEdit.AddListener(text =>
+            {
+                if (text != typedFrom) Run(() => changed(text));
+            });
+            return field;
+        }
+
         // The game's slider with a box beside it where the value can be typed in (as on its fuselage shape panel).
         // steps: how many positions the slider has (0 = smooth). format: the number in the box; unit: shown after it.
         // changed: while dragging or typing. released: when the mouse is let go, or the typing is done.

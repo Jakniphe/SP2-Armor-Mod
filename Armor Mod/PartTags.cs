@@ -90,6 +90,7 @@ namespace ArmorFragments
     internal sealed class PointerTag
     {
         public int Group = 1;   // g: the turret group's number (turrets with the same number are one group)
+        public string Name;     // n: the group's name (letters, digits, _ - . ; null = the one its number gives, see GroupNames)
         public int? Camera;     // c: id of the camera part used as this turret's optical sight (none = no sight)
         public bool ByKey;      // f: fires with the fire key instead of the mouse button
 
@@ -224,6 +225,7 @@ namespace ArmorFragments
                     tags.Pointer = new PointerTag
                     {
                         Group = values.TryGetValue("g", out group) && group >= 1f ? Mathf.RoundToInt(group) : 1,
+                        Name = GroupNames.Clean(ReadText(block.Groups[2].Value, "n")),
                         Camera = values.TryGetValue("c", out camera) && camera >= 0f ? Mathf.RoundToInt(camera) : (int?)null,
                         ByKey = values.TryGetValue("f", out byKey) && byKey > 0f,
                         Fixed = ReadIds(ReadText(block.Groups[2].Value, "x")),
@@ -291,6 +293,7 @@ namespace ArmorFragments
                 Append(name, "[TUR]");
             if (tags.Pointer != null)
                 Append(name, "[PTR g=" + Mathf.Max(1, tags.Pointer.Group).ToString(CultureInfo.InvariantCulture) +
+                       (GroupNames.Clean(tags.Pointer.Name) != null ? " n=" + GroupNames.Clean(tags.Pointer.Name) : "") +
                        (tags.Pointer.Camera.HasValue ? " c=" + tags.Pointer.Camera.Value.ToString(CultureInfo.InvariantCulture) : "") +
                        (tags.Pointer.ByKey ? " f=1" : "") + IdsPair(tags.Pointer.Fixed, "x") + IdsPair(tags.Pointer.FixedByKey, "k") + "]");
 

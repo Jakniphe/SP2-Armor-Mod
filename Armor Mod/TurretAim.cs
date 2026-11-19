@@ -103,6 +103,25 @@ namespace ArmorFragments
         }
 
         private static readonly List<int> groupIds = new List<int>();
+        private static readonly Dictionary<int, string> groupNames = new Dictionary<int, string>();   // the name each group shows (from the tags)
+
+        // What a group is called on screen.
+        private static string NameOf(int id)
+        {
+            string name;
+            return groupNames.TryGetValue(id, out name) ? name : GroupNames.Default(id);
+        }
+
+        // The automatic aim a group is set to (only the interface exists so far: the aiming comes later). A group that follows the mouse aim has none.
+        internal enum GroupAuto { Off, Ground, Air, Both }
+
+        private static readonly Dictionary<int, GroupAuto> autoModes = new Dictionary<int, GroupAuto>();
+
+        internal static GroupAuto AutoModeOf(int id)
+        {
+            GroupAuto mode;
+            return autoModes.TryGetValue(id, out mode) ? mode : GroupAuto.Off;
+        }
         private static readonly HashSet<int> controlled = new HashSet<int>();   // the groups that follow the mouse aim now (the others hold)
         private static Gun sightGun;                    // the turret whose sight camera is the view now
 
@@ -113,7 +132,7 @@ namespace ArmorFragments
             {
                 StringBuilder text = new StringBuilder();
                 foreach (int id in groupIds)
-                    if (controlled.Contains(id)) text.Append(text.Length > 0 ? "+" : "").Append(id);
+                    if (controlled.Contains(id)) text.Append(text.Length > 0 ? " + " : "").Append(NameOf(id));
                 return text.Length > 0 ? text.ToString() : "-";
             }
         }
@@ -614,6 +633,7 @@ namespace ArmorFragments
                 if (guns.Count == 0) { Status = "Off: create a turret group on a cannon in the designer"; return; }
                 controlled.Clear();
                 controlled.Add(groupIds[0]);
+                autoModes.Clear();
                 sightGun = null;
 
                 CameraManagerScript cm = CameraManagerScript.Instance;
@@ -674,6 +694,7 @@ namespace ArmorFragments
             turrets.Clear();
             guns.Clear();
             groupIds.Clear();
+            groupNames.Clear();
             sightScript = null;
             sightGun = null;
             Dictionary<int, PartData> byId = new Dictionary<int, PartData>();
@@ -704,6 +725,8 @@ namespace ArmorFragments
                     if (cannon != null)
                     {
                         guns.Add(new Gun { Cannon = cannon, GroupId = Mathf.Max(1, tags.Pointer.Group), FiresByKey = tags.Pointer.ByKey });
+                        if (!groupNames.ContainsKey(Mathf.Max(1, tags.Pointer.Group)))
+                            groupNames[Mathf.Max(1, tags.Pointer.Group)] = GroupNames.Display(tags.Pointer.Name, Mathf.Max(1, tags.Pointer.Group));
                         pointerTags.Add(tags.Pointer);
                     }
                 }
@@ -746,6 +769,7 @@ namespace ArmorFragments
             for (int i = 0; i < groupIds.Count; i++) if (controlled.Contains(groupIds[i])) { current = i; break; }
             controlled.Clear();
             controlled.Add(groupIds[(current + 1) % groupIds.Count]);
+            autoModes.Remove(groupIds[(current + 1) % groupIds.Count]);
             ResetControlState();
             int count = GroupCount();
             Notice("turret group " + ControlledLabel + " (" + count + (count == 1 ? " turret)" : " turrets)"));
@@ -767,6 +791,8 @@ namespace ArmorFragments
         internal struct GroupHud
         {
             public int Id;
+            public string Name;
+            public GroupAuto Auto;
             public int Total, Live, OnTarget, Blocked;
             public bool Controlled;
         }
@@ -784,7 +810,7 @@ namespace ArmorFragments
             }
             foreach (int id in groupIds)
             {
-                GroupHud group = new GroupHud { Id = id, Controlled = controlled.Contains(id) };
+                GroupHud group = new GroupHud { Id = id, Name = NameOf(id), Auto = AutoModeOf(id), Controlled = controlled.Contains(id) };
                 foreach (Gun gun in guns)
                 {
                     if (gun.GroupId != id) continue;
@@ -796,6 +822,30 @@ namespace ArmorFragments
                 }
                 output.Add(group);
             }
+        }
+
+        // A click on one of a group's three options (ground / air / both): the group leaves the manual control and is set to that automatic aim; a
+        // click on the option it already has takes it off (the group then holds). Only the setting for now: nothing aims automatically yet, so
+        // a group on automatic holds where it is. One group always stays under the mouse aim.
+        internal static void SetAuto(int id, GroupAuto mode)
+        {
+            if (!Active || !groupIds.Contains(id)) return;
+            if (AutoModeOf(id) == mode) mode = GroupAuto.Off;
+            if (controlled.Contains(id))
+            {
+                if (controlled.Count <= 1)
+                {
+                    Notice("one turret group has to stay controlled");
+                    return;
+                }
+                controlled.Remove(id);
+                CameraManagerScript cm = CameraManagerScript.Instance;
+                if (sight && cm != null) LeaveSight(cm);
+                ResetControlState();
+            }
+            if (mode == GroupAuto.Off) autoModes.Remove(id); else autoModes[id] = mode;
+            Notice(NameOf(id) + ": " + (mode == GroupAuto.Off ? "held" : "automatic " + mode.ToString().ToLowerInvariant() + " (aiming not implemented yet)"));
+            ArmorFragmentsPlugin.Log.LogInfo("Turret aim: group " + NameOf(id) + " is now " + (mode == GroupAuto.Off ? "held" : "automatic " + mode));
         }
 
         // A click on a group's bar: it joins the groups that follow the mouse aim, or leaves them (one group always stays controlled).
@@ -811,7 +861,11 @@ namespace ArmorFragments
                 }
                 controlled.Remove(id);
             }
-            else controlled.Add(id);
+            else
+            {
+                controlled.Add(id);
+                autoModes.Remove(id);   // a group that follows the mouse aim is not on automatic
+            }
             CameraManagerScript cm = CameraManagerScript.Instance;
             if (sight && cm != null) LeaveSight(cm);
             ResetControlState();

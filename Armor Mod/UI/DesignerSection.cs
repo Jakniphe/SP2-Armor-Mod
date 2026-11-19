@@ -587,7 +587,7 @@ namespace ArmorFragments.UI
                 builder.Buttons(new List<KeyValuePair<string, Action>>
                 {
                     new KeyValuePair<string, Action>("Create turret group",
-                        () => Switch(tags, () => tags.Pointer = new PointerTag { Group = NextGroupId() })),
+                        () => Switch(tags, () => { int id = NextGroupId(); tags.Pointer = new PointerTag { Group = id, Name = GroupNames.NextFree(UsedGroupNames(), id) }; })),
                 });
                 return;
             }
@@ -597,7 +597,9 @@ namespace ArmorFragments.UI
             PartScript turretPart = part;
             int group = tags.Pointer.Group;
             List<PartData> members = GroupMembers(group);
-            builder.Text("Turret group", group + " (" + members.Count + (members.Count == 1 ? " turret)" : " turrets)"));
+            builder.Text("Turret group", GroupNames.Display(tags.Pointer.Name, group) + " (number " + group + ", " + members.Count + (members.Count == 1 ? " turret)" : " turrets)"));
+            builder.TextInput("Group name", "Rename the turret group (all its turrets). New groups are named after the military phonetic alphabet; leave it empty to get the name of the group's number.",
+                              GroupNames.Display(tags.Pointer.Name, group), GroupNames.MaxLength, typed => RenameGroup(group, typed));
             for (int i = 0; i < members.Count; i++)
                 builder.Text("Turret " + (i + 1), SightLabel(members[i]) + " (id " + members[i].Id + ")" + (members[i] == turretPart.Part ? " - this one" : ""));
             builder.Buttons(new List<KeyValuePair<string, Action>>
@@ -667,6 +669,32 @@ namespace ArmorFragments.UI
                 if (pointer != null && pointer.Group == group) members.Add(candidate);
             }
             return members;
+        }
+
+        // The names every group shows now (so a new group does not repeat one).
+        private static List<string> UsedGroupNames()
+        {
+            Dictionary<int, string> byGroup = new Dictionary<int, string>();
+            foreach (PartData candidate in AllParts())
+            {
+                PointerTag pointer = TagCodec.Parse(candidate.Name).Pointer;
+                if (pointer != null && !byGroup.ContainsKey(pointer.Group)) byGroup[pointer.Group] = GroupNames.Display(pointer.Name, pointer.Group);
+            }
+            return new List<string>(byGroup.Values);
+        }
+
+        // The new name goes to every turret of the group (each one's name carries it).
+        private static void RenameGroup(int group, string typed)
+        {
+            string clean = GroupNames.Clean(typed);
+            foreach (PartData member in GroupMembers(group))
+            {
+                PartTags fresh = TagCodec.ParseCopy(member.Name);
+                if (fresh.Pointer == null) continue;
+                fresh.Pointer.Name = clean;
+                ApplyTags(member, fresh);
+            }
+            rebuildPending = true;
         }
 
         private static int NextGroupId()
@@ -747,7 +775,7 @@ namespace ArmorFragments.UI
                 {
                     if (picked == null) return;
                     PartTags fresh = TagCodec.ParseCopy(picked.Name);
-                    fresh.Pointer = add ? new PointerTag { Group = group } : null;
+                    fresh.Pointer = add ? new PointerTag { Group = group, Name = current.Name } : null;
                     ApplyTags(picked, fresh);
                 }
                 catch (Exception e)
