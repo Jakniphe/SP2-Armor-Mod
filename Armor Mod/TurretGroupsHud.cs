@@ -20,7 +20,7 @@ namespace ArmorFragments
     //   The three buttons: the group's automatic aim (ground targets, air targets or both). They are put out (darker) while the group is
     //   controlled by hand; a click on one takes the group off the manual control and sets it to that mode, and a click on the lit one turns it
     //   off. Only the setting exists so far: the aiming itself comes later.
-    // Each group is one block (an empty container of a fixed size, 62 high) with the bar at its top and the options at its bottom, and the blocks
+    // Each group is one block (an empty container of a fixed size, 70 high) with the bar at its top and the options at its bottom, and the blocks
     // are stacked at a fixed pitch, so the groups never overlap each other whatever the buttons' own heights come out as. (A single vertical layout
     // holding everything was tried and the game did not draw it at all.) Only while the mouse aim is on. The cursor is locked in mouse aim: hold
     // Alt to click.
@@ -29,7 +29,7 @@ namespace ArmorFragments
         private const string IdPrefix = "af-groups-";
         private const float RightMargin = 15f;     // like the game's row of buttons (position "-15 15")
         private const float FirstBottom = 95f;     // above the row (50 high; 75 for the buttons that only show on a catapult or an elevator)
-        private const float OptionHeight = 24f;
+        private const float OptionHeight = 32f;     // as high as the bar: the button's corner radius then reads as the pills' rounded rectangle (24 high it was an oval)
         private const float Gap = 4f;              // between the bar and its options, and between the three options
         private const float BarHeight = 32f;
         private const float BlockGap = 10f;        // between one group and the next
@@ -39,6 +39,12 @@ namespace ArmorFragments
         private const float OptionWidth = (PillWidth - 2f * Gap) / 3f;
 
         private static readonly string[] OptionNames = { "Ground", "Air", "Both" };
+
+        // The game's own sprites for the options (the paths used in its Xml): the checkered flag of the menu's Activities button for ground, the
+        // aircraft of the menu's Change craft button for air, and both of them side by side for both.
+        private const string SpriteGround = "Sprites/Common/IconActivity";
+        private const string SpriteAir = "Sprites/Flight/IconLoad";
+        private const float IconSize = 22f;
         private static readonly TurretAim.GroupAuto[] OptionModes = { TurretAim.GroupAuto.Ground, TurretAim.GroupAuto.Air, TurretAim.GroupAuto.Both };
 
         private sealed class Pill
@@ -46,6 +52,7 @@ namespace ArmorFragments
             public ImageWidget Fill;
             public TextWidget Name, State;
             public ImageWidget[] OptionFill = new ImageWidget[3];
+            public readonly List<ImageWidget> OptionIcons = new List<ImageWidget>();
             public int Group;
             public int Controlled = -1, Live = -1, OnTarget = -1, Total = -1, Blocked = -1, Auto = -1;
         }
@@ -139,6 +146,11 @@ namespace ArmorFragments
                 for (int k = 0; k < 3; k++)
                 {
                     pill.OptionFill[k] = layout.FindWidget<ImageWidget>(IdPrefix + "optfill-" + i + "-" + k);
+                    for (int j = 0; j < 2; j++)
+                    {
+                        ImageWidget icon = layout.FindWidget<ImageWidget>(IdPrefix + "optico-" + i + "-" + k + "-" + j);
+                        if (icon != null) pill.OptionIcons.Add(icon);
+                    }
                     Widget button = layout.FindWidget(IdPrefix + "opt-" + i + "-" + k);
                     TurretAim.GroupAuto mode = OptionModes[k];
                     if (button != null) button.Clicked += w => TurretAim.SetAuto(id, mode);
@@ -174,6 +186,17 @@ namespace ArmorFragments
             return System.Security.SecurityElement.Escape(text ?? "");
         }
 
+        // The icon(s) of option k: ground = the flag, air = the aircraft, both = the two of them side by side.
+        private static string OptionIconsXml(int i, int k)
+        {
+            string id = IdPrefix + "optico-" + i + "-" + k + "-";
+            string size = " width='" + Number(IconSize) + "' height='" + Number(IconSize) + "' anchor='MiddleCenter' color='White' raycastTarget='false' ";
+            if (k == 0) return "<Image id='" + id + "0' sprite='" + SpriteGround + "'" + size + "/>";
+            if (k == 1) return "<Image id='" + id + "0' sprite='" + SpriteAir + "'" + size + "/>";
+            return "<Image id='" + id + "0' sprite='" + SpriteAir + "' position='-14 0'" + size + "/>" +
+                   "<Image id='" + id + "1' sprite='" + SpriteGround + "' position='14 0'" + size + "/>";
+        }
+
         // One group's block: an empty container anchored at the bottom right above the game's row of buttons, with the bar at its top (a rounded
         // button with its mask, a fill that is only shown while lit, and two texts: made like the fuel pill in Xml/Flight/FlightUI) and, at its
         // bottom, the row of three options (a horizontal layout like the game's row of buttons).
@@ -195,7 +218,7 @@ namespace ArmorFragments
                 xml.Append("<Button id='" + IdPrefix + "opt-" + i + "-" + k + "' class='btn btn-flight' type='Simple' anchor='BottomRight' width='" + Number(OptionWidth) + "' height='" + Number(OptionHeight) + "' mask='EnabledAndShown' " +
                            "tooltipPosition='Left' tooltip='Automatic aim: " + OptionNames[k].ToLowerInvariant() + " targets\\nA click takes the group off the manual control and sets this mode (the aiming itself comes later); a click on the lit one turns it off.'>" +
                            "<Image id='" + IdPrefix + "optfill-" + i + "-" + k + "' sprite='@SpriteWhite' color='#28599E' type='Filled' fillMethod='Horizontal' fillAmount='0' />" +
-                           "<Text fontSize='14' alignment='Center' color='White' text='" + OptionNames[k] + "' />" +
+                           OptionIconsXml(i, k) +
                            "</Button>");
             }
             xml.Append("</HorizontalLayout></Empty>");
@@ -248,6 +271,12 @@ namespace ArmorFragments
                     fill.Color.Base = option;
                     fill.Image.color = option;
                     fill.Image.fillAmount = active || group.Controlled ? 1f : 0f;
+                }
+                Color iconColor = group.Controlled ? new Color(1f, 1f, 1f, 0.3f) : Color.white;
+                foreach (ImageWidget icon in pill.OptionIcons)
+                {
+                    icon.Color.Base = iconColor;
+                    icon.Image.color = iconColor;
                 }
             }
         }
