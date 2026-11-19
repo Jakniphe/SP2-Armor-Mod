@@ -284,20 +284,26 @@ namespace ArmorFragments.UI
             });
             Live("Aim key", () => TurretAim.KeyText(ArmorFragmentsPlugin.TurretAimKey));
             Live("Free look key", () => TurretAim.KeyText(ArmorFragmentsPlugin.TurretLookKey));
+            Live("Sight key", () => TurretAim.KeyText(ArmorFragmentsPlugin.TurretSightKey));
             builder.Buttons(new List<KeyValuePair<string, Action>>
             {
                 new KeyValuePair<string, Action>("Change aim key", () => TurretAim.CaptureKey(ArmorFragmentsPlugin.TurretAimKey)),
                 new KeyValuePair<string, Action>("Change free look key", () => TurretAim.CaptureKey(ArmorFragmentsPlugin.TurretLookKey)),
+                new KeyValuePair<string, Action>("Change sight key", () => TurretAim.CaptureKey(ArmorFragmentsPlugin.TurretSightKey)),
             });
             FloatSetting(ArmorFragmentsPlugin.TurretZoom, "Zoom",
                 "How many times the right mouse button zooms in (held: gradually in, let go: gradually out).", 0.5f, " x");
+            FloatSetting(ArmorFragmentsPlugin.TurretSightZoom, "Sight zoom",
+                "How many times the right mouse button zooms in through the sight camera.", 0.5f, " x");
+            FloatSetting(ArmorFragmentsPlugin.TurretSightSensitivity, "Sight sensitivity",
+                "Degrees the aim turns for each mouse count through the sight (less when zoomed in).", 0.005f, " deg");
             FloatSetting(ArmorFragmentsPlugin.TurretResponse, "Turret response",
                 "Seconds the turret takes to close the gap to the circle. Smaller is snappier; if the gun swings back and forth around the circle, raise it.", 0.01f, " s");
             FloatSetting(ArmorFragmentsPlugin.TurretDamping, "Turret damping",
                 "The turret aims from where the gun will be this many seconds from now, so it does not overshoot and swing around the circle. 0 = off. Raise it if the gun still swings; too much makes it sluggish.", 0.01f, " s");
             FloatSetting(ArmorFragmentsPlugin.TurretCameraHeight, "Camera pivot height",
                 "The point the camera turns around (where it sits at full zoom) is centered on the vehicle and this many meters above its highest point.", 0.1f, " m");
-            builder.Text("How to", "Designer: Turret on the rotators, Pointer on the cannon. Alt: cursor. Free look key: orbit the camera. Right: zoom. Left: fire.");
+            builder.Text("How to", "Designer: Turret on the rotators, Pointer on the cannon (and Pick sight camera). Alt: cursor. Free look key: orbit the camera. Sight key: the cannon's sight camera. Right: zoom. Left: fire.");
         }
 
         private void BuildImpactCamera()

@@ -578,6 +578,23 @@ namespace ArmorFragments.UI
                     "In mouse aim the turret turns until this cannon points where the circle is on the screen, and a small marker shows where it really points.",
                     tags.Pointer != null,
                     on => Switch(tags, () => tags.Pointer = on ? new PointerTag() : null));
+
+                // The optical sight: a camera part, picked with the game's part picker like an ammo rack. In mouse aim, Shift switches to it.
+                if (tags.Pointer != null && canCannon)
+                {
+                    PartScript sightCannon = part;
+                    PartData sight = SightCameraOf(tags.Pointer);
+                    builder.Text("Sight camera", sight != null
+                        ? SightLabel(sight) + " (id " + sight.Id + ")"
+                        : tags.Pointer.Camera.HasValue ? "Missing (id " + tags.Pointer.Camera.Value + ")" : "None");
+                    List<KeyValuePair<string, Action>> sightButtons = new List<KeyValuePair<string, Action>>
+                    {
+                        new KeyValuePair<string, Action>("Pick sight camera", () => PickSight(sightCannon, false)),
+                    };
+                    if (tags.Pointer.Camera.HasValue)
+                        sightButtons.Add(new KeyValuePair<string, Action>("Clear sight camera", () => PickSight(sightCannon, true)));
+                    builder.Buttons(sightButtons);
+                }
             }
         }
 
@@ -885,6 +902,83 @@ namespace ArmorFragments.UI
 
         // Opens the game's part picker (the one wheels use to pick their engine): every part that can't be
         // picked is hidden until a rack is clicked or the picker is closed.
+        // ---- The optical sight (a camera part) of a pointer cannon -----------------------------------------------
+
+        private static bool IsCameraPart(PartData candidate)
+        {
+            if (candidate == null) return false;
+            foreach (PartModifierData modifier in candidate.Modifiers)
+                if (modifier is CameraVantageData) return true;
+            return false;
+        }
+
+        private static PartData SightCameraOf(PointerTag pointer)
+        {
+            Assets.Scripts.Design.Designer designer = Assets.Scripts.Design.Designer.Instance;
+            if (designer == null || pointer == null || !pointer.Camera.HasValue) return null;
+            foreach (PartData candidate in designer.Aircraft.Aircraft.Assembly.Parts)
+                if (candidate != null && candidate.Id == pointer.Camera.Value && IsCameraPart(candidate)) return candidate;
+            return null;
+        }
+
+        private static string SightLabel(PartData camera)
+        {
+            string label = TagCodec.Parse(camera.Name).Label;
+            return string.IsNullOrEmpty(label) ? camera.PartType.Name : label;
+        }
+
+        // Picks the camera part this cannon's sight looks through (or, with 'clear', takes it away).
+        private static void PickSight(PartScript cannonPart, bool clear)
+        {
+            Assets.Scripts.Design.Designer designer = Assets.Scripts.Design.Designer.Instance;
+            if (designer == null || cannonPart == null || cannonPart.Part == null) return;
+
+            Action<int?> apply = camera =>
+            {
+                try
+                {
+                    if (cannonPart == null || cannonPart.Part == null) return;
+                    PartTags fresh = TagCodec.ParseCopy(cannonPart.Part.Name);
+                    if (fresh.Pointer == null) return;
+                    fresh.Pointer.Camera = camera;
+                    if (part == cannonPart)
+                    {
+                        Commit(fresh, true);
+                        rebuildPending = true;
+                    }
+                    else
+                    {
+                        RackLinks.SetName(cannonPart.Part, TagCodec.Compose(fresh, cannonPart.Part.PartType.Name));
+                    }
+                }
+                catch (Exception e)
+                {
+                    ArmorFragmentsPlugin.Log.LogError("Couldn't change the cannon's sight camera: " + e);
+                }
+            };
+
+            if (clear)
+            {
+                apply(null);
+                return;
+            }
+
+            bool any = false;
+            foreach (PartData candidate in designer.Aircraft.Aircraft.Assembly.Parts)
+                if (IsCameraPart(candidate)) { any = true; break; }
+            if (!any)
+            {
+                designer.ShowMessage("No camera part on the craft. Add a Camera part (on the gun, looking along the barrel) first.", 7f);
+                return;
+            }
+
+            designer.ShowMessage("Click the camera part this cannon's sight looks through.", 7f);
+            designer.Tools.SelectChoosePartTool(IsCameraPart, false, -1, "No camera parts", picked =>
+            {
+                if (picked != null) apply(picked.Id);
+            }, false);
+        }
+
         private static void PickRack(PartScript cannonPart, bool add)
         {
             Assets.Scripts.Design.Designer designer = Assets.Scripts.Design.Designer.Instance;

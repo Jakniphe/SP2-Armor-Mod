@@ -92,6 +92,8 @@ namespace ArmorFragments
         private static System.Reflection.MethodInfo selectCamera;
         private static AccessTools.FieldRef<OrbitCameraController, Func<Transform>> orbitTargetRef;
         private static AccessTools.FieldRef<OrbitCameraController, bool> orbitCenterRef;
+        private static AccessTools.FieldRef<CameraVantageScript, CameraController> vantageControllerRef;
+        private static AccessTools.FieldRef<InteractiveCameraController, float> fovTargetRef;
         private static bool refsTried, refsOk, orbitRefsOk;
 
         private static bool EnsureRefs()
@@ -114,6 +116,15 @@ namespace ArmorFragments
             {
                 ArmorFragmentsPlugin.Log.LogWarning("Turret aim: the game's rotator or camera changed, it is off (" + e.Message + ")");
                 refsOk = false;
+            }
+            try
+            {
+                vantageControllerRef = AccessTools.FieldRefAccess<CameraVantageScript, CameraController>("_cameraController");
+                fovTargetRef = AccessTools.FieldRefAccess<InteractiveCameraController, float>("_fovZoomTarget");
+            }
+            catch (Exception e)
+            {
+                ArmorFragmentsPlugin.Log.LogWarning("Turret aim: the sight camera can't be used (" + e.Message + ")");
             }
             try
             {
@@ -234,6 +245,87 @@ namespace ArmorFragments
         private static float pivotY;
         private static bool pivotYKnown;
 
+        // ---- The optical sight --------------------------------------------------------------------------------
+        // The camera part picked on the pointer cannon in the designer (Pointer > Pick sight camera). The sight key switches to its view (the game's
+        // own controller for that camera part, a First Person one looks along the part) and back to the orbit view. Through the sight the mouse
+        // turns the wanted direction and the turret follows it; the view is the camera on the gun, so it shows where the gun really points.
+
+        private static CameraVantageScript sightScript;
+        private static InteractiveCameraController sightController;
+        private static bool sight;
+        private static string notice;
+        private static float noticeUntil;
+
+        private static void Notice(string text)
+        {
+            notice = text;
+            noticeUntil = Time.unscaledTime + 4f;
+            ArmorFragmentsPlugin.Log.LogInfo("Turret aim: " + text);
+        }
+
+        // The game asks its camera controller to look after the cursor every frame; in the sight this code does.
+        internal static bool OwnsCursor(InteractiveCameraController asked)
+        {
+            return Active && sight && asked == sightController;
+        }
+
+        private static void EnterSight(CameraManagerScript cm, CannonScript pointer)
+        {
+            if (sightScript == null || vantageControllerRef == null || fovTargetRef == null)
+            {
+                Notice("no sight camera: pick one on the cannon in the designer (Pointer > Pick sight camera)");
+                return;
+            }
+            InteractiveCameraController target = vantageControllerRef(sightScript) as InteractiveCameraController;
+            if (target == null)
+            {
+                Notice("the sight camera's view can't be used (the camera part's view mode should be First Person)");
+                return;
+            }
+            selectCamera.Invoke(cm, new object[] { target, false, false });
+            if (cm.Controller != target)
+            {
+                Notice("the game did not switch to the sight camera");
+                return;
+            }
+            sightController = target;
+            sight = true;
+            target.MouseLook = false;
+            rotationRef(target) = Vector2.zero;
+            if (!haveDesired)
+            {
+                desired = pointer.transform.forward;
+                haveDesired = true;
+            }
+            decoupled = returning = false;
+            fovVelocity = 0f;
+            ArmorFragmentsPlugin.Log.LogInfo("Turret aim: looking through the sight camera");
+        }
+
+        // Back to the orbit view, looking where the gun is told to point.
+        private static void LeaveSight(CameraManagerScript cm)
+        {
+            if (!sight) return;
+            sight = false;
+            sightController = null;
+            fovVelocity = 0f;
+            try
+            {
+                selectCamera.Invoke(cm, new object[] { controller, false, false });
+                Vector3 direction = haveDesired ? desired : Vector3.forward;
+                Vector2 now = rotationRef(controller);
+                float yaw = Mathf.Atan2(direction.x, direction.z) * Mathf.Rad2Deg;
+                float pitch = -Mathf.Asin(Mathf.Clamp(direction.y, -1f, 1f)) * Mathf.Rad2Deg;
+                rotationRef(controller) = new Vector2(Mathf.Clamp(pitch, -89f, 89f), now.y + Mathf.DeltaAngle(now.y, yaw));
+                controller.MouseLook = true;
+            }
+            catch (Exception e)
+            {
+                ArmorFragmentsPlugin.Log.LogWarning("Turret aim: could not leave the sight: " + e.Message);
+            }
+            ArmorFragmentsPlugin.Log.LogInfo("Turret aim: back to the orbit view");
+        }
+
         // ---- Switching on and off -------------------------------------------------------------------------------
 
         public static void Toggle()
@@ -275,6 +367,9 @@ namespace ArmorFragments
                 calibration = null;
                 calibrated = false;
                 hullBody = null;
+                sight = false;
+                sightController = null;
+                notice = null;
                 barrelKnown = false;
                 previousError = Vector3.zero;
                 gainScale = 1f;
@@ -305,6 +400,8 @@ namespace ArmorFragments
         {
             turrets.Clear();
             pointers.Clear();
+            sightScript = null;
+            int sightId = -1;
             foreach (PartData data in aircraft.Aircraft.Assembly.Parts)
             {
                 PartScript part = data != null ? data.PartScript : null;
@@ -325,7 +422,20 @@ namespace ArmorFragments
                 if (tags.Pointer != null)
                 {
                     CannonScript cannon = part.GetModifier<CannonScript>();
-                    if (cannon != null) pointers.Add(cannon);
+                    if (cannon != null)
+                    {
+                        pointers.Add(cannon);
+                        if (sightId < 0 && tags.Pointer.Camera.HasValue) sightId = tags.Pointer.Camera.Value;
+                    }
+                }
+            }
+            if (sightId >= 0)
+            {
+                foreach (PartData data in aircraft.Aircraft.Assembly.Parts)
+                {
+                    if (data == null || data.Id != sightId || data.PartScript == null) continue;
+                    sightScript = data.PartScript.GetModifier<CameraVantageScript>();
+                    break;
                 }
             }
         }
@@ -345,6 +455,8 @@ namespace ArmorFragments
             calibration = null;
             haveDesired = false;
             fireHeld = false;
+            sight = false;
+            sightController = null;
             DestroyHud();
             ReleasePivot();
 
@@ -456,7 +568,7 @@ namespace ArmorFragments
                 Deactivate("the vehicle is gone");
                 return;
             }
-            if (cm.Controller != controller)
+            if (cm.Controller != (sight ? (CameraController)sightController : controller))
             {
                 Deactivate("the camera view was changed");
                 return;
@@ -475,8 +587,16 @@ namespace ArmorFragments
             Keyboard keyboard = Keyboard.current;
             Mouse mouse = Mouse.current;
             bool alt = keyboard != null && (keyboard.leftAltKey.isPressed || keyboard.rightAltKey.isPressed);
+            Key sightKey = ArmorFragmentsPlugin.TurretSightKey.Value;
+            if (keyboard != null && sightKey != Key.None && keyboard[sightKey].wasPressedThisFrame)
+            {
+                if (sight) LeaveSight(cm);
+                else EnterSight(cm, pointer);
+                if (!Active) return;
+            }
+
             Key lookKey = ArmorFragmentsPlugin.TurretLookKey.Value;
-            bool look = keyboard != null && lookKey != Key.None && keyboard[lookKey].isPressed;
+            bool look = !sight && keyboard != null && lookKey != Key.None && keyboard[lookKey].isPressed;
             bool paused = PauseManager.Paused;
             bool free = alt || paused;
 
@@ -508,16 +628,27 @@ namespace ArmorFragments
             }
 
             // The mouse turns the camera through the game's own mouse look (it also hides and locks the cursor); Alt gives the cursor back.
-            bool wantLook = !alt && !returning;
-            if (controller.MouseLook != wantLook) controller.MouseLook = wantLook;
+            // Through the sight the game's mouse look is off: this code turns the aim with the mouse and looks after the cursor itself.
+            if (sight)
+            {
+                Cursor.lockState = alt ? CursorLockMode.None : CursorLockMode.Locked;
+                Cursor.visible = alt;
+            }
+            else
+            {
+                bool wantLook = !alt && !returning;
+                if (controller.MouseLook != wantLook) controller.MouseLook = wantLook;
+            }
 
             // Right button: gradual zoom (and a slower mouse while zoomed, so the aim stays fine).
             float baseFov = cm.CurrentCameraFieldOfView;
             bool zoom = mouse != null && mouse.rightButton.isPressed && !free && !returning;
-            float targetFov = zoom ? Mathf.Max(baseFov / ArmorFragmentsPlugin.TurretZoom.Value, 4f) : baseFov;
+            float zoomTimes = sight ? ArmorFragmentsPlugin.TurretSightZoom.Value : ArmorFragmentsPlugin.TurretZoom.Value;
+            float targetFov = zoom ? Mathf.Max(baseFov / zoomTimes, 2f) : baseFov;
             float fov = Mathf.SmoothDamp(cam.fieldOfView, targetFov, ref fovVelocity, 0.35f, float.PositiveInfinity, Time.unscaledDeltaTime);
             cm.SetCameraFov(fov);
-            sensitivityRef(controller) = Mathf.Clamp(fov / Mathf.Max(baseFov, 1f), 0.08f, 1f);
+            if (sight) fovTargetRef(sightController) = fov;   // the first-person view eases its own zoom toward this: keep it where it is
+            else sensitivityRef(controller) = Mathf.Clamp(fov / Mathf.Max(baseFov, 1f), 0.08f, 1f);
 
             // Left button: fire (read by the override of the Fire Weapons input).
             fireHeld = mouse != null && mouse.leftButton.isPressed && !free && !returning;
@@ -525,7 +656,21 @@ namespace ArmorFragments
             // The wanted direction: from the cannon's muzzle to what the camera sees at the middle of the screen (the camera is behind and above the
             // gun, so the gun must aim from where it is, not parallel to the camera).
             Vector3 muzzle = pointer.TipPosition;
-            if (!decoupled)
+            if (sight)
+            {
+                // Through the sight the mouse turns the wanted direction itself (the sight camera sits on the gun, so it can't say where to aim):
+                // right turns it right and up turns it up, about the sight camera's own axes, less when zoomed in.
+                if (mouse != null && !free)
+                {
+                    Vector2 delta = mouse.delta.ReadValue();
+                    float degrees = ArmorFragmentsPlugin.TurretSightSensitivity.Value * Mathf.Clamp(fov / Mathf.Max(baseFov, 1f), 0.03f, 1f);
+                    Transform view = cam.transform;
+                    desired = (Quaternion.AngleAxis(delta.x * degrees, view.up) * Quaternion.AngleAxis(-delta.y * degrees, view.right) * desired).normalized;
+                }
+                haveDesired = true;
+                aimDistance = Mathf.Max(5f, (AimPoint(muzzle, desired) - muzzle).magnitude);
+            }
+            else if (!decoupled)
             {
                 Vector3 from = cam.transform.position, forward = cam.transform.forward;
                 Vector3 point = AimPoint(from, forward);
@@ -558,11 +703,12 @@ namespace ArmorFragments
             if (Time.unscaledTime >= nextStatus)
             {
                 nextStatus = Time.unscaledTime + 0.25f;
-                Status = !calibrated ? "Calibrating the turret..."
+                string state = !calibrated ? "Calibrating the turret..."
                     : decoupled ? "Free look (the turret holds its aim)"
                     : atLimit ? "At the turret's limit"
                     : errorDegrees < 0.5f ? "On target"
                     : "Turning (" + errorDegrees.ToString("F1") + " deg off)";
+                Status = notice != null && Time.unscaledTime < noticeUntil ? notice : (sight ? "Sight: " : "") + state;
             }
         }
 
@@ -1036,6 +1182,16 @@ namespace ArmorFragments
                 : atLimit ? new Color(1f, 0.3f, 0.25f, 0.95f)
                 : errorDegrees < 0.6f ? new Color(0.35f, 1f, 0.45f, 0.95f)
                 : new Color(1f, 0.8f, 0.25f, 0.95f);
+        }
+    }
+
+    // The sight view turns the game's mouse look off, and its controller would then free the cursor every frame.
+    [HarmonyPatch(typeof(InteractiveCameraController), "UpdateCursor")]
+    internal static class TurretCursorPatch
+    {
+        private static bool Prefix(InteractiveCameraController __instance)
+        {
+            return !TurretAim.OwnsCursor(__instance);
         }
     }
 

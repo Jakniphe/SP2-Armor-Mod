@@ -21,6 +21,13 @@ namespace ArmorFragments
         public static void Remap(PartData part, Dictionary<int, int> idMap)
         {
             if (part == null || idMap == null || idMap.Count == 0) return;
+
+            // The sight camera of a pointer cannon ([PTR c=]) is a part id too.
+            PointerTag pointer = TagCodec.Parse(part.Name).Pointer;
+            int newCamera;
+            if (pointer != null && pointer.Camera.HasValue && idMap.TryGetValue(pointer.Camera.Value, out newCamera) && newCamera != pointer.Camera.Value)
+                SetName(part, TagCodec.WithPointerCamera(part.Name, newCamera));
+
             CannonTag cannon = TagCodec.Parse(part.Name).Cannon;
             if (cannon == null || cannon.Racks.Count == 0) return;
 
@@ -42,6 +49,9 @@ namespace ArmorFragments
             foreach (PartData part in parts)
             {
                 if (part == null) continue;
+                PointerTag pointer = TagCodec.Parse(part.Name).Pointer;
+                if (pointer != null && pointer.Camera == removedId) SetName(part, TagCodec.WithPointerCamera(part.Name, null));
+
                 CannonTag cannon = TagCodec.Parse(part.Name).Cannon;
                 if (cannon == null || !cannon.Racks.Contains(removedId)) continue;
 

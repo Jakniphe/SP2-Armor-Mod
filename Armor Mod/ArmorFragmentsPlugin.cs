@@ -171,6 +171,9 @@ namespace ArmorFragments
         internal static ConfigEntry<float> TurretResponse;
         internal static ConfigEntry<float> TurretCameraHeight;
         internal static ConfigEntry<float> TurretDamping;
+        internal static ConfigEntry<UnityEngine.InputSystem.Key> TurretSightKey;
+        internal static ConfigEntry<float> TurretSightZoom;
+        internal static ConfigEntry<float> TurretSightSensitivity;
 
         // Crew ([CRW] seats, see Crew.cs).
         internal static ConfigEntry<bool> CrewEnabled;
@@ -317,6 +320,14 @@ namespace ArmorFragments
             TurretCameraHeight = Config.Bind("TurretAim", "PivotHeight", 0.5f,
                 new ConfigDescription("The point the camera turns around (where it sits at full zoom) is centered on the vehicle and this many meters above its highest point.",
                     new AcceptableValueRange<float>(0f, 10f)));
+            TurretSightKey = Config.Bind("TurretAim", "SightKey", UnityEngine.InputSystem.Key.LeftShift,
+                "Press it to switch to the pointer cannon's sight camera (picked in the designer: Pointer > Pick sight camera) and back. 'None' disables it.");
+            TurretSightZoom = Config.Bind("TurretAim", "SightZoom", 6f,
+                new ConfigDescription("How many times the right mouse button zooms in through the sight.",
+                    new AcceptableValueRange<float>(1.5f, 30f)));
+            TurretSightSensitivity = Config.Bind("TurretAim", "SightSensitivity", 0.06f,
+                new ConfigDescription("Degrees the aim turns for each mouse count through the sight (less when zoomed in).",
+                    new AcceptableValueRange<float>(0.005f, 0.5f)));
             TurretDamping = Config.Bind("TurretAim", "DampingSeconds", 0.12f,
                 new ConfigDescription("The turret aims from where the gun will be this many seconds from now (its own speed times this), so it does not overshoot " +
                     "and swing around the circle. 0 = off. Raise it if the gun still swings; too much makes it sluggish.",
