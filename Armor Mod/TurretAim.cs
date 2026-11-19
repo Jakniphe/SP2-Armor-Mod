@@ -1163,7 +1163,7 @@ namespace ArmorFragments
         {
             DestroyHud();
             if (ringTexture == null)
-                ringTexture = MakeTexture(128, r => 1f - Edge(0.03f, 0.075f, Mathf.Abs(r - 0.88f)));
+                ringTexture = MakeTexture(256, r => 1f - Edge(0.006f, 0.022f, Mathf.Abs(r - 0.9f)));
             if (dotTexture == null)
                 dotTexture = MakeTexture(48, r => (1f - Edge(0.5f, 0.7f, r)) * 0.9f + (1f - Edge(0.04f, 0.12f, Mathf.Abs(r - 0.86f))) * 0.3f);
 
@@ -1197,54 +1197,138 @@ namespace ArmorFragments
         }
 
         // The circle is where the turret is told to point (the aim point, seen from the camera); the marker is where the barrel really points at
-        // that distance. They meet when the gun is on target.
+        // that distance. They meet when the gun is on target. Through the sight the camera sits on the gun, so the marker is not drawn.
+        // Both are drawn like the crosshair of Minecraft: not in a color of their own but inverting what is behind them, so they always stand
+        // out (see OnGui). The canvas pictures above are only the fallback if that can not be drawn.
+        private static bool hudRingShown, hudMarkerShown;
+        private static Vector2 hudRingAt, hudMarkerAt;   // screen pixels, y up
+
         private static void UpdateHud(Camera cam, Vector3 muzzle, Vector3 barrel, bool freeLook)
         {
+            hudRingShown = hudMarkerShown = false;
+            if (haveDesired)
+            {
+                Vector3 ring = cam.WorldToScreenPoint(muzzle + desired * aimDistance);
+                Vector3 marker = cam.WorldToScreenPoint(muzzle + barrel.normalized * aimDistance);
+                hudRingShown = ring.z > 0f;
+                hudMarkerShown = marker.z > 0f && !sight;
+                hudRingAt = new Vector2(ring.x, ring.y);
+                hudMarkerAt = new Vector2(marker.x, marker.y);
+            }
+
             if (hudRoot == null || ringImage == null) return;
-            bool show = haveDesired;
-            ringImage.enabled = markerImage.enabled = show;
-            if (!show) return;
-
-            Vector3 ring = cam.WorldToScreenPoint(muzzle + desired * aimDistance);
-            Vector3 marker = cam.WorldToScreenPoint(muzzle + barrel.normalized * aimDistance);
-            ringImage.enabled = ring.z > 0f;
-            markerImage.enabled = marker.z > 0f;
-            ringRect.position = new Vector3(ring.x, ring.y, 0f);
-            markerRect.position = new Vector3(marker.x, marker.y, 0f);
-
+            bool canvas = !InvertingCrosshairReady();
+            ringImage.enabled = canvas && hudRingShown;
+            markerImage.enabled = canvas && hudMarkerShown;
+            ringRect.position = new Vector3(hudRingAt.x, hudRingAt.y, 0f);
+            markerRect.position = new Vector3(hudMarkerAt.x, hudMarkerAt.y, 0f);
             ringImage.color = freeLook ? new Color(0.45f, 0.85f, 1f, 0.9f) : new Color(1f, 1f, 1f, 0.85f);
-            markerImage.color = !calibrated ? new Color(0.7f, 0.7f, 0.7f, 0.9f)
-                : atLimit ? new Color(1f, 0.3f, 0.25f, 0.95f)
-                : errorDegrees < 0.6f ? new Color(0.35f, 1f, 0.45f, 0.95f)
-                : new Color(1f, 0.8f, 0.25f, 0.95f);
+            markerImage.color = new Color(1f, 1f, 1f, 0.9f);
         }
-    }
 
-    // The sight view turns the game's mouse look off, and its controller would then free the cursor every frame.
-    [HarmonyPatch(typeof(InteractiveCameraController), "UpdateCursor")]
-    internal static class TurretCursorPatch
-    {
-        private static bool Prefix(InteractiveCameraController __instance)
+        // ---- The crosshair that inverts what is behind it ------------------------------------------------------------
+
+        private static Material invertMaterial;
+        private static bool invertTried;
+
+        // Blend (1 - what is there) x (this) + what is there x (1 - this): white inverts the color behind it, black leaves it alone, grays blend, so
+        // a soft edge (a color that falls to black) is anti-aliased. It uses the plain colored shader every Unity player has, with its blend set.
+        private static bool InvertingCrosshairReady()
         {
-            return !TurretAim.OwnsCursor(__instance);
+            if (!invertTried)
+            {
+                invertTried = true;
+                try
+                {
+                    Shader shader = Shader.Find("Hidden/Internal-Colored");
+                    if (shader != null)
+                    {
+                        invertMaterial = new Material(shader) { hideFlags = HideFlags.HideAndDontSave };
+                        invertMaterial.SetInt("_SrcBlend", (int)UnityEngine.Rendering.BlendMode.OneMinusDstColor);
+                        invertMaterial.SetInt("_DstBlend", (int)UnityEngine.Rendering.BlendMode.OneMinusSrcColor);
+                        invertMaterial.SetInt("_Cull", (int)UnityEngine.Rendering.CullMode.Off);
+                        invertMaterial.SetInt("_ZWrite", 0);
+                        if (invertMaterial.HasProperty("_ZTest")) invertMaterial.SetInt("_ZTest", (int)UnityEngine.Rendering.CompareFunction.Always);
+                    }
+                    ArmorFragmentsPlugin.Log.LogInfo("Turret aim HUD: " + (invertMaterial != null
+                        ? "the circle and the marker invert the picture behind them (Hidden/Internal-Colored)"
+                        : "Hidden/Internal-Colored is not in this build, plain white pictures are used"));
+                }
+                catch (Exception e)
+                {
+                    invertMaterial = null;
+                    ArmorFragmentsPlugin.Log.LogWarning("Turret aim HUD: the inverting crosshair could not be made (" + e.Message + "), plain white pictures are used");
+                }
+            }
+            return invertMaterial != null;
         }
-    }
 
-    [HarmonyPatch(typeof(GameInput), "GetButtonDownIfEnabled")]
-    internal static class TurretViewKeyPatch
-    {
-        private static void Postfix(GameInput __instance, ref bool __result)
+        private static void Vertex(float x, float y, float brightness)
         {
-            TurretAim.BlockViewKeys(__instance, ref __result);
+            GL.Color(new Color(brightness, brightness, brightness, 1f));
+            GL.Vertex3(x, y, 0f);
         }
-    }
 
-    [HarmonyPatch(typeof(GameInput), "GetButtonDown")]
-    internal static class TurretViewKeyDownPatch
-    {
-        private static void Postfix(GameInput __instance, ref bool __result)
+        private static void Quad(float x0, float y0, float b0, float x1, float y1, float b1, float x2, float y2, float b2, float x3, float y3, float b3)
         {
-            TurretAim.BlockViewKeys(__instance, ref __result);
+            Vertex(x0, y0, b0); Vertex(x1, y1, b1); Vertex(x2, y2, b2);
+            Vertex(x0, y0, b0); Vertex(x2, y2, b2); Vertex(x3, y3, b3);
+        }
+
+        // A thin ring: full white along the middle, falling to nothing a little to either side.
+        private static void DrawRing(float cx, float cy, float radius, float halfWidth)
+        {
+            const int Segments = 72;
+            for (int i = 0; i < Segments; i++)
+            {
+                float a0 = i * Mathf.PI * 2f / Segments, a1 = (i + 1) * Mathf.PI * 2f / Segments;
+                float c0 = Mathf.Cos(a0), s0 = Mathf.Sin(a0), c1 = Mathf.Cos(a1), s1 = Mathf.Sin(a1);
+                float inner = radius - halfWidth, outer = radius + halfWidth;
+                Quad(cx + c0 * inner, cy + s0 * inner, 0f, cx + c1 * inner, cy + s1 * inner, 0f,
+                     cx + c1 * radius, cy + s1 * radius, 1f, cx + c0 * radius, cy + s0 * radius, 1f);
+                Quad(cx + c0 * radius, cy + s0 * radius, 1f, cx + c1 * radius, cy + s1 * radius, 1f,
+                     cx + c1 * outer, cy + s1 * outer, 0f, cx + c0 * outer, cy + s0 * outer, 0f);
+            }
+        }
+
+        // A small solid dot with a soft rim.
+        private static void DrawDot(float cx, float cy, float radius)
+        {
+            const int Segments = 20;
+            for (int i = 0; i < Segments; i++)
+            {
+                float a0 = i * Mathf.PI * 2f / Segments, a1 = (i + 1) * Mathf.PI * 2f / Segments;
+                float c0 = Mathf.Cos(a0), s0 = Mathf.Sin(a0), c1 = Mathf.Cos(a1), s1 = Mathf.Sin(a1);
+                Vertex(cx, cy, 1f); Vertex(cx + c0 * radius, cy + s0 * radius, 1f); Vertex(cx + c1 * radius, cy + s1 * radius, 1f);
+                Quad(cx + c0 * radius, cy + s0 * radius, 1f, cx + c1 * radius, cy + s1 * radius, 1f,
+                     cx + c1 * (radius + 1f), cy + s1 * (radius + 1f), 0f, cx + c0 * (radius + 1f), cy + s0 * (radius + 1f), 0f);
+            }
+        }
+
+        // Called by the plugin's OnGUI: the circle and the marker are drawn when the interface is (Repaint), over everything.
+        internal static void OnGui()
+        {
+            if (!Active) return;
+            Event current = Event.current;
+            if (current == null || current.type != EventType.Repaint) return;
+            if ((!hudRingShown && !hudMarkerShown) || !InvertingCrosshairReady()) return;
+
+            float width = Screen.width, height = Screen.height;
+            bool flip = ArmorFragmentsPlugin.TurretCrosshairFlipY.Value;
+            GL.PushMatrix();
+            try
+            {
+                invertMaterial.SetPass(0);
+                GL.LoadPixelMatrix(0f, width, height, 0f);   // pixels, the origin at the top left
+                GL.Begin(GL.TRIANGLES);
+                if (hudRingShown) DrawRing(hudRingAt.x, flip ? hudRingAt.y : height - hudRingAt.y, 26f, 0.9f);
+                if (hudMarkerShown) DrawDot(hudMarkerAt.x, flip ? hudMarkerAt.y : height - hudMarkerAt.y, 2.6f);
+                GL.End();
+            }
+            finally
+            {
+                GL.PopMatrix();
+            }
         }
     }
 

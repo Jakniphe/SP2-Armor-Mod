@@ -174,6 +174,7 @@ namespace ArmorFragments
         internal static ConfigEntry<UnityEngine.InputSystem.Key> TurretSightKey;
         internal static ConfigEntry<float> TurretSightZoom;
         internal static ConfigEntry<float> TurretSightSensitivity;
+        internal static ConfigEntry<bool> TurretCrosshairFlipY;
 
         // Crew ([CRW] seats, see Crew.cs).
         internal static ConfigEntry<bool> CrewEnabled;
@@ -225,6 +226,12 @@ namespace ArmorFragments
             ImpactEffects.Tick(); PerfMonitor.Lap("ImpactEffects");
             TurretAim.Tick(); PerfMonitor.Lap("TurretAim");
             PerfMonitor.End();
+        }
+
+        // The turret aim's circle and marker are drawn here (they invert the picture behind them).
+        private void OnGUI()
+        {
+            TurretAim.OnGui();
         }
 
         private void Awake()
@@ -328,6 +335,8 @@ namespace ArmorFragments
             TurretSightSensitivity = Config.Bind("TurretAim", "SightSensitivity", 0.06f,
                 new ConfigDescription("Degrees the aim turns for each mouse count through the sight (less when zoomed in).",
                     new AcceptableValueRange<float>(0.005f, 0.5f)));
+            TurretCrosshairFlipY = Config.Bind("TurretAim", "CrosshairFlipY", false,
+                "Only if the circle and the marker show mirrored up and down (they move the wrong way when the aim moves up or down): turn it on.");
             TurretDamping = Config.Bind("TurretAim", "DampingSeconds", 0.12f,
                 new ConfigDescription("The turret aims from where the gun will be this many seconds from now (its own speed times this), so it does not overshoot " +
                     "and swing around the circle. 0 = off. Raise it if the gun still swings; too much makes it sluggish.",
