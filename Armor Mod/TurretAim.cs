@@ -1059,7 +1059,13 @@ namespace ArmorFragments
             {
                 Turret turret = use[i];
                 float current = angleRef(turret.Script);
-                float target = current + turret.Signs[index] * ((float)theta[i] * gain + (float)hull[i] * dt) * Mathf.Rad2Deg;
+                // A very small error asks for a very small step (gain x error), which the joint may not answer at all (friction, the game's own
+                // rounding): the turret then stops short of the cursor. So a step is never smaller than a twentieth of a degree, or the error itself
+                // when that is smaller (it never overshoots).
+                float step = (float)theta[i] * gain;
+                float smallest = Mathf.Min(Mathf.Abs((float)theta[i]), 0.05f * Mathf.Deg2Rad);
+                if (Mathf.Abs(step) < smallest) step = Mathf.Sign((float)theta[i]) * smallest;
+                float target = current + turret.Signs[index] * (step + (float)hull[i] * dt) * Mathf.Rad2Deg;
                 if (!turret.Wraps)
                 {
                     float clamped = Mathf.Clamp(target, -turret.Range, turret.Range);
