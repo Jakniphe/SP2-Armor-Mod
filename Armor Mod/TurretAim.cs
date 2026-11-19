@@ -92,7 +92,7 @@ namespace ArmorFragments
         private static System.Reflection.MethodInfo selectCamera;
         private static AccessTools.FieldRef<OrbitCameraController, Func<Transform>> orbitTargetRef;
         private static AccessTools.FieldRef<OrbitCameraController, bool> orbitCenterRef;
-        private static AccessTools.FieldRef<CameraManagerScript, OrbitCameraController> orbitCameraRef;
+        private static AccessTools.FieldRef<CameraManagerScript, CameraController> orbitCameraRef;   // the game types it as CameraController
         private static AccessTools.FieldRef<CameraVantageScript, CameraController> vantageControllerRef;
         private static AccessTools.FieldRef<InteractiveCameraController, float> fovTargetRef;
         private static bool refsTried, refsOk, orbitRefsOk;
@@ -131,12 +131,19 @@ namespace ArmorFragments
             {
                 orbitTargetRef = AccessTools.FieldRefAccess<OrbitCameraController, Func<Transform>>("_targetTransform");
                 orbitCenterRef = AccessTools.FieldRefAccess<OrbitCameraController, bool>("_centerOnRigidBody");
-                orbitCameraRef = AccessTools.FieldRefAccess<CameraManagerScript, OrbitCameraController>("_orbitCamera");
                 orbitRefsOk = true;
             }
             catch (Exception e)
             {
                 ArmorFragmentsPlugin.Log.LogWarning("Turret aim: the orbit camera's pivot can't be moved (" + e.Message + "), it stays where the game puts it");
+            }
+            try
+            {
+                orbitCameraRef = AccessTools.FieldRefAccess<CameraManagerScript, CameraController>("_orbitCamera");
+            }
+            catch (Exception e)
+            {
+                ArmorFragmentsPlugin.Log.LogWarning("Turret aim: a stale orbit camera pivot can't be repaired (" + e.Message + ")");
             }
             return refsOk;
         }
@@ -208,7 +215,7 @@ namespace ArmorFragments
         private static void RepairOrbitCamera(CameraManagerScript cm)
         {
             if (!orbitRefsOk || cm == null || orbitCameraRef == null) return;
-            OrbitCameraController found = orbitCameraRef(cm);
+            OrbitCameraController found = orbitCameraRef(cm) as OrbitCameraController;
             if (found == null) return;
             Func<Transform> target = orbitTargetRef(found);
             if (target == null || target.Method == null || target.Method.DeclaringType == null) return;
