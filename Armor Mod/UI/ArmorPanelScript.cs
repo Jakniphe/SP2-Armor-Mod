@@ -319,6 +319,14 @@ namespace ArmorFragments.UI
                 new KeyValuePair<string, Action>("Change fire key", () => TurretAim.CaptureKey(ArmorFragmentsPlugin.TurretFireKey)),
                 new KeyValuePair<string, Action>("Change next group key", () => TurretAim.CaptureKey(ArmorFragmentsPlugin.TurretGroupKey)),
             });
+            ToggleSetting(ArmorFragmentsPlugin.TurretTestSingle, "Control only one turret (test)",
+                "Only one turret of the active group is controlled and fires; the others hold where they are. Pick it with the buttons below. For finding out whether a swing comes from one turret or from many on one hull.");
+            Live("Turret under test", () => TurretAim.TestStatus);
+            builder.Buttons(new List<KeyValuePair<string, Action>>
+            {
+                new KeyValuePair<string, Action>("<  Previous turret", () => TurretAim.TestStep(-1)),
+                new KeyValuePair<string, Action>("Next turret  >", () => TurretAim.TestStep(1)),
+            });
             ToggleSetting(ArmorFragmentsPlugin.TurretShareHull, "Slow turrets sharing a hull",
                 "Each turret's gain is divided by the number of turrets of the group on the same hull body: many turrets pushing one hull together made it rock. Off for turrets on a heavy hull that does not move.");
             FloatSetting(ArmorFragmentsPlugin.TurretShareStrength, "Shared-hull slowing",

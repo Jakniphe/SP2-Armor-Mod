@@ -174,6 +174,7 @@ namespace ArmorFragments
         internal static ConfigEntry<float> TurretDerivative;
         internal static ConfigEntry<bool> TurretFireOnTarget, TurretLineOfFire, TurretShareHull;
         internal static ConfigEntry<float> TurretShareStrength;
+        internal static ConfigEntry<bool> TurretTestSingle;
         internal static ConfigEntry<float> TurretFireTolerance, TurretFireStagger, TurretMoveStagger;
         internal static ConfigEntry<UnityEngine.InputSystem.Key> TurretSightKey;
         internal static ConfigEntry<float> TurretSightZoom;
@@ -351,6 +352,9 @@ namespace ArmorFragments
                 "Turrets on the same hull body push it together when they turn (a recording of 14 turrets on one ship: the hull rocked 5 degrees at 2 Hz, with the ship on land). " +
                 "With this on, each turret's gain is divided by the number of turrets of the active group that share its hull, so many turrets are gentler on the hull (and slower to arrive). " +
                 "Turn it off for turrets on a heavy hull that does not move.");
+            TurretTestSingle = Config.Bind("TurretAim", "TestOneTurret", false,
+                "For testing: in mouse aim only ONE turret of the active group is controlled and fires (the others hold where they are), so its behavior can be told apart from " +
+                "the effect of many turrets on one hull. The panel has < and > buttons to pick which one.");
             TurretShareStrength = Config.Bind("TurretAim", "SharedHullStrength", 0.5f,
                 new ConfigDescription("How much SlowSharedHull slows each turret: the gain is divided by (the number of turrets in the group) to this power. 1 = divided by the number " +
                     "(14 turrets: 14 times slower; the turrets stopped answering small errors), 0.5 = by its square root (14 turrets: 3.7 times), 0 = not at all. " +

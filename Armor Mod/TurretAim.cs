@@ -104,7 +104,68 @@ namespace ArmorFragments
 
         private static int ActiveGroupId { get { return groupIds.Count > 0 ? groupIds[Mathf.Clamp(activeGroup, 0, groupIds.Count - 1)] : 0; } }
         private static bool Live(Gun gun) { return gun != null && gun.Cannon != null && gun.Cannon.PartScript != null; }
-        private static bool InActiveGroup(Gun gun) { return gun.GroupId == ActiveGroupId; }
+        // In the test mode only one turret of the active group counts as active: it is the only one controlled, mirrored in the share of the
+        // gain, and fired; the others hold where they are.
+        private static int testIndex;   // the position of the turret under test among the turrets of the active group
+
+        private static int GroupCount()
+        {
+            int n = 0;
+            foreach (Gun gun in guns) if (gun.GroupId == ActiveGroupId) n++;
+            return n;
+        }
+
+        private static Gun GroupGun(int position)
+        {
+            int n = 0;
+            foreach (Gun gun in guns)
+            {
+                if (gun.GroupId != ActiveGroupId) continue;
+                if (n == position) return gun;
+                n++;
+            }
+            return null;
+        }
+
+        private static bool InActiveGroup(Gun gun)
+        {
+            if (gun.GroupId != ActiveGroupId) return false;
+            if (!ArmorFragmentsPlugin.TurretTestSingle.Value) return true;
+            return gun == GroupGun(Mathf.Clamp(testIndex, 0, Mathf.Max(0, GroupCount() - 1)));
+        }
+
+        public static string TestStatus
+        {
+            get
+            {
+                if (!ArmorFragmentsPlugin.TurretTestSingle.Value) return "Off (all the turrets of the group are controlled)";
+                int n = GroupCount();
+                return n == 0 ? "No turret" : "Turret " + (Mathf.Clamp(testIndex, 0, n - 1) + 1) + " of " + n + " in group " + ActiveGroupId;
+            }
+        }
+
+        // The < and > buttons: the next turret of the group is the one controlled (and the mode is switched on).
+        public static void TestStep(int delta)
+        {
+            int n = GroupCount();
+            if (n == 0) return;
+            ArmorFragmentsPlugin.TurretTestSingle.Value = true;
+            testIndex = ((Mathf.Clamp(testIndex, 0, n - 1) + delta) % n + n) % n;
+            ResetForTestChange();
+            if (Active) Notice("testing turret " + (testIndex + 1) + " of " + n);
+            ArmorFragmentsPlugin.Log.LogInfo("Turret aim: only turret " + (testIndex + 1) + " of " + n + " in group " + ActiveGroupId + " is controlled now");
+        }
+
+        private static bool testWasOn;
+
+        private static void ResetForTestChange()
+        {
+            CameraManagerScript cm = CameraManagerScript.Instance;
+            if (sight && cm != null) LeaveSight(cm);
+            foreach (Gun gun in guns) { gun.BarrelKnown = false; ResetSwing(gun); }
+            desiredTime.Clear();
+            desiredDirection.Clear();
+        }
 
         // The turret the screen follows: the one whose sight camera is on, else the first live one of the active group.
         private static Gun Lead()
@@ -847,6 +908,11 @@ namespace ArmorFragments
                 Deactivate("the camera view was changed");
                 return;
             }
+            if (ArmorFragmentsPlugin.TurretTestSingle.Value != testWasOn)
+            {
+                testWasOn = ArmorFragmentsPlugin.TurretTestSingle.Value;
+                ResetForTestChange();
+            }
             Camera cam = cm.MainCamera;
             if (cam == null) return;
             UpdatePivot();
@@ -1015,6 +1081,10 @@ namespace ArmorFragments
                 Status = notice != null && Time.unscaledTime < noticeUntil ? notice
                     : (groupIds.Count > 1 ? "Group " + ActiveGroupId + ": " : "") + (sight ? "Sight: " : "") + state;
             }
+
+            // RELEASE-STRIP-BEGIN
+            RecordFrame(cam);
+            // RELEASE-STRIP-END
         }
 
         // What the camera sees along a ray, ignoring this vehicle (the camera sits outside it, so the first hits are usually its own parts).
@@ -1296,6 +1366,13 @@ namespace ArmorFragments
             HashSet<Turret> driven = new HashSet<Turret>();
             bool limit = false;
             float now = Time.fixedTime;
+            // RELEASE-STRIP-BEGIN
+            if (recorder != null)
+            {
+                Camera recorded = Camera.main;
+                recordCamera = recorded != null ? recorded.transform.position : Vector3.zero;
+            }
+            // RELEASE-STRIP-END
             RememberDesired(now);
             aimIsMoving = Vector3.Angle(desired, DesiredAt(now - 0.3f)) > 1f;
             float stagger = ArmorFragmentsPlugin.TurretMoveStagger.Value;
@@ -1463,23 +1540,74 @@ namespace ArmorFragments
                 commands[turret.Script] = target;
                 driven.Add(turret);
                 // RELEASE-STRIP-BEGIN
-                if (recorder != null) RecordRow(index, trueRotation, rotation, turret, current, target, (float)theta[i], (float)hull[i], step, gain, gun.GainScale, lagUsed, pendingDegrees,
+                if (recorder != null) RecordRow(index, gun, trueRotation, rotation, turret, current, target, (float)theta[i], (float)hull[i], step, gain, lagUsed, pendingDegrees,
                                                     gun.Hull != null ? (float)Solve(axes, -gun.Hull.angularVelocity)[i] * Mathf.Rad2Deg : 0f);
                 // RELEASE-STRIP-END
             }
         }
 
         // RELEASE-STRIP-BEGIN
-        // ---- Recording for diagnosis: one CSV row per rotator per physics step (the panel's "Record turret data" button) ------------------
+        // ---- Recording for diagnosis (the panel's "Record turret data" button) ---------------------------------------------------------
+        // Three files in the BepInEx folder, written when the recording stops (writing while playing made the game stutter; it stops by itself
+        // after 120 s):
+        //   turret-aim-log.csv           one row per rotator per physics step (100 a second), with the cursor, the barrel, the wanted direction
+        //                                of the gun and the camera position at that step
+        //   turret-aim-frames.csv        one row per turret per rendered frame (the pose the player sees: interpolated, ~30 a second), with the
+        //                                camera's position and direction, to tell a physics swing from something that is only drawn
+        //   turret-aim-log-settings.txt  the settings the recording was made with, and each turret's measured lag, added lag, gain and share at the end
 
-        private static System.Text.StringBuilder recorder;   // kept in memory and written when it stops (writing while playing made the game stutter)
+        private static System.Text.StringBuilder recorder;   // kept in memory and written when it stops
+        private static System.Text.StringBuilder frameRecorder;
         private static float recordStarted;
-        private static int recordRows;
-        private static string recordPath;
+        private static int recordRows, frameRows;
+        private static string recordPath, framePath, settingsPath, recordSettings;
+        private static Vector3 recordCamera;   // the camera's position at the current physics step
 
         public static string RecordStatus
         {
-            get { return recorder != null ? "Recording: " + recordRows + " rows (" + (Time.unscaledTime - recordStarted).ToString("F0") + " s) -> " + recordPath : "Not recording"; }
+            get { return recorder != null ? "Recording: " + recordRows + " rows, " + frameRows + " frames (" + (Time.unscaledTime - recordStarted).ToString("F0") + " s) -> " + recordPath : "Not recording"; }
+        }
+
+        private static string F(float value)
+        {
+            return value.ToString("F4", System.Globalization.CultureInfo.InvariantCulture);
+        }
+
+        private static string V(Vector3 value)
+        {
+            return F(value.x) + "," + F(value.y) + "," + F(value.z);
+        }
+
+        // The settings that decide how the turrets behave, one per line.
+        private static string SettingsText()
+        {
+            System.Text.StringBuilder text = new System.Text.StringBuilder();
+            text.AppendLine("Armor Fragments " + ArmorFragmentsPlugin.Version + ", recorded " + DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"));
+            text.AppendLine("Response seconds (ResponseSeconds): " + ArmorFragmentsPlugin.TurretResponse.Value);
+            text.AppendLine("Braking seconds (BrakingSeconds): " + ArmorFragmentsPlugin.TurretDerivative.Value);
+            text.AppendLine("Damping seconds (DampingSeconds): " + ArmorFragmentsPlugin.TurretDamping.Value);
+            text.AppendLine("Slow turrets sharing a hull (SlowSharedHull): " + ArmorFragmentsPlugin.TurretShareHull.Value);
+            text.AppendLine("Shared-hull strength (SharedHullStrength): " + ArmorFragmentsPlugin.TurretShareStrength.Value);
+            text.AppendLine("Turret start stagger (MoveStaggerSeconds): " + ArmorFragmentsPlugin.TurretMoveStagger.Value);
+            text.AppendLine("Fire only on target (FireOnlyOnTarget): " + ArmorFragmentsPlugin.TurretFireOnTarget.Value + ", tolerance " + ArmorFragmentsPlugin.TurretFireTolerance.Value + " deg");
+            text.AppendLine("Salvo ripple (FireStaggerSeconds): " + ArmorFragmentsPlugin.TurretFireStagger.Value);
+            text.AppendLine("Check line of fire (CheckLineOfFire): " + ArmorFragmentsPlugin.TurretLineOfFire.Value);
+            text.AppendLine("Test one turret: " + ArmorFragmentsPlugin.TurretTestSingle.Value + (ArmorFragmentsPlugin.TurretTestSingle.Value ? " (turret " + (testIndex + 1) + " of the group)" : ""));
+            text.AppendLine("Active group: " + ActiveGroupId + ", turrets in the group: " + GroupCount() + ", turrets in all: " + guns.Count + ", rotators: " + turrets.Count);
+            text.AppendLine("Physics step: " + Time.fixedDeltaTime + " s");
+            return text.ToString();
+        }
+
+        private static string TurretStateText()
+        {
+            System.Text.StringBuilder text = new System.Text.StringBuilder();
+            for (int g = 0; g < guns.Count; g++)
+            {
+                Gun gun = guns[g];
+                text.AppendLine("turret " + (g + 1) + " (group " + gun.GroupId + "): measured lag " + (gun.Lag * 1000f).ToString("F0") + " ms, added lag " + (gun.LagBoost * 1000f).ToString("F0") +
+                                " ms, gain scale " + gun.GainScale.ToString("F2") + ", share " + gun.Share + ", rotators " + gun.Drivers.Count);
+            }
+            return text.ToString();
         }
 
         public static void ToggleRecording()
@@ -1487,16 +1615,26 @@ namespace ArmorFragments
             if (recorder != null) { StopRecording(); return; }
             try
             {
-                recordPath = System.IO.Path.Combine(BepInEx.Paths.BepInExRootPath, "turret-aim-log.csv");
+                string folder = BepInEx.Paths.BepInExRootPath;
+                recordPath = System.IO.Path.Combine(folder, "turret-aim-log.csv");
+                framePath = System.IO.Path.Combine(folder, "turret-aim-frames.csv");
+                settingsPath = System.IO.Path.Combine(folder, "turret-aim-log-settings.txt");
                 recorder = new System.Text.StringBuilder(4 * 1024 * 1024);
-                recorder.AppendLine("time_s,gun,error_deg,aimed_from_deg,rotator,angle_deg,target_deg,theta_deg,hull_deg_per_s,step_deg,gain,gain_scale,at_limit,lag_s,pending_deg,hull_raw_deg_per_s");
+                frameRecorder = new System.Text.StringBuilder(1024 * 1024);
+                recorder.AppendLine("time_s,gun,error_deg,aimed_from_deg,rotator,angle_deg,target_deg,theta_deg,hull_deg_per_s,step_deg,gain,gain_scale,at_limit,lag_s,pending_deg,hull_raw_deg_per_s," +
+                                    "cursor_x,cursor_y,cursor_z,want_x,want_y,want_z,barrel_x,barrel_y,barrel_z,cam_x,cam_y,cam_z,aim_moving,share");
+                frameRecorder.AppendLine("time_s,frame_dt,gun,error_deg,barrel_x,barrel_y,barrel_z,want_x,want_y,want_z,cursor_x,cursor_y,cursor_z,cam_x,cam_y,cam_z,cam_fx,cam_fy,cam_fz,fov");
                 recordStarted = Time.unscaledTime;
                 recordRows = 0;
-                ArmorFragmentsPlugin.Log.LogInfo("Turret aim: recording to " + recordPath + " (it stops by itself after 120 s, or press the button again)");
+                frameRows = 0;
+                recordSettings = SettingsText();
+                ArmorFragmentsPlugin.Log.LogInfo("Turret aim: recording to " + recordPath + " and " + framePath + " (it stops by itself after 120 s, or press the button again)");
+                ArmorFragmentsPlugin.Log.LogInfo("Turret aim: settings of this recording: " + recordSettings.Replace("\r", "").Replace("\n", " | "));
             }
             catch (Exception e)
             {
                 recorder = null;
+                frameRecorder = null;
                 ArmorFragmentsPlugin.Log.LogError("Turret aim: can't record: " + e.Message);
             }
         }
@@ -1504,30 +1642,62 @@ namespace ArmorFragments
         public static void StopRecording()
         {
             if (recorder == null) return;
-            System.Text.StringBuilder text = recorder;
+            System.Text.StringBuilder text = recorder, frames = frameRecorder;
             recorder = null;
+            frameRecorder = null;
             try { System.IO.File.WriteAllText(recordPath, text.ToString()); } catch (Exception e) { ArmorFragmentsPlugin.Log.LogError("Turret aim: can't write the recording: " + e.Message); }
-            ArmorFragmentsPlugin.Log.LogInfo("Turret aim: recording stopped, " + recordRows + " rows in " + recordPath);
+            try { if (frames != null) System.IO.File.WriteAllText(framePath, frames.ToString()); } catch (Exception e) { ArmorFragmentsPlugin.Log.LogError("Turret aim: can't write the frames: " + e.Message); }
+            try { System.IO.File.WriteAllText(settingsPath, recordSettings + "\r\nAt the end of the recording:\r\n" + TurretStateText()); } catch (Exception e) { ArmorFragmentsPlugin.Log.LogError("Turret aim: can't write the settings: " + e.Message); }
+            ArmorFragmentsPlugin.Log.LogInfo("Turret aim: recording stopped, " + recordRows + " rows and " + frameRows + " frames in " + recordPath);
         }
 
-        private static void RecordRow(int gun, Vector3 trueRotation, Vector3 aimedFrom, Turret turret, float angle, float target, float theta, float hull, float step, float gain,
-                                      float gainScale, float lag, float pending, float hullRaw)
+        private static void RecordRow(int gunIndex, Gun gun, Vector3 trueRotation, Vector3 aimedFrom, Turret turret, float angle, float target, float theta, float hull, float step, float gain,
+                                      float lag, float pending, float hullRaw)
         {
             try
             {
                 float now = Time.unscaledTime;
-                System.Globalization.CultureInfo c = System.Globalization.CultureInfo.InvariantCulture;
-                recorder.AppendLine((now - recordStarted).ToString("F3", c) + "," + gun + "," + (trueRotation.magnitude * Mathf.Rad2Deg).ToString("F4", c) + "," +
-                                   (aimedFrom.magnitude * Mathf.Rad2Deg).ToString("F4", c) + "," + turret.Name.Replace(',', ' ') + "," + angle.ToString("F4", c) + "," +
-                                   target.ToString("F4", c) + "," + (theta * Mathf.Rad2Deg).ToString("F4", c) + "," + (hull * Mathf.Rad2Deg).ToString("F4", c) + "," +
-                                   (step * Mathf.Rad2Deg).ToString("F4", c) + "," + gain.ToString("F4", c) + "," + gainScale.ToString("F2", c) + "," + (atLimit ? 1 : 0) + "," +
-                                   lag.ToString("F3", c) + "," + pending.ToString("F4", c) + "," + hullRaw.ToString("F4", c));
+                recorder.AppendLine(F(now - recordStarted) + "," + gunIndex + "," + F(trueRotation.magnitude * Mathf.Rad2Deg) + "," +
+                                   F(aimedFrom.magnitude * Mathf.Rad2Deg) + "," + turret.Name.Replace(',', ' ') + "," + F(angle) + "," +
+                                   F(target) + "," + F(theta * Mathf.Rad2Deg) + "," + F(hull * Mathf.Rad2Deg) + "," +
+                                   F(step * Mathf.Rad2Deg) + "," + gain.ToString("F4", System.Globalization.CultureInfo.InvariantCulture) + "," +
+                                   gun.GainScale.ToString("F2", System.Globalization.CultureInfo.InvariantCulture) + "," + (atLimit ? 1 : 0) + "," +
+                                   lag.ToString("F3", System.Globalization.CultureInfo.InvariantCulture) + "," + F(pending) + "," + F(hullRaw) + "," +
+                                   V(desired) + "," + V(gun.Want) + "," + V(gun.Cannon.transform.forward) + "," + V(recordCamera) + "," + (aimIsMoving ? 1 : 0) + "," + gun.Share);
                 recordRows++;
                 if (now - recordStarted > 120f) StopRecording();
             }
             catch (Exception e)
             {
                 ArmorFragmentsPlugin.Log.LogError("Turret aim: recording failed: " + e.Message);
+                StopRecording();
+            }
+        }
+
+        // One row per turret of the active group for the frame being drawn: the pose the player sees (the rigidbodies are interpolated between
+        // physics steps), and where the camera was and looked.
+        private static void RecordFrame(Camera cam)
+        {
+            if (frameRecorder == null) return;
+            try
+            {
+                float now = Time.unscaledTime;
+                Vector3 camPosition = cam != null ? cam.transform.position : Vector3.zero;
+                Vector3 camForward = cam != null ? cam.transform.forward : Vector3.zero;
+                for (int g = 0; g < guns.Count; g++)
+                {
+                    Gun gun = guns[g];
+                    if (!InActiveGroup(gun) || !Live(gun)) continue;
+                    Vector3 barrel = gun.Cannon.transform.forward;
+                    frameRecorder.AppendLine(F(now - recordStarted) + "," + F(Time.unscaledDeltaTime) + "," + g + "," + F(Vector3.Angle(barrel, gun.Want)) + "," + V(barrel) + "," + V(gun.Want) + "," +
+                                             V(desired) + "," + V(camPosition) + "," + V(camForward) + "," + F(cam != null ? cam.fieldOfView : 0f));
+                    frameRows++;
+                }
+                if (now - recordStarted > 120f) StopRecording();
+            }
+            catch (Exception e)
+            {
+                ArmorFragmentsPlugin.Log.LogError("Turret aim: frame recording failed: " + e.Message);
                 StopRecording();
             }
         }
