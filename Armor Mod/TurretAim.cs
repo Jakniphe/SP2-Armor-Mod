@@ -82,7 +82,8 @@ namespace ArmorFragments
             public float Lag;          // how long the barrel takes to follow its rotators (s), the slowest of them; 0 = not measured
 
             // Swinging (each turret has its own): the error changing side over and over cuts this turret's gain.
-            public Vector3 PreviousError;
+            public float PreviousTheta;   // the last signed gap (degrees) of the rotator with the biggest one
+            public int Share = 1;         // turrets of the active group on the same hull body (itself included)
             public float GainScale = 1f;
             public float LastSwing, LastRecover;
             public readonly List<float> Flips = new List<float>();
@@ -122,6 +123,9 @@ namespace ArmorFragments
         // second anyway (a rotator turns at 10 degrees a second or so). A ship's hull shaking at 2 Hz fed through a short filter made the
         // turrets chase it back and forth at their speed limit, all fourteen together, which shook the ship more (found in a recording).
         private const float HullFilterSeconds = 0.4f;
+
+        // The gain never goes below this per physics step (0.4 a second), however many turrets share a hull and however often the swing detector cut it.
+        private const float MinimumGain = 0.004f;
 
         // The braking term needs the gun's speed without much delay (a delay in it is what lets a swing grow): only a few physics steps of smoothing.
         private const float BrakeFilterSeconds = 0.03f;
@@ -386,12 +390,27 @@ namespace ArmorFragments
             pivotYKnown = true;
 
             // Centered on the vehicle: the hull's centre of mass once it is known, else the middle of its colliders.
+            // The body the turrets turn on can shake (a hull part on soft joints rocking 5 degrees moves its centre of mass, and the camera with it);
+            // the centre of mass of all the bodies joined to it does not move when they only push each other.
             Vector3 middle = hullBody != null ? hullBody.worldCenterOfMass : center;
+            if (pivotBodies.Count > 0)
+            {
+                Vector3 sum = Vector3.zero;
+                float mass = 0f;
+                foreach (Rigidbody body in pivotBodies)
+                {
+                    if (body == null || !body.gameObject.activeInHierarchy) continue;
+                    sum += body.worldCenterOfMass * body.mass;
+                    mass += body.mass;
+                }
+                if (mass > 0f) middle = sum / mass;
+            }
             pivot.transform.position = new Vector3(middle.x, pivotY, middle.z);
         }
 
         private static float pivotY;
         private static bool pivotYKnown;
+        private static readonly List<Rigidbody> pivotBodies = new List<Rigidbody>();   // every body joined to the turrets' hull (the vehicle)
 
         // ---- The optical sight --------------------------------------------------------------------------------
         // The camera part picked on the pointer cannon in the designer (Pointer > Pick sight camera). The sight key switches to its view (the game's
@@ -1275,6 +1294,14 @@ namespace ArmorFragments
             RememberDesired(now);
             float stagger = ArmorFragmentsPlugin.TurretMoveStagger.Value;
             int rank = 0;
+            foreach (Gun gun in guns)
+            {
+                if (!InActiveGroup(gun) || !Live(gun)) continue;
+                int share = 0;
+                foreach (Gun other in guns)
+                    if (InActiveGroup(other) && Live(other) && other.Hull == gun.Hull) share++;
+                gun.Share = Mathf.Max(1, share);
+            }
             for (int g = 0; g < guns.Count; g++)
             {
                 Gun gun = guns[g];
@@ -1370,7 +1397,6 @@ namespace ArmorFragments
             gun.PreviousBarrel = barrel;
             gun.BarrelKnown = true;
             if (isLead) errorDegrees = trueRotation.magnitude * Mathf.Rad2Deg;
-            WatchForSwinging(gun, trueRotation, isLead);
             if (use.Count == 0) return;
 
             // The rotation split between the rotators by their axes: the small least-squares problem  sum(theta_i * axis_i) = rotation.
@@ -1388,7 +1414,16 @@ namespace ArmorFragments
             float brake = ArmorFragmentsPlugin.TurretDerivative.Value;
             double[] speed = brake > 0f && gun.BarrelKnown ? Solve(axes, gun.FastSpin) : new double[use.Count];
 
-            float gain = (1f - Mathf.Exp(-dt / Mathf.Max(ArmorFragmentsPlugin.TurretResponse.Value, 0.02f))) * gun.GainScale;
+            // The gap's sign, for the swing detector: the rotator with the biggest gap (the signed value of the one that turns it most).
+            int biggest = 0;
+            for (int i = 1; i < use.Count; i++) if (Math.Abs(theta[i]) > Math.Abs(theta[biggest])) biggest = i;
+            WatchForSwinging(gun, (float)theta[biggest] * Mathf.Rad2Deg, trueRotation.magnitude * Mathf.Rad2Deg, isLead);
+
+            // Turrets on one hull body push it together: the more of them, the gentler each is (the hull rocked 5 degrees at 2 Hz in a recording of
+            // 14 turrets, even with the ship on land, and a model fitted to it says the push grows with the number of turrets that turn at once).
+            float share = ArmorFragmentsPlugin.TurretShareHull.Value ? 1f / Mathf.Max(1, gun.Share) : 1f;
+            float baseGain = 1f - Mathf.Exp(-dt / Mathf.Max(ArmorFragmentsPlugin.TurretResponse.Value, 0.02f));
+            float gain = Mathf.Max(baseGain * share * gun.GainScale, Mathf.Min(baseGain, MinimumGain));
             for (int i = 0; i < use.Count; i++)
             {
                 Turret turret = use[i];
@@ -1400,7 +1435,7 @@ namespace ArmorFragments
                 float step = ((float)theta[i] - brake * (float)speed[i]) * gain;
                 float smallest = Mathf.Min(Mathf.Abs((float)theta[i]), 0.01f * Mathf.Deg2Rad);
                 if (brake <= 0f && Mathf.Abs(step) < smallest) step = Mathf.Sign((float)theta[i]) * smallest;
-                float target = current + turret.Signs[index] * (step + (float)hull[i] * dt) * Mathf.Rad2Deg;
+                float target = current + turret.Signs[index] * (step + (float)hull[i] * dt * share) * Mathf.Rad2Deg;
                 if (!turret.Wraps)
                 {
                     float clamped = Mathf.Clamp(target, -turret.Range, turret.Range);
@@ -1487,39 +1522,42 @@ namespace ArmorFragments
 
         private static void ResetSwing(Gun gun)
         {
-            gun.PreviousError = Vector3.zero;
+            gun.PreviousTheta = 0f;
             gun.GainScale = 1f;
             gun.Flips.Clear();
         }
 
-        // The error changing side, over and over (4 times in a second, each one more than a third of a degree: two swings of 2 Hz), is swinging.
-        // Then that turret's gain is cut by 30% (down to 15% of itself) and logged; when it has been calm for a few seconds the gain creeps back up.
-        // Each turret has its own: a ship's turrets are not all alike.
-        private static void WatchForSwinging(Gun gun, Vector3 error, bool isLead)
+        // The gap closing (the rotator with the biggest gap) changing side over and over (4 times in a second, each time more than a third of a
+        // degree: two swings of 2 Hz) is swinging. Then that turret's gain is cut by 40% (down to a tenth of itself) and logged; when it has been
+        // calm for a few seconds the gain creeps back up. Each turret has its own: a ship's turrets are not all alike. (It used to watch the
+        // direction of the whole error, which did not change sign while the gap along the turret ring did, so it never saw a swing like that.)
+        private static void WatchForSwinging(Gun gun, float theta, float errorDegrees, bool isLead)
         {
             float now = Time.unscaledTime;
-            float degrees = error.magnitude * Mathf.Rad2Deg;
-            if (degrees > 0.3f && gun.PreviousError.sqrMagnitude > 0f && Vector3.Dot(error, gun.PreviousError) < 0f)
-                gun.Flips.Add(now);
-            gun.PreviousError = degrees > 0.3f ? error : Vector3.zero;
+            if (Mathf.Abs(theta) > 0.3f)
+            {
+                if (gun.PreviousTheta != 0f && Mathf.Sign(theta) != Mathf.Sign(gun.PreviousTheta)) gun.Flips.Add(now);
+                gun.PreviousTheta = theta;
+            }
+            else gun.PreviousTheta = 0f;
 
             gun.Flips.RemoveAll(t => now - t > 1f);
             if (gun.Flips.Count >= 4)
             {
                 gun.Flips.Clear();
                 gun.LastSwing = now;
-                float next = Mathf.Max(0.15f, gun.GainScale * 0.7f);
+                float next = Mathf.Max(0.1f, gun.GainScale * 0.6f);
                 if (next < gun.GainScale)
                 {
                     gun.GainScale = next;
-                    ArmorFragmentsPlugin.Log.LogInfo("Turret aim: turret " + (guns.IndexOf(gun) + 1) + " was swinging (error " + degrees.ToString("F2") + " deg, lag " +
-                        (gun.Lag * 1000f).ToString("F0") + " ms" +
+                    ArmorFragmentsPlugin.Log.LogInfo("Turret aim: turret " + (guns.IndexOf(gun) + 1) + " was swinging (error " + errorDegrees.ToString("F2") + " deg, lag " +
+                        (gun.Lag * 1000f).ToString("F0") + " ms, " + gun.Share + " turret(s) on its hull" +
                         (isLead ? ", aim point " + aimDistance.ToString("F0") + " m away, between " + aimMin.ToString("F0") + " and " + aimMax.ToString("F0") +
                                   " m in the last 2 s, camera pivot height " + pivotY.ToString("F2") : "") +
                         "), its gain is now " + (gun.GainScale * 100f).ToString("F0") + "%");
                 }
             }
-            else if (gun.GainScale < 1f && now - gun.LastSwing > 3f && now - gun.LastRecover > 2f)
+            else if (gun.GainScale < 1f && now - gun.LastSwing > 5f && now - gun.LastRecover > 3f)
             {
                 gun.LastRecover = now;
                 gun.GainScale = Mathf.Min(1f, gun.GainScale + 0.1f);
@@ -1902,6 +1940,7 @@ namespace ArmorFragments
         private static void FindHull()
         {
             hullBody = null;
+            pivotBodies.Clear();
             for (int g = 0; g < guns.Count; g++)
             {
                 Gun gun = guns[g];
@@ -1928,6 +1967,18 @@ namespace ArmorFragments
                 ArmorFragmentsPlugin.Log.LogInfo("Turret aim: the hull of turret " + (g + 1) + " is the body '" +
                                                  (current != null ? current.name : "?") + "' (" +
                                                  (left.Count == 0 ? "every rotator is on the way to it" : left.Count + " rotator(s) are not on the way") + ")");
+            }
+
+            // Every body joined to the hull (the whole vehicle): the camera pivot follows their centre of mass, which a rocking hull part does not move.
+            if (edges != null)
+            {
+                foreach (Gun gun in guns)
+                {
+                    if (gun.Hull == null) continue;
+                    foreach (Rigidbody body in Reach(edges, gun.Hull, null)) pivotBodies.Add(body);
+                    break;
+                }
+                ArmorFragmentsPlugin.Log.LogInfo("Turret aim: the camera pivot follows the centre of mass of " + pivotBodies.Count + " joined bodies");
             }
         }
 

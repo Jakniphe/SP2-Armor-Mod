@@ -172,7 +172,7 @@ namespace ArmorFragments
         internal static ConfigEntry<float> TurretCameraHeight;
         internal static ConfigEntry<float> TurretDamping;
         internal static ConfigEntry<float> TurretDerivative;
-        internal static ConfigEntry<bool> TurretFireOnTarget, TurretLineOfFire;
+        internal static ConfigEntry<bool> TurretFireOnTarget, TurretLineOfFire, TurretShareHull;
         internal static ConfigEntry<float> TurretFireTolerance, TurretFireStagger, TurretMoveStagger;
         internal static ConfigEntry<UnityEngine.InputSystem.Key> TurretSightKey;
         internal static ConfigEntry<float> TurretSightZoom;
@@ -346,6 +346,10 @@ namespace ArmorFragments
                 "In mouse aim, switches to the next turret group when the vehicle has more than one (the turrets of the active group are aimed and fire; the others hold). 'None' disables it.");
             TurretFireMouseButton = Config.Bind("TurretAim", "FireMouseButton", TurretFireMouse.Left,
                 "In mouse aim, the mouse button that fires the cannons of the active turret group that are not set to fire by key (Left or Middle; the right button is the zoom).");
+            TurretShareHull = Config.Bind("TurretAim", "SlowSharedHull", true,
+                "Turrets on the same hull body push it together when they turn (a recording of 14 turrets on one ship: the hull rocked 5 degrees at 2 Hz, with the ship on land). " +
+                "With this on, each turret's gain is divided by the number of turrets of the active group that share its hull, so many turrets are gentler on the hull (and slower to arrive). " +
+                "Turn it off for turrets on a heavy hull that does not move.");
             TurretFireOnTarget = Config.Bind("TurretAim", "FireOnlyOnTarget", true,
                 "In mouse aim, a turret fires only when its gun points within FireToleranceDegrees of where it should (the cursor). Turrets still turning, or stopped at their limit, hold fire while the others shoot.");
             TurretFireTolerance = Config.Bind("TurretAim", "FireToleranceDegrees", 2f,

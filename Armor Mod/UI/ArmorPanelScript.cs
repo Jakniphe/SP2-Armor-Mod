@@ -319,6 +319,8 @@ namespace ArmorFragments.UI
                 new KeyValuePair<string, Action>("Change fire key", () => TurretAim.CaptureKey(ArmorFragmentsPlugin.TurretFireKey)),
                 new KeyValuePair<string, Action>("Change next group key", () => TurretAim.CaptureKey(ArmorFragmentsPlugin.TurretGroupKey)),
             });
+            ToggleSetting(ArmorFragmentsPlugin.TurretShareHull, "Slow turrets sharing a hull",
+                "Each turret's gain is divided by the number of turrets of the group on the same hull body: many turrets pushing one hull together made it rock. Off for turrets on a heavy hull that does not move.");
             ToggleSetting(ArmorFragmentsPlugin.TurretFireOnTarget, "Fire only turrets on target",
                 "A turret fires only when its gun points within the tolerance of the cursor. Turrets still turning, or stopped at their limit, hold fire while the others shoot.");
             FloatSetting(ArmorFragmentsPlugin.TurretFireTolerance, "On-target tolerance",
