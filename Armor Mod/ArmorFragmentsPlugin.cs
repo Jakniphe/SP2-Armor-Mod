@@ -171,6 +171,7 @@ namespace ArmorFragments
         internal static ConfigEntry<float> TurretResponse;
         internal static ConfigEntry<float> TurretCameraHeight;
         internal static ConfigEntry<float> TurretDamping;
+        internal static ConfigEntry<float> TurretDerivative;
         internal static ConfigEntry<UnityEngine.InputSystem.Key> TurretSightKey;
         internal static ConfigEntry<float> TurretSightZoom;
         internal static ConfigEntry<float> TurretSightSensitivity;
@@ -359,6 +360,11 @@ namespace ArmorFragments
                 new ConfigDescription("The turret aims from where the gun will be this many seconds from now (its own speed times this), so it does not overshoot " +
                     "and swing around the circle. 0 = off. Raise it if the gun still swings; too much makes it sluggish.",
                     new AcceptableValueRange<float>(0f, 0.4f)));
+            TurretDerivative = Config.Bind("TurretAim", "BrakingSeconds", 0.15f,
+                new ConfigDescription("The turret brakes in proportion to how fast the gun is moving in the world (the derivative of a PID): this many seconds of its " +
+                    "own speed are taken off the gap it is closing. It stops a ship's turrets from shaking the hull and swinging together, and from overshooting a " +
+                    "big move. 0 = off. Raise it if the turrets still swing; too much makes them slow to arrive.",
+                    new AcceptableValueRange<float>(0f, 0.6f)));
             TurretResponse = Config.Bind("TurretAim", "ResponseSeconds", 0.12f,
                 new ConfigDescription("How quickly the turret closes on the cursor, in seconds (the time the gap takes to shrink to a third). " +
                     "Smaller is snappier; if the gun swings back and forth around the cursor, raise it.",

@@ -327,6 +327,8 @@ namespace ArmorFragments.UI
                 "Degrees the aim turns for each mouse count through the sight (less when zoomed in).", 0.005f, " deg");
             FloatSetting(ArmorFragmentsPlugin.TurretResponse, "Turret response",
                 "Seconds the turret takes to close the gap to the circle. Smaller is snappier; if the gun swings back and forth around the circle, raise it.", 0.01f, " s");
+            FloatSetting(ArmorFragmentsPlugin.TurretDerivative, "Turret braking",
+                "The turret brakes in proportion to how fast the gun moves in the world (the derivative): this many seconds of its speed are taken off the gap. It keeps a ship's turrets from shaking the hull and swinging together. 0 = off. Raise it if the turrets still swing.", 0.01f, " s");
             FloatSetting(ArmorFragmentsPlugin.TurretDamping, "Turret damping",
                 "The turret aims from where the gun will be this many seconds from now, so it does not overshoot and swing around the circle. 0 = off. Raise it if the gun still swings; too much makes it sluggish.", 0.01f, " s");
             FloatSetting(ArmorFragmentsPlugin.TurretCameraHeight, "Camera pivot height",

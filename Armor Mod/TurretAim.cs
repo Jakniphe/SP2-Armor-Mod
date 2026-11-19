@@ -75,6 +75,7 @@ namespace ArmorFragments
             public bool BarrelKnown;
             public Vector3 Spin;       // the barrel's angular velocity (rad/s), smoothed
             public Vector3 HullSpin;   // the hull's angular velocity (rad/s), smoothed
+            public Vector3 FastSpin;   // the barrel's angular velocity (rad/s), hardly smoothed: the braking term works from it
             public float Lag;          // how long the barrel takes to follow its rotators (s), the slowest of them; 0 = not measured
 
             // Swinging (each turret has its own): the error changing side over and over cuts this turret's gain.
@@ -118,6 +119,9 @@ namespace ArmorFragments
         // second anyway (a rotator turns at 10 degrees a second or so). A ship's hull shaking at 2 Hz fed through a short filter made the
         // turrets chase it back and forth at their speed limit, all fourteen together, which shook the ship more (found in a recording).
         private const float HullFilterSeconds = 0.4f;
+
+        // The braking term needs the gun's speed without much delay (a delay in it is what lets a swing grow): only a few physics steps of smoothing.
+        private const float BrakeFilterSeconds = 0.03f;
 
         private static Vector3 Smooth(Vector3 current, Vector3 sample, bool first, float dt, float tau = VelocityFilterSeconds)
         {
@@ -1194,7 +1198,12 @@ namespace ArmorFragments
             Vector3 rotation = trueRotation;
             float lead = ArmorFragmentsPlugin.TurretDamping.Value;
             if (gun.BarrelKnown && dt > 1e-4f)
-                gun.Spin = Smooth(gun.Spin, RotationVector(gun.PreviousBarrel, barrel) / dt, false, dt);   // rad/s, world
+            {
+                Vector3 turning = RotationVector(gun.PreviousBarrel, barrel) / dt;   // rad/s, world
+                gun.Spin = Smooth(gun.Spin, turning, false, dt);
+                gun.FastSpin = Smooth(gun.FastSpin, turning, false, dt, BrakeFilterSeconds);
+            }
+            else gun.FastSpin = Vector3.zero;
             if (gun.Hull != null)
                 gun.HullSpin = Smooth(gun.HullSpin, gun.Hull.angularVelocity, !gun.BarrelKnown, dt, HullFilterSeconds);
 
@@ -1250,6 +1259,13 @@ namespace ArmorFragments
             double[] hull = new double[use.Count];
             if (gun.Hull != null) hull = Solve(axes, -gun.HullSpin);
 
+            // The braking (derivative) term: the gun's own speed in the world, split between the rotators the same way, taken off the gap.
+            // Hull and turrets pushed each other into a growing swing (a recording of a 14-turret ship: 5 deg/s to 95 deg/s of hull spin in three
+            // seconds); in a model fitted to it, braking by the gun's speed kept it stable over every coupling and delay tried and took the
+            // overshoot of a 20 degree move from 18 degrees to none, where lowering the gain did not help.
+            float brake = ArmorFragmentsPlugin.TurretDerivative.Value;
+            double[] speed = brake > 0f && gun.BarrelKnown ? Solve(axes, gun.FastSpin) : new double[use.Count];
+
             float gain = (1f - Mathf.Exp(-dt / Mathf.Max(ArmorFragmentsPlugin.TurretResponse.Value, 0.02f))) * gun.GainScale;
             for (int i = 0; i < use.Count; i++)
             {
@@ -1259,9 +1275,9 @@ namespace ArmorFragments
                 // rounding): the turret then stops short of the cursor. So a step is never smaller than a hundredth of a degree, or the error
                 // itself when that is smaller (it never overshoots). It was a twentieth, which made every turret creep at 5 degrees a second
                 // all the time (fourteen of them shook the ship).
-                float step = (float)theta[i] * gain;
+                float step = ((float)theta[i] - brake * (float)speed[i]) * gain;
                 float smallest = Mathf.Min(Mathf.Abs((float)theta[i]), 0.01f * Mathf.Deg2Rad);
-                if (Mathf.Abs(step) < smallest) step = Mathf.Sign((float)theta[i]) * smallest;
+                if (brake <= 0f && Mathf.Abs(step) < smallest) step = Mathf.Sign((float)theta[i]) * smallest;
                 float target = current + turret.Signs[index] * (step + (float)hull[i] * dt) * Mathf.Rad2Deg;
                 if (!turret.Wraps)
                 {
