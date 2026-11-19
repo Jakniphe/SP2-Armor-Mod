@@ -170,6 +170,7 @@ namespace ArmorFragments
         internal static ConfigEntry<float> TurretZoom;
         internal static ConfigEntry<float> TurretResponse;
         internal static ConfigEntry<float> TurretCameraHeight;
+        internal static ConfigEntry<float> TurretDamping;
 
         // Crew ([CRW] seats, see Crew.cs).
         internal static ConfigEntry<bool> CrewEnabled;
@@ -316,6 +317,10 @@ namespace ArmorFragments
             TurretCameraHeight = Config.Bind("TurretAim", "PivotHeight", 0.5f,
                 new ConfigDescription("The point the camera turns around (where it sits at full zoom) is centered on the vehicle and this many meters above its highest point.",
                     new AcceptableValueRange<float>(0f, 10f)));
+            TurretDamping = Config.Bind("TurretAim", "DampingSeconds", 0.12f,
+                new ConfigDescription("The turret aims from where the gun will be this many seconds from now (its own speed times this), so it does not overshoot " +
+                    "and swing around the circle. 0 = off. Raise it if the gun still swings; too much makes it sluggish.",
+                    new AcceptableValueRange<float>(0f, 0.4f)));
             TurretResponse = Config.Bind("TurretAim", "ResponseSeconds", 0.12f,
                 new ConfigDescription("How quickly the turret closes on the cursor, in seconds (the time the gap takes to shrink to a third). " +
                     "Smaller is snappier; if the gun swings back and forth around the cursor, raise it.",

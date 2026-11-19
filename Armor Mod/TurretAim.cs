@@ -251,6 +251,10 @@ namespace ArmorFragments
                 calibration = null;
                 calibrated = false;
                 hullBody = null;
+                barrelKnown = false;
+                previousError = Vector3.zero;
+                gainScale = 1f;
+                flips.Clear();
                 lastStep = -1f;
                 stepFailed = false;
                 haveDesired = false;
@@ -648,8 +652,26 @@ namespace ArmorFragments
                 return;
             }
 
-            Vector3 rotation = RotationVector(barrel, desired);
-            errorDegrees = rotation.magnitude * Mathf.Rad2Deg;
+            // The real error (for the marker) and the one the control works from: the barrel is still moving by its own momentum and the joint's
+            // lag, so the control aims from where the barrel will be a moment from now (its own angular velocity times the damping time). Without
+            // this the angle keeps being asked for what the barrel is already on its way to, and it overshoots and swings.
+            Vector3 trueRotation = RotationVector(barrel, desired);
+            errorDegrees = trueRotation.magnitude * Mathf.Rad2Deg;
+            Vector3 rotation = trueRotation;
+            float lead = ArmorFragmentsPlugin.TurretDamping.Value;
+            if (lead > 0f && barrelKnown && dt > 1e-4f)
+            {
+                Vector3 spin = RotationVector(previousBarrel, barrel) / dt;   // rad/s, world
+                float spinSpeed = spin.magnitude;
+                if (spinSpeed > 1e-5f)
+                {
+                    Vector3 predicted = Quaternion.AngleAxis(spinSpeed * lead * Mathf.Rad2Deg, spin / spinSpeed) * barrel;
+                    rotation = RotationVector(predicted, desired);
+                }
+            }
+            previousBarrel = barrel;
+            barrelKnown = true;
+            WatchForSwinging(trueRotation);
 
             List<Turret> use = new List<Turret>();
             foreach (Turret turret in turrets)
@@ -663,14 +685,14 @@ namespace ArmorFragments
             // The rotation split between the rotators by their axes: the small least-squares problem  sum(theta_i * axis_i) = rotation.
             Vector3[] axes = new Vector3[use.Count];
             for (int i = 0; i < use.Count; i++) axes[i] = AxisOf(use[i].Script);
-            double[] theta = errorDegrees < 0.02f ? new double[use.Count] : Solve(axes, rotation);
+            double[] theta = rotation.magnitude * Mathf.Rad2Deg < 0.02f ? new double[use.Count] : Solve(axes, rotation);
 
             // Stabilizer: while the hull turns, pitches or rolls, the rotators must turn the other way at the same rate, or the barrel would
             // always trail behind it (the error alone only catches up). The same split, for the hull's angular velocity.
             double[] hull = new double[use.Count];
             if (hullBody != null) hull = Solve(axes, -hullBody.angularVelocity);
 
-            float gain = 1f - Mathf.Exp(-dt / Mathf.Max(ArmorFragmentsPlugin.TurretResponse.Value, 0.02f));
+            float gain = (1f - Mathf.Exp(-dt / Mathf.Max(ArmorFragmentsPlugin.TurretResponse.Value, 0.02f))) * gainScale;
             bool limit = false;
             for (int i = 0; i < use.Count; i++)
             {
@@ -690,6 +712,44 @@ namespace ArmorFragments
             foreach (Turret turret in turrets)
                 if (!use.Contains(turret) && turret.Script != null) commands[turret.Script] = angleRef(turret.Script);
             atLimit = limit;
+        }
+
+        // ---- Swinging: if the aim swings back and forth around the target, the gain is lowered by itself ----------------
+
+        private static Vector3 previousBarrel, previousError;
+        private static bool barrelKnown;
+        private static float gainScale = 1f;
+        private static float lastSwing, lastRecover;
+        private static readonly List<float> flips = new List<float>();
+
+        // The error changing side, over and over (6 times in a second, each one more than a tenth of a degree), is swinging. Then the gain is cut
+        // by a quarter (down to a third of itself) and logged; when it has been calm for a few seconds the gain creeps back up.
+        private static void WatchForSwinging(Vector3 error)
+        {
+            float now = Time.unscaledTime;
+            float degrees = error.magnitude * Mathf.Rad2Deg;
+            if (degrees > 0.1f && previousError.sqrMagnitude > 0f && Vector3.Dot(error, previousError) < 0f)
+                flips.Add(now);
+            previousError = degrees > 0.1f ? error : Vector3.zero;
+
+            flips.RemoveAll(t => now - t > 1f);
+            if (flips.Count >= 6)
+            {
+                flips.Clear();
+                lastSwing = now;
+                float next = Mathf.Max(0.33f, gainScale * 0.75f);
+                if (next < gainScale)
+                {
+                    gainScale = next;
+                    ArmorFragmentsPlugin.Log.LogInfo("Turret aim: the aim was swinging (error " + degrees.ToString("F2") + " deg, aim point " + aimDistance.ToString("F0") +
+                        " m away), the turret's gain is now " + (gainScale * 100f).ToString("F0") + "%");
+                }
+            }
+            else if (gainScale < 1f && now - lastSwing > 3f && now - lastRecover > 2f)
+            {
+                lastRecover = now;
+                gainScale = Mathf.Min(1f, gainScale + 0.1f);
+            }
         }
 
         // Which way does each rotator turn the barrel? Move it a few degrees, wait for the barrel to follow, measure. A rotator that doesn't

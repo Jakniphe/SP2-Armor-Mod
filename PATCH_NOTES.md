@@ -190,3 +190,4 @@ Also
 - The turret turns at the rotator's own speed (and the crew's aim efficiency, if you use the crew). Settings: `[TurretAim]` in the config (toggle key, look key, zoom, response).
 - In mouse aim the camera turns around a point centered on the vehicle and 0.5 meters above its highest point (`PivotHeight` in `[TurretAim]`, also in the panel), so at full zoom it looks over the turret from above.
 - The panel has a **Mouse aim** section: status, on/off, the two keys (press "Change ... key", then the new key), zoom, turret response and the camera pivot height.
+- The turret no longer swings around the circle: it aims from where the gun will be a moment from now ("Turret damping" in the Mouse aim section), and if the aim still swings it lowers its own gain until it settles (the log says so).
