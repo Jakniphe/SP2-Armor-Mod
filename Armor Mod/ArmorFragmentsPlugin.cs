@@ -172,6 +172,8 @@ namespace ArmorFragments
         internal static ConfigEntry<float> TurretCameraHeight;
         internal static ConfigEntry<float> TurretDamping;
         internal static ConfigEntry<float> TurretDerivative;
+        internal static ConfigEntry<bool> TurretFireOnTarget, TurretLineOfFire;
+        internal static ConfigEntry<float> TurretFireTolerance, TurretFireStagger, TurretMoveStagger;
         internal static ConfigEntry<UnityEngine.InputSystem.Key> TurretSightKey;
         internal static ConfigEntry<float> TurretSightZoom;
         internal static ConfigEntry<float> TurretSightSensitivity;
@@ -344,6 +346,18 @@ namespace ArmorFragments
                 "In mouse aim, switches to the next turret group when the vehicle has more than one (the turrets of the active group are aimed and fire; the others hold). 'None' disables it.");
             TurretFireMouseButton = Config.Bind("TurretAim", "FireMouseButton", TurretFireMouse.Left,
                 "In mouse aim, the mouse button that fires the cannons of the active turret group that are not set to fire by key (Left or Middle; the right button is the zoom).");
+            TurretFireOnTarget = Config.Bind("TurretAim", "FireOnlyOnTarget", true,
+                "In mouse aim, a turret fires only when its gun points within FireToleranceDegrees of where it should (the cursor). Turrets still turning, or stopped at their limit, hold fire while the others shoot.");
+            TurretFireTolerance = Config.Bind("TurretAim", "FireToleranceDegrees", 2f,
+                new ConfigDescription("How far off the cursor a turret's gun may be and still fire (with FireOnlyOnTarget).", new AcceptableValueRange<float>(0.2f, 20f)));
+            TurretFireStagger = Config.Bind("TurretAim", "FireStaggerSeconds", 0.1f,
+                new ConfigDescription("In mouse aim, a salvo fires one cannon at a time with this many seconds between them (a ripple), which also spreads the recoil on the hull. 0 = all at once.",
+                    new AcceptableValueRange<float>(0f, 1f)));
+            TurretLineOfFire = Config.Bind("TurretAim", "CheckLineOfFire", true,
+                "In mouse aim, a cannon does not fire while its barrel points at a part of its own vehicle within 20 meters (a turret's own roof, another turret).");
+            TurretMoveStagger = Config.Bind("TurretAim", "MoveStaggerSeconds", 0.02f,
+                new ConfigDescription("The turrets of a group start following the cursor one after another, each this many seconds after the one before, so they don't all push the hull at the same instant. 0 = together.",
+                    new AcceptableValueRange<float>(0f, 0.1f)));
             TurretFireKey = Config.Bind("TurretAim", "FireKey", UnityEngine.InputSystem.Key.Space,
                 "In mouse aim, the key that fires the cannons of the turret group that are set to fire by key in the designer (Pointer > Fire by key). 'None' disables it.");
             TurretSightKey = Config.Bind("TurretAim", "SightKey", UnityEngine.InputSystem.Key.LeftShift,

@@ -76,6 +76,9 @@ namespace ArmorFragments
             public Vector3 Spin;       // the barrel's angular velocity (rad/s), smoothed
             public Vector3 HullSpin;   // the hull's angular velocity (rad/s), smoothed
             public Vector3 FastSpin;   // the barrel's angular velocity (rad/s), hardly smoothed: the braking term works from it
+            public Vector3 Want;       // where the gun should point (the cursor), world direction: what firing is judged against
+            public float AimError;     // degrees between the barrel and Want
+            public float AimStamp = -10f;   // Time.fixedTime of the last measure
             public float Lag;          // how long the barrel takes to follow its rotators (s), the slowest of them; 0 = not measured
 
             // Swinging (each turret has its own): the error changing side over and over cuts this turret's gain.
@@ -536,6 +539,8 @@ namespace ArmorFragments
                 sightGun = null;
                 notice = null;
                 foreach (Gun gun in guns) ResetSwing(gun);
+                desiredTime.Clear();
+                desiredDirection.Clear();
                 lastStep = -1f;
                 stepFailed = false;
                 haveDesired = false;
@@ -634,6 +639,8 @@ namespace ArmorFragments
             if (sight) LeaveSight(cm);
             activeGroup = (activeGroup + 1) % groupIds.Count;
             foreach (Gun gun in guns) { gun.BarrelKnown = false; ResetSwing(gun); }
+            desiredTime.Clear();
+            desiredDirection.Clear();
             int count = 0;
             foreach (Gun gun in guns) if (InActiveGroup(gun)) count++;
             Notice("turret group " + ActiveGroupId + " (" + count + (count == 1 ? " turret)" : " turrets)"));
@@ -1029,33 +1036,95 @@ namespace ArmorFragments
 
         // Fires each cannon of the active group (the turrets, and the cannons fixed to them) whose input is held and whose own delay is over: the
         // Firing Delay (stretched by the crew's load) and the game's checks (ammo, barrel clear of the last shell; a rack-fed cannon needs a round
-        // and a loader in its own patch of CannonScript.Fire).
+        // and a loader in its own patch of CannonScript.Fire). On top of that: only turrets that point at the cursor fire (the others hold),
+        // none fires into its own vehicle, and a salvo goes one cannon at a time (a ripple) with the order rotating, so the same turrets do not
+        // always go first.
+        private sealed class Shooter
+        {
+            public CannonScript Cannon;
+            public bool ByKey;
+            public Gun Owner;
+            public FixedCannon Fixed;
+        }
+
+        private static readonly List<Shooter> shooters = new List<Shooter>();
+        private static int fireStart;
+        private static float gateMouse, gateKey;   // no cannon of that input fires before this time (the ripple)
+        private static readonly RaycastHit[] lineHits = new RaycastHit[16];
+        private const float LineOfFireMeters = 20f;
+        private const float LineOfFireIgnoreMeters = 0.3f;   // what is this close to the muzzle is the barrel's own fittings
+
         private static void FireGuns()
         {
             float now = Time.time;
+            shooters.Clear();
             foreach (Gun gun in guns)
             {
                 if (!InActiveGroup(gun)) continue;
-                TryFire(gun.Cannon, gun.FiresByKey, now, ref gun.NextFire);
+                shooters.Add(new Shooter { Cannon = gun.Cannon, ByKey = gun.FiresByKey, Owner = gun });
                 foreach (FixedCannon fixedCannon in gun.FixedCannons)
-                    TryFire(fixedCannon.Cannon, fixedCannon.ByKey, now, ref fixedCannon.NextFire);
+                    shooters.Add(new Shooter { Cannon = fixedCannon.Cannon, ByKey = fixedCannon.ByKey, Owner = gun, Fixed = fixedCannon });
+            }
+            int count = shooters.Count;
+            if (count == 0) return;
+            if (fireStart >= count) fireStart = 0;
+            float stagger = ArmorFragmentsPlugin.TurretFireStagger.Value;
+            for (int k = 0; k < count; k++)
+            {
+                int index = (fireStart + k) % count;
+                Shooter shooter = shooters[index];
+                if (!(shooter.ByKey ? fireKey : fireMouse)) continue;
+                if (stagger > 0f && now < (shooter.ByKey ? gateKey : gateMouse)) continue;
+                bool fired = shooter.Fixed != null ? TryFire(shooter.Cannon, shooter.ByKey, shooter.Owner, now, ref shooter.Fixed.NextFire)
+                                                   : TryFire(shooter.Cannon, shooter.ByKey, shooter.Owner, now, ref shooter.Owner.NextFire);
+                if (!fired) continue;
+                fireStart = (index + 1) % count;
+                if (stagger > 0f)
+                {
+                    if (shooter.ByKey) gateKey = now + stagger; else gateMouse = now + stagger;
+                }
             }
         }
 
-        private static void TryFire(CannonScript cannon, bool byKey, float now, ref float nextFire)
+        // A turret may fire when its gun is within the tolerance of the cursor (the cannons fixed to it follow its turret's state).
+        private static bool OnTarget(Gun owner)
         {
-            if (cannon == null || cannon.PartScript == null || !(byKey ? fireKey : fireMouse) || now < nextFire) return;
+            if (!ArmorFragmentsPlugin.TurretFireOnTarget.Value) return true;
+            return calibrated && Time.fixedTime - owner.AimStamp < 0.25f && owner.AimError <= ArmorFragmentsPlugin.TurretFireTolerance.Value;
+        }
+
+        // Nothing of the cannon's own vehicle within a few meters in front of the muzzle (a turret's roof, another turret).
+        private static bool LineClear(CannonScript cannon)
+        {
+            if (!ArmorFragmentsPlugin.TurretLineOfFire.Value || craft == null) return true;
+            Vector3 direction = cannon.transform.forward;
+            int hits = Physics.RaycastNonAlloc(cannon.TipPosition, direction, lineHits, LineOfFireMeters, ~0, QueryTriggerInteraction.Ignore);
+            for (int i = 0; i < hits; i++)
+            {
+                if (lineHits[i].distance < LineOfFireIgnoreMeters) continue;
+                PartScript part = lineHits[i].collider != null ? lineHits[i].collider.GetComponentInParent<PartScript>() : null;
+                if (part != null && part != cannon.PartScript && part.Aircraft == craft) return false;
+            }
+            return true;
+        }
+
+        private static bool TryFire(CannonScript cannon, bool byKey, Gun owner, float now, ref float nextFire)
+        {
+            if (cannon == null || cannon.PartScript == null || !(byKey ? fireKey : fireMouse) || now < nextFire) return false;
             IWeapon weapon = cannon;
-            if (weapon.IsDestroyed || weapon.CurrentAmmo <= 0 || !cannon.CanFire || !AmmoRacks.CanFire(cannon)) return;
+            if (weapon.IsDestroyed || weapon.CurrentAmmo <= 0 || !cannon.CanFire || !AmmoRacks.CanFire(cannon)) return false;
+            if (!OnTarget(owner) || !LineClear(cannon)) return false;
             try
             {
                 weapon.Fire(null);
                 nextFire = now + Mathf.Max(cannon.FiringDelay * Crew.ReloadFactor(cannon), 0.02f);
+                return true;
             }
             catch (Exception e)
             {
                 nextFire = now + 1f;
                 ArmorFragmentsPlugin.Log.LogWarning("Turret aim: a cannon could not fire: " + e.Message);
+                return false;
             }
         }
 
@@ -1147,6 +1216,38 @@ namespace ArmorFragments
             return angles[0];
         }
 
+        // Where the cursor pointed a moment ago (the last second), for the turrets that start late.
+        private static readonly List<float> desiredTime = new List<float>();
+        private static readonly List<Vector3> desiredDirection = new List<Vector3>();
+
+        private static void RememberDesired(float now)
+        {
+            desiredTime.Add(now);
+            desiredDirection.Add(desired);
+            int old = 0;
+            while (old < desiredTime.Count - 2 && now - desiredTime[old] > 1f) old++;
+            if (old > 0)
+            {
+                desiredTime.RemoveRange(0, old);
+                desiredDirection.RemoveRange(0, old);
+            }
+        }
+
+        private static Vector3 DesiredAt(float time)
+        {
+            int n = desiredTime.Count;
+            if (n == 0) return desired;
+            if (time <= desiredTime[0]) return desiredDirection[0];
+            for (int i = n - 1; i > 0; i--)
+            {
+                if (desiredTime[i - 1] > time) continue;
+                float span = desiredTime[i] - desiredTime[i - 1];
+                float f = span > 1e-6f ? Mathf.Clamp01((time - desiredTime[i - 1]) / span) : 1f;
+                return Vector3.Slerp(desiredDirection[i - 1], desiredDirection[i], f).normalized;
+            }
+            return desiredDirection[0];
+        }
+
         private static void Step(float dt)
         {
             RememberAngles(Time.fixedTime);
@@ -1166,20 +1267,41 @@ namespace ArmorFragments
 
             // Every turret of the active group is turned toward the same point: the lead along the wanted direction, the others from where they are
             // to the point the lead's line reaches at the aim distance. The rotators of the other groups keep their place.
-            Vector3 aimPoint = lead.Cannon.TipPosition + desired * aimDistance;
+            Vector3 leadTip = lead.Cannon.TipPosition;
+            Vector3 aimPoint = leadTip + desired * aimDistance;
             HashSet<Turret> driven = new HashSet<Turret>();
             bool limit = false;
+            float now = Time.fixedTime;
+            RememberDesired(now);
+            float stagger = ArmorFragmentsPlugin.TurretMoveStagger.Value;
+            int rank = 0;
             for (int g = 0; g < guns.Count; g++)
             {
                 Gun gun = guns[g];
-                if (!InActiveGroup(gun) || !Live(gun) || gun.Drivers.Count == 0) continue;
+                if (!InActiveGroup(gun) || !Live(gun)) continue;
+
+                // Where the gun should point, for judging whether it may fire: the cursor itself.
                 Vector3 want = desired;
                 if (gun != lead)
                 {
                     Vector3 toPoint = aimPoint - gun.Cannon.TipPosition;
                     if (toPoint.sqrMagnitude > 1f) want = toPoint.normalized;
                 }
-                StepGun(g, gun, gun == lead, want, dt, driven, ref limit);
+                gun.Want = want;
+                gun.AimError = Vector3.Angle(gun.Cannon.transform.forward, want);
+                gun.AimStamp = now;
+
+                // The turrets of a group start one after another: each follows the cursor as it was a few hundredths of a second earlier than the
+                // one before it (the lead follows it live), so fourteen of them do not push the hull at the same instant.
+                int mine = gun == lead ? 0 : ++rank;
+                if (gun.Drivers.Count == 0) continue;
+                Vector3 follow = want;
+                if (stagger > 0f && mine > 0)
+                {
+                    Vector3 toPoint = leadTip + DesiredAt(now - mine * stagger) * aimDistance - gun.Cannon.TipPosition;
+                    if (toPoint.sqrMagnitude > 1f) follow = toPoint.normalized;
+                }
+                StepGun(g, gun, gun == lead, follow, dt, driven, ref limit);
             }
 
             foreach (Turret turret in turrets)

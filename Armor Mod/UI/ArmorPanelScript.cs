@@ -319,6 +319,16 @@ namespace ArmorFragments.UI
                 new KeyValuePair<string, Action>("Change fire key", () => TurretAim.CaptureKey(ArmorFragmentsPlugin.TurretFireKey)),
                 new KeyValuePair<string, Action>("Change next group key", () => TurretAim.CaptureKey(ArmorFragmentsPlugin.TurretGroupKey)),
             });
+            ToggleSetting(ArmorFragmentsPlugin.TurretFireOnTarget, "Fire only turrets on target",
+                "A turret fires only when its gun points within the tolerance of the cursor. Turrets still turning, or stopped at their limit, hold fire while the others shoot.");
+            FloatSetting(ArmorFragmentsPlugin.TurretFireTolerance, "On-target tolerance",
+                "How far off the cursor a turret's gun may be and still fire.", 0.1f, " deg");
+            FloatSetting(ArmorFragmentsPlugin.TurretFireStagger, "Salvo ripple",
+                "A salvo fires one cannon at a time with this many seconds between them. 0 = all at once.", 0.01f, " s");
+            ToggleSetting(ArmorFragmentsPlugin.TurretLineOfFire, "Hold fire into own vehicle",
+                "A cannon does not fire while its barrel points at a part of its own vehicle within 20 meters.");
+            FloatSetting(ArmorFragmentsPlugin.TurretMoveStagger, "Turret start stagger",
+                "The turrets of a group start following the cursor one after another, each this many seconds after the one before, so they don't all push the hull at once. 0 = together.", 0.005f, " s");
             FloatSetting(ArmorFragmentsPlugin.TurretZoom, "Zoom",
                 "How many times the right mouse button zooms in (held: gradually in, let go: gradually out).", 0.5f, " x");
             FloatSetting(ArmorFragmentsPlugin.TurretSightZoom, "Sight zoom",
