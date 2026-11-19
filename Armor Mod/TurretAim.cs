@@ -45,8 +45,19 @@ namespace ArmorFragments
             public float Range;          // degrees either way (a rotator that wraps has no limit)
             public bool Wraps;
             public bool Done;            // calibrated (or given up on)
-            public bool Usable;
-            public float Sign = 1f;      // +1 / -1: the barrel turns this way about Axis when the angle grows
+            public bool Usable;          // moves at least one of the guns
+            public float[] Signs;        // per gun: +1 / -1 the gun's barrel turns this way about Axis when the angle grows, 0 = does not move it
+        }
+
+        // A cannon that is aimed: the pointer cannon (index 0) or an auxiliary one. Each is turned by its own group of rotators, all at the same
+        // aim point.
+        private sealed class Gun
+        {
+            public CannonScript Cannon;
+            public readonly List<Turret> Group = new List<Turret>();   // the rotators that turn this gun and no earlier one
+            public Rigidbody Hull;
+            public Vector3 PreviousBarrel;
+            public bool BarrelKnown;
         }
 
         private sealed class Calibration
@@ -54,10 +65,12 @@ namespace ArmorFragments
             public Turret Turret;
             public int Phase;            // 0: moving, 1: settling
             public float Angle0, Delta, Timer;
-            public Vector3 Barrel0, Axis;
+            public Vector3[] Barrels0;   // per gun
+            public Vector3 Axis;
         }
 
         private static AircraftScript craft;
+        private static readonly List<Gun> guns = new List<Gun>();
         private static readonly List<Turret> turrets = new List<Turret>();
         private static readonly List<CannonScript> pointers = new List<CannonScript>();
         private static readonly Dictionary<JointRotatorScript, float> commands = new Dictionary<JointRotatorScript, float>();
@@ -248,6 +261,11 @@ namespace ArmorFragments
                     Rigidbody body = cannon != null ? BodyOf(cannon.PartScript) : null;
                     if (body != null) gunBodies.Add(body);
                 }
+                foreach (Gun gun in guns)
+                {
+                    Rigidbody body = gun.Cannon != null ? BodyOf(gun.Cannon.PartScript) : null;
+                    if (body != null) gunBodies.Add(body);
+                }
                 foreach (PartData data in craft.Aircraft.Assembly.Parts)
                 {
                     PartScript part = data != null ? data.PartScript : null;
@@ -423,7 +441,6 @@ namespace ArmorFragments
                 sight = false;
                 sightController = null;
                 notice = null;
-                barrelKnown = false;
                 previousError = Vector3.zero;
                 gainScale = 1f;
                 flips.Clear();
@@ -440,7 +457,8 @@ namespace ArmorFragments
                 MakeHud();
                 Active = true;
                 Status = "Calibrating the turret...";
-                ArmorFragmentsPlugin.Log.LogInfo("Turret aim on: " + turrets.Count + " turret rotator(s), " + pointers.Count + " pointer cannon(s)");
+                ArmorFragmentsPlugin.Log.LogInfo("Turret aim on: " + turrets.Count + " turret rotator(s), " + pointers.Count + " pointer cannon(s), " +
+                                                 (guns.Count - 1) + " auxiliary cannon(s)");
             }
             catch (Exception e)
             {
@@ -453,8 +471,10 @@ namespace ArmorFragments
         {
             turrets.Clear();
             pointers.Clear();
+            guns.Clear();
             sightScript = null;
             int sightId = -1;
+            List<int> auxIds = new List<int>();
             foreach (PartData data in aircraft.Aircraft.Assembly.Parts)
             {
                 PartScript part = data != null ? data.PartScript : null;
@@ -479,9 +499,26 @@ namespace ArmorFragments
                     {
                         pointers.Add(cannon);
                         if (sightId < 0 && tags.Pointer.Camera.HasValue) sightId = tags.Pointer.Camera.Value;
+                        foreach (int id in tags.Pointer.Aux) if (!auxIds.Contains(id)) auxIds.Add(id);
                     }
                 }
             }
+
+            // The guns: the pointer cannon first (found again at every step, since the first one may be lost), then the auxiliary ones.
+            guns.Add(new Gun());
+            foreach (int id in auxIds)
+            {
+                foreach (PartData data in aircraft.Aircraft.Assembly.Parts)
+                {
+                    if (data == null || data.Id != id || data.PartScript == null) continue;
+                    CannonScript cannon = data.PartScript.GetModifier<CannonScript>();
+                    bool known = cannon == null || pointers.Contains(cannon);
+                    foreach (Gun gun in guns) if (gun.Cannon == cannon) known = true;
+                    if (!known) guns.Add(new Gun { Cannon = cannon });
+                    break;
+                }
+            }
+            foreach (Turret turret in turrets) turret.Signs = new float[guns.Count];
             if (sightId >= 0)
             {
                 foreach (PartData data in aircraft.Aircraft.Assembly.Parts)
@@ -937,11 +974,11 @@ namespace ArmorFragments
         {
             CannonScript pointer = FirstPointer();
             if (pointer == null) return;
-            Vector3 barrel = pointer.transform.forward;
+            guns[0].Cannon = pointer;
 
             if (!calibrated)
             {
-                Calibrate(dt, barrel);
+                Calibrate(dt);
                 return;
             }
             if (!haveDesired)
@@ -950,35 +987,62 @@ namespace ArmorFragments
                 return;
             }
 
+            // Every gun is turned toward the same point: the pointer cannon along the wanted direction, an auxiliary one from where it is to the
+            // point the pointer cannon's line reaches at the aim distance.
+            Vector3 aimPoint = pointer.TipPosition + desired * aimDistance;
+            HashSet<Turret> driven = new HashSet<Turret>();
+            bool limit = false;
+            for (int g = 0; g < guns.Count; g++)
+            {
+                Gun gun = guns[g];
+                if (gun.Cannon == null || gun.Cannon.PartScript == null || gun.Group.Count == 0) continue;
+                Vector3 want = desired;
+                if (g > 0)
+                {
+                    Vector3 toPoint = aimPoint - gun.Cannon.TipPosition;
+                    if (toPoint.sqrMagnitude > 1f) want = toPoint.normalized;
+                }
+                StepGun(g, gun, want, dt, driven, ref limit);
+            }
+
+            // The rotators that don't take part keep their place.
+            foreach (Turret turret in turrets)
+                if (!driven.Contains(turret) && turret.Script != null) commands[turret.Script] = angleRef(turret.Script);
+            atLimit = limit;
+        }
+
+        private static void StepGun(int index, Gun gun, Vector3 want, float dt, HashSet<Turret> driven, ref bool limit)
+        {
+            Vector3 barrel = gun.Cannon.transform.forward;
+
             // The real error (for the marker) and the one the control works from: the barrel is still moving by its own momentum and the joint's
             // lag, so the control aims from where the barrel will be a moment from now (its own angular velocity times the damping time). Without
             // this the angle keeps being asked for what the barrel is already on its way to, and it overshoots and swings.
-            Vector3 trueRotation = RotationVector(barrel, desired);
-            errorDegrees = trueRotation.magnitude * Mathf.Rad2Deg;
+            Vector3 trueRotation = RotationVector(barrel, want);
             Vector3 rotation = trueRotation;
             float lead = ArmorFragmentsPlugin.TurretDamping.Value;
-            if (lead > 0f && barrelKnown && dt > 1e-4f)
+            if (lead > 0f && gun.BarrelKnown && dt > 1e-4f)
             {
-                Vector3 spin = RotationVector(previousBarrel, barrel) / dt;   // rad/s, world
+                Vector3 spin = RotationVector(gun.PreviousBarrel, barrel) / dt;   // rad/s, world
                 float spinSpeed = spin.magnitude;
                 if (spinSpeed > 1e-5f)
                 {
                     Vector3 predicted = Quaternion.AngleAxis(spinSpeed * lead * Mathf.Rad2Deg, spin / spinSpeed) * barrel;
-                    rotation = RotationVector(predicted, desired);
+                    rotation = RotationVector(predicted, want);
                 }
             }
-            previousBarrel = barrel;
-            barrelKnown = true;
-            WatchForSwinging(trueRotation);
+            gun.PreviousBarrel = barrel;
+            gun.BarrelKnown = true;
+            if (index == 0)
+            {
+                errorDegrees = trueRotation.magnitude * Mathf.Rad2Deg;
+                WatchForSwinging(trueRotation);
+            }
 
             List<Turret> use = new List<Turret>();
-            foreach (Turret turret in turrets)
+            foreach (Turret turret in gun.Group)
                 if (turret.Usable && Moves(turret)) use.Add(turret);
-            if (use.Count == 0)
-            {
-                HoldAll();
-                return;
-            }
+            if (use.Count == 0) return;
 
             // The rotation split between the rotators by their axes: the small least-squares problem  sum(theta_i * axis_i) = rotation.
             Vector3[] axes = new Vector3[use.Count];
@@ -988,15 +1052,14 @@ namespace ArmorFragments
             // Stabilizer: while the hull turns, pitches or rolls, the rotators must turn the other way at the same rate, or the barrel would
             // always trail behind it (the error alone only catches up). The same split, for the hull's angular velocity.
             double[] hull = new double[use.Count];
-            if (hullBody != null) hull = Solve(axes, -hullBody.angularVelocity);
+            if (gun.Hull != null) hull = Solve(axes, -gun.Hull.angularVelocity);
 
             float gain = (1f - Mathf.Exp(-dt / Mathf.Max(ArmorFragmentsPlugin.TurretResponse.Value, 0.02f))) * gainScale;
-            bool limit = false;
             for (int i = 0; i < use.Count; i++)
             {
                 Turret turret = use[i];
                 float current = angleRef(turret.Script);
-                float target = current + turret.Sign * ((float)theta[i] * gain + (float)hull[i] * dt) * Mathf.Rad2Deg;
+                float target = current + turret.Signs[index] * ((float)theta[i] * gain + (float)hull[i] * dt) * Mathf.Rad2Deg;
                 if (!turret.Wraps)
                 {
                     float clamped = Mathf.Clamp(target, -turret.Range, turret.Range);
@@ -1005,17 +1068,13 @@ namespace ArmorFragments
                     target = clamped;
                 }
                 commands[turret.Script] = target;
+                driven.Add(turret);
             }
-            // The rotators that don't take part keep their place.
-            foreach (Turret turret in turrets)
-                if (!use.Contains(turret) && turret.Script != null) commands[turret.Script] = angleRef(turret.Script);
-            atLimit = limit;
         }
 
         // ---- Swinging: if the aim swings back and forth around the target, the gain is lowered by itself ----------------
 
-        private static Vector3 previousBarrel, previousError;
-        private static bool barrelKnown;
+        private static Vector3 previousError;
         private static float gainScale = 1f;
         private static float lastSwing, lastRecover;
         private static readonly List<float> flips = new List<float>();
@@ -1052,9 +1111,10 @@ namespace ArmorFragments
             }
         }
 
-        // Which way does each rotator turn the barrel? Move it a few degrees, wait for the barrel to follow, measure. A rotator that doesn't
-        // move the pointer cannon (not between the hull and the barrel, broken) is left out.
-        private static void Calibrate(float dt, Vector3 barrel)
+        // Which way does each rotator turn each gun's barrel? Move it a few degrees, wait for the barrels to follow, measure. A rotator that
+        // doesn't move any gun (not between the hull and a barrel, broken) is left out; one that moves several (a turret ring that carries two
+        // guns) goes to the first gun it moves.
+        private static void Calibrate(float dt)
         {
             if (calibration == null)
             {
@@ -1063,11 +1123,7 @@ namespace ArmorFragments
                 if (next == null)
                 {
                     calibrated = true;
-                    int usable = 0;
-                    foreach (Turret turret in turrets) if (turret.Usable) usable++;
-                    ArmorFragmentsPlugin.Log.LogInfo("Turret aim: " + usable + " of " + turrets.Count + " rotator(s) turn the pointer cannon");
-                    if (usable == 0) { Deactivate("no marked rotator moves the pointer cannon"); return; }
-                    FindHull();
+                    FinishCalibration();
                     return;
                 }
                 if (!Moves(next) || next.Range < 1f)
@@ -1077,12 +1133,14 @@ namespace ArmorFragments
                     return;
                 }
                 float angle0 = angleRef(next.Script);
+                Vector3[] before = new Vector3[guns.Count];
+                for (int g = 0; g < guns.Count; g++) before[g] = guns[g].Cannon != null ? guns[g].Cannon.transform.forward : Vector3.forward;
                 calibration = new Calibration
                 {
                     Turret = next,
                     Angle0 = angle0,
                     Delta = next.Wraps || angle0 + 5f <= next.Range ? 5f : -5f,
-                    Barrel0 = barrel,
+                    Barrels0 = before,
                     Axis = AxisOf(next.Script),
                 };
             }
@@ -1100,29 +1158,61 @@ namespace ArmorFragments
             }
             if (c.Timer < 0.35f) return;
 
-            Vector3 moved = RotationVector(c.Barrel0, barrel);
-            float along = Vector3.Dot(moved, c.Axis);
             float expected = c.Delta * Mathf.Deg2Rad;
             c.Turret.Done = true;
-            if (Mathf.Abs(along) >= 0.3f * Mathf.Abs(expected))
+            string effects = "";
+            for (int g = 0; g < guns.Count; g++)
             {
-                c.Turret.Sign = along / expected > 0f ? 1f : -1f;
+                if (guns[g].Cannon == null) continue;
+                Vector3 moved = RotationVector(c.Barrels0[g], guns[g].Cannon.transform.forward);
+                float along = Vector3.Dot(moved, c.Axis);
+                if (Mathf.Abs(along) < 0.3f * Mathf.Abs(expected)) continue;
+                c.Turret.Signs[g] = along / expected > 0f ? 1f : -1f;
                 c.Turret.Usable = true;
-                ArmorFragmentsPlugin.Log.LogInfo("Turret aim: rotator '" + c.Turret.Name + "' turns the barrel " + (along * Mathf.Rad2Deg).ToString("F1") +
-                    " deg for " + c.Delta.ToString("F0") + " deg (sign " + (c.Turret.Sign > 0f ? "+" : "-") + ", range " +
-                    (c.Turret.Wraps ? "all the way round" : c.Turret.Range.ToString("F0") + " deg") + ")");
+                effects += (effects.Length > 0 ? ", " : "") + (g == 0 ? "pointer cannon" : "auxiliary cannon " + g) + " " +
+                           (along * Mathf.Rad2Deg).ToString("F1") + " deg (sign " + (c.Turret.Signs[g] > 0f ? "+" : "-") + ")";
+            }
+            if (c.Turret.Usable)
+            {
+                ArmorFragmentsPlugin.Log.LogInfo("Turret aim: rotator '" + c.Turret.Name + "' for " + c.Delta.ToString("F0") + " deg turns: " + effects +
+                    "; range " + (c.Turret.Wraps ? "all the way round" : c.Turret.Range.ToString("F0") + " deg"));
             }
             else
             {
-                ArmorFragmentsPlugin.Log.LogWarning("Turret aim: rotator '" + c.Turret.Name + "' did not move the pointer cannon (" +
-                    (along * Mathf.Rad2Deg).ToString("F2") + " deg for " + c.Delta.ToString("F0") + "): it is left out");
+                ArmorFragmentsPlugin.Log.LogWarning("Turret aim: rotator '" + c.Turret.Name + "' did not move any of the cannons for " +
+                    c.Delta.ToString("F0") + " deg: it is left out");
             }
             calibration = null;
         }
 
-        // The hull: from the pointer cannon's body, each rotator that has the body on one side leads to the body on its other side, and so on
-        // to the vehicle's base. That body's angular velocity is what the stabilizer works against.
-        private static Rigidbody hullBody;
+        // After the last rotator: each gun gets the rotators that turn it and no earlier gun, so no rotator is driven by two guns.
+        private static void FinishCalibration()
+        {
+            HashSet<Turret> taken = new HashSet<Turret>();
+            for (int g = 0; g < guns.Count; g++)
+            {
+                guns[g].Group.Clear();
+                if (guns[g].Cannon == null) continue;
+                foreach (Turret turret in turrets)
+                {
+                    if (!turret.Usable || turret.Signs[g] == 0f || taken.Contains(turret)) continue;
+                    guns[g].Group.Add(turret);
+                    taken.Add(turret);
+                }
+                string label = guns[g].Cannon.PartScript != null && guns[g].Cannon.PartScript.Part != null ? guns[g].Cannon.PartScript.Part.Name : "?";
+                ArmorFragmentsPlugin.Log.LogInfo("Turret aim: " + (g == 0 ? "the pointer cannon" : "auxiliary cannon " + g + " ('" + label + "')") +
+                                                 " is turned by " + guns[g].Group.Count + " rotator(s)");
+                if (g > 0 && guns[g].Group.Count == 0)
+                    ArmorFragmentsPlugin.Log.LogWarning("Turret aim: auxiliary cannon " + g + " ('" + label + "') is not turned by any rotator marked Turret that the pointer cannon " +
+                                                        "doesn't already use: it only follows the pointer cannon's turret");
+            }
+            if (guns[0].Group.Count == 0) { Deactivate("no marked rotator moves the pointer cannon"); return; }
+            FindHull();
+        }
+
+        // The hull: from a gun's body, each rotator that has the body on one side leads to the body on its other side, and so on to the
+        // vehicle's base. That body's angular velocity is what the stabilizer works against.
+        private static Rigidbody hullBody;   // the pointer cannon's (the camera pivot is centered on it)
 
         private static Rigidbody BodyOf(PartScript part)
         {
@@ -1132,28 +1222,34 @@ namespace ArmorFragments
         private static void FindHull()
         {
             hullBody = null;
-            CannonScript pointer = FirstPointer();
-            Rigidbody current = pointer != null ? BodyOf(pointer.PartScript) : null;
-            if (current == null) return;
-            List<Turret> left = turrets.FindAll(t => t.Usable && t.Script != null && jointRef(t.Script) != null);
-            for (int guard = 0; guard < 8 && left.Count > 0; guard++)
+            for (int g = 0; g < guns.Count; g++)
             {
-                Turret found = null;
-                Rigidbody parent = null;
-                foreach (Turret turret in left)
+                Gun gun = guns[g];
+                gun.Hull = null;
+                Rigidbody current = gun.Cannon != null ? BodyOf(gun.Cannon.PartScript) : null;
+                if (current == null) continue;
+                List<Turret> left = turrets.FindAll(t => t.Usable && t.Script != null && jointRef(t.Script) != null);
+                for (int guard = 0; guard < 8 && left.Count > 0; guard++)
                 {
-                    ConfigurableJoint joint = jointRef(turret.Script);
-                    Rigidbody own = joint.GetComponent<Rigidbody>(), other = joint.connectedBody;
-                    if (own == current) { found = turret; parent = other; break; }
-                    if (other == current) { found = turret; parent = own; break; }
+                    Turret found = null;
+                    Rigidbody parent = null;
+                    foreach (Turret turret in left)
+                    {
+                        ConfigurableJoint joint = jointRef(turret.Script);
+                        Rigidbody own = joint.GetComponent<Rigidbody>(), other = joint.connectedBody;
+                        if (own == current) { found = turret; parent = other; break; }
+                        if (other == current) { found = turret; parent = own; break; }
+                    }
+                    if (found == null || parent == null) break;
+                    left.Remove(found);
+                    current = parent;
                 }
-                if (found == null || parent == null) break;
-                left.Remove(found);
-                current = parent;
+                gun.Hull = current;
+                if (g == 0) hullBody = current;
+                ArmorFragmentsPlugin.Log.LogInfo("Turret aim: the hull of " + (g == 0 ? "the pointer cannon" : "auxiliary cannon " + g) + " is the body '" +
+                                                 (current != null ? current.name : "?") + "' (" +
+                                                 (left.Count == 0 ? "every rotator is on the way to it" : left.Count + " rotator(s) are not on the way") + ")");
             }
-            hullBody = current;
-            ArmorFragmentsPlugin.Log.LogInfo("Turret aim: the hull is the body '" + (current != null ? current.name : "?") + "' (" +
-                                             (left.Count == 0 ? "every rotator is on the way to it" : left.Count + " rotator(s) are not on the way") + ")");
         }
 
         // The rotation (axis x angle, radians) that takes direction a onto direction b.

@@ -594,6 +594,20 @@ namespace ArmorFragments.UI
                     if (tags.Pointer.Camera.HasValue)
                         sightButtons.Add(new KeyValuePair<string, Action>("Clear sight camera", () => PickSight(sightCannon, true)));
                     builder.Buttons(sightButtons);
+
+                    // Auxiliary turrets: other cannons whose turrets are aimed at the same time, at the same point (mark their rotators as Turret).
+                    PartScript auxCannon = part;
+                    List<PartData> aux = AuxiliariesOf(tags.Pointer);
+                    if (aux.Count == 0) builder.Text("Auxiliary turrets", "None");
+                    for (int i = 0; i < aux.Count; i++)
+                        builder.Text("Auxiliary " + (i + 1), SightLabel(aux[i]) + " (id " + aux[i].Id + ")");
+                    List<KeyValuePair<string, Action>> auxButtons = new List<KeyValuePair<string, Action>>
+                    {
+                        new KeyValuePair<string, Action>("Add auxiliary turret", () => PickAuxiliary(auxCannon, true)),
+                    };
+                    if (tags.Pointer.Aux.Count > 0)
+                        auxButtons.Add(new KeyValuePair<string, Action>("Remove auxiliary turret", () => PickAuxiliary(auxCannon, false)));
+                    builder.Buttons(auxButtons);
                 }
             }
         }
@@ -925,6 +939,76 @@ namespace ArmorFragments.UI
         {
             string label = TagCodec.Parse(camera.Name).Label;
             return string.IsNullOrEmpty(label) ? camera.PartType.Name : label;
+        }
+
+        private static bool IsCannonPart(PartData candidate)
+        {
+            if (candidate == null) return false;
+            foreach (PartModifierData modifier in candidate.Modifiers)
+                if (modifier is CannonData) return true;
+            return false;
+        }
+
+        // The cannons named by [PTR a=] that still exist.
+        private static List<PartData> AuxiliariesOf(PointerTag pointer)
+        {
+            List<PartData> found = new List<PartData>();
+            Assets.Scripts.Design.Designer designer = Assets.Scripts.Design.Designer.Instance;
+            if (designer == null || pointer == null) return found;
+            foreach (int id in pointer.Aux)
+                foreach (PartData candidate in designer.Aircraft.Aircraft.Assembly.Parts)
+                    if (candidate != null && candidate.Id == id && IsCannonPart(candidate)) { found.Add(candidate); break; }
+            return found;
+        }
+
+        // Adds an auxiliary cannon to this pointer cannon (or takes one away), picked with the game's part picker.
+        private static void PickAuxiliary(PartScript cannonPart, bool add)
+        {
+            Assets.Scripts.Design.Designer designer = Assets.Scripts.Design.Designer.Instance;
+            if (designer == null || cannonPart == null || cannonPart.Part == null) return;
+
+            PointerTag current = TagCodec.Parse(cannonPart.Part.Name).Pointer;
+            if (current == null) return;
+            List<int> already = new List<int>(current.Aux);
+            Func<PartData, bool> filter = add
+                ? (Func<PartData, bool>)(candidate => IsCannonPart(candidate) && candidate != cannonPart.Part && !already.Contains(candidate.Id))
+                : candidate => already.Contains(candidate.Id);
+
+            bool any = false;
+            foreach (PartData candidate in designer.Aircraft.Aircraft.Assembly.Parts)
+                if (filter(candidate)) { any = true; break; }
+            if (!any)
+            {
+                designer.ShowMessage(add ? "No other cannon to add." : "No auxiliary turret to remove.", 7f);
+                return;
+            }
+
+            designer.ShowMessage(add ? "Click a cannon: its turret will be aimed together with this one."
+                                     : "Click the auxiliary cannon to stop aiming together with this one.", 7f);
+            designer.Tools.SelectChoosePartTool(filter, false, -1, "No cannons", picked =>
+            {
+                try
+                {
+                    if (picked == null || cannonPart == null || cannonPart.Part == null) return;
+                    PartTags fresh = TagCodec.ParseCopy(cannonPart.Part.Name);
+                    if (fresh.Pointer == null) return;
+                    if (add) { if (!fresh.Pointer.Aux.Contains(picked.Id)) fresh.Pointer.Aux.Add(picked.Id); }
+                    else fresh.Pointer.Aux.Remove(picked.Id);
+                    if (part == cannonPart)
+                    {
+                        Commit(fresh, true);
+                        rebuildPending = true;
+                    }
+                    else
+                    {
+                        RackLinks.SetName(cannonPart.Part, TagCodec.Compose(fresh, cannonPart.Part.PartType.Name));
+                    }
+                }
+                catch (Exception e)
+                {
+                    ArmorFragmentsPlugin.Log.LogError("Couldn't change the cannon's auxiliary turrets: " + e);
+                }
+            }, false);
         }
 
         // Picks the camera part this cannon's sight looks through (or, with 'clear', takes it away).

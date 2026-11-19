@@ -89,6 +89,9 @@ namespace ArmorFragments
     internal sealed class PointerTag
     {
         public int? Camera;   // c: id of the camera part used as the cannon's optical sight (none = no sight)
+
+        // a: ids of the auxiliary cannons: the turrets they sit on are aimed at the same point at the same time as this cannon's own turret.
+        public List<int> Aux = new List<int>();
     }
 
     // A carving part (hole cutter): the walls of the holes it carves into armor blocks are plates of this thickness.
@@ -214,7 +217,11 @@ namespace ArmorFragments
                 else if (kind == "PTR")
                 {
                     float camera;
-                    tags.Pointer = new PointerTag { Camera = values.TryGetValue("c", out camera) && camera >= 0f ? Mathf.RoundToInt(camera) : (int?)null };
+                    tags.Pointer = new PointerTag
+                    {
+                        Camera = values.TryGetValue("c", out camera) && camera >= 0f ? Mathf.RoundToInt(camera) : (int?)null,
+                        Aux = ReadIds(ReadText(block.Groups[2].Value, "a")),
+                    };
                 }
                 else if (kind == "CRW")
                 {
@@ -276,7 +283,8 @@ namespace ArmorFragments
             if (tags.Turret != null)
                 Append(name, "[TUR]");
             if (tags.Pointer != null)
-                Append(name, "[PTR" + (tags.Pointer.Camera.HasValue ? " c=" + tags.Pointer.Camera.Value.ToString(CultureInfo.InvariantCulture) : "") + "]");
+                Append(name, "[PTR" + (tags.Pointer.Camera.HasValue ? " c=" + tags.Pointer.Camera.Value.ToString(CultureInfo.InvariantCulture) : "") +
+                       IdsPair(tags.Pointer.Aux, "a") + "]");
 
             return name.Length == 0 ? fallback : name.ToString();
         }
@@ -293,27 +301,40 @@ namespace ArmorFragments
             return text.Substring(0, block.Index) + "[CAN" + pairs + "]" + text.Substring(block.Index + block.Length);
         }
 
-        // The name with only the [PTR] block's c= (the sight camera's part id) replaced, or removed when 'camera' is null.
-        public static string WithPointerCamera(string name, int? camera)
+        // The name with only the [PTR] block's c= (the sight camera's part id) and a= (the auxiliary cannons' ids) replaced; the rest is kept.
+        public static string WithPointerLinks(string name, int? camera, IList<int> aux)
         {
             string text = name ?? "";
             Match block = PointerBlock.Match(text);
             if (!block.Success) return text;
-            string pairs = CameraPair.Replace(block.Groups[1].Value, "") +
-                           (camera.HasValue ? " c=" + camera.Value.ToString(CultureInfo.InvariantCulture) : "");
+            string pairs = AuxPair.Replace(CameraPair.Replace(block.Groups[1].Value, ""), "") +
+                           (camera.HasValue ? " c=" + camera.Value.ToString(CultureInfo.InvariantCulture) : "") + IdsPair(aux, "a");
             return text.Substring(0, block.Index) + "[PTR" + pairs + "]" + text.Substring(block.Index + block.Length);
+        }
+
+        // Only the camera changes (the auxiliary cannons stay as they are); null removes it.
+        public static string WithPointerCamera(string name, int? camera)
+        {
+            PointerTag pointer = ParseCopy(name).Pointer;
+            return WithPointerLinks(name, camera, pointer != null ? pointer.Aux : null);
         }
 
         private static readonly Regex PointerBlock = new Regex(@"\[PTR((?:\s+[a-z]+=[^\s\]]+)*)\s*\]");
         private static readonly Regex CameraPair = new Regex(@"\s+c=[^\s\]]+");
+        private static readonly Regex AuxPair = new Regex(@"\s+a=[^\s\]]+");
 
         private static readonly Regex CannonBlock = new Regex(@"\[CAN((?:\s+[a-z]+=[^\s\]]+)*)\s*\]");
         private static readonly Regex RacksPair = new Regex(@"\s+r=[^\s\]]+");
 
         private static string IdsPair(IList<int> ids)
         {
+            return IdsPair(ids, "r");
+        }
+
+        private static string IdsPair(IList<int> ids, string key)
+        {
             if (ids == null || ids.Count == 0) return "";
-            StringBuilder text = new StringBuilder(" r=");
+            StringBuilder text = new StringBuilder(" " + key + "=");
             for (int i = 0; i < ids.Count; i++)
             {
                 if (i > 0) text.Append(',');

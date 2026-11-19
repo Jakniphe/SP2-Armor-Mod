@@ -22,11 +22,23 @@ namespace ArmorFragments
         {
             if (part == null || idMap == null || idMap.Count == 0) return;
 
-            // The sight camera of a pointer cannon ([PTR c=]) is a part id too.
+            // The sight camera ([PTR c=]) and the auxiliary cannons ([PTR a=]) of a pointer cannon are part ids too.
             PointerTag pointer = TagCodec.Parse(part.Name).Pointer;
-            int newCamera;
-            if (pointer != null && pointer.Camera.HasValue && idMap.TryGetValue(pointer.Camera.Value, out newCamera) && newCamera != pointer.Camera.Value)
-                SetName(part, TagCodec.WithPointerCamera(part.Name, newCamera));
+            if (pointer != null)
+            {
+                int? camera = pointer.Camera;
+                bool linksChanged = false;
+                int mapped;
+                if (camera.HasValue && idMap.TryGetValue(camera.Value, out mapped) && mapped != camera.Value) { camera = mapped; linksChanged = true; }
+                List<int> aux = new List<int>();
+                foreach (int id in pointer.Aux)
+                {
+                    int keptAux = idMap.TryGetValue(id, out mapped) ? mapped : id;
+                    if (keptAux != id) linksChanged = true;
+                    if (!aux.Contains(keptAux)) aux.Add(keptAux);
+                }
+                if (linksChanged) SetName(part, TagCodec.WithPointerLinks(part.Name, camera, aux));
+            }
 
             CannonTag cannon = TagCodec.Parse(part.Name).Cannon;
             if (cannon == null || cannon.Racks.Count == 0) return;
@@ -50,7 +62,12 @@ namespace ArmorFragments
             {
                 if (part == null) continue;
                 PointerTag pointer = TagCodec.Parse(part.Name).Pointer;
-                if (pointer != null && pointer.Camera == removedId) SetName(part, TagCodec.WithPointerCamera(part.Name, null));
+                if (pointer != null && (pointer.Camera == removedId || pointer.Aux.Contains(removedId)))
+                {
+                    List<int> aux = new List<int>(pointer.Aux);
+                    aux.Remove(removedId);
+                    SetName(part, TagCodec.WithPointerLinks(part.Name, pointer.Camera == removedId ? null : pointer.Camera, aux));
+                }
 
                 CannonTag cannon = TagCodec.Parse(part.Name).Cannon;
                 if (cannon == null || !cannon.Racks.Contains(removedId)) continue;
