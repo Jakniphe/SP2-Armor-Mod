@@ -83,6 +83,7 @@ namespace ArmorFragments
             public float AimError;     // degrees between the barrel and Want
             public float AimStamp = -10f;   // Time.fixedTime of the last measure
             public bool LineBlocked;        // the barrel points at a part of its own vehicle (checked a few times a second for the flight-screen bars)
+            public bool Pinned;             // a rotator of this turret is held at its limit (it can't reach what it is asked to: it does not push the hull, so it is not counted in the share)
             public float Lag;          // how long the barrel takes to follow its rotators (s), the slowest of them; 0 = not measured
 
             // Swinging (each turret has its own): the error changing side over and over cuts this turret's gain.
@@ -131,8 +132,11 @@ namespace ArmorFragments
         {
             public AutoTarget Target;           // null = nothing to shoot at
             public bool Has;                    // Desired and Distance are a solution for Target
-            public Vector3 Desired;             // the lead turret's barrel direction
+            public Vector3 Desired;             // the lead turret's barrel direction, as of the last solution (SolvedAt)
             public float Distance;              // from the lead's muzzle to the virtual aim point: what the other turrets of the group aim at
+            public Vector3 Omega;               // how fast Desired turns (rad/s, world axis x rate), smoothed: the turrets turn at that rate ahead of the gap they close
+            public float SolvedAt;              // Time.fixedTime of the last solution
+            public bool Solved;                 // Desired is a solution for the current target (Omega can be worked out from the next one)
             public float TargetDistance, FlightTime;
             public float NextScan, NextSolve, RetargetAt, Gate;
             public int FireStart;
@@ -1619,9 +1623,11 @@ namespace ArmorFragments
             // The turrets being aimed now (the controlled groups, and the groups on automatic that have a target) are on one vehicle, and the bodies
             // of a vehicle are joined (in a recording of 14 turrets on a ship, 13 sat on one body and the lead on another joined to it: the lone one
             // kept the full gain and was the only one that swung), so the share of the hull is all of them.
+            // A turret held at its limit (it can't reach what it is asked to: a recording had seven of fourteen on the wrong side of the ship for
+            // a plane) pushes nothing, so it is left out of the count: counting it made the others half as quick as they needed to be.
             int share = 0;
             foreach (Gun gun in guns)
-                if (Live(gun) && Engaged(gun)) share++;
+                if (Live(gun) && Engaged(gun) && !gun.Pinned) share++;
             foreach (Gun gun in guns)
                 if (Live(gun) && Engaged(gun)) gun.Share = Mathf.Max(1, share);
 
@@ -1632,7 +1638,7 @@ namespace ArmorFragments
             {
                 RememberDesired(desiredTime, desiredDirection, desired, now);
                 aimIsMoving = Vector3.Angle(desired, DesiredAt(desiredTime, desiredDirection, desired, now - 0.3f)) > 1f;
-                StepSet(lead, -1, desired, aimDistance, desiredTime, desiredDirection, true, now, dt, driven, ref limit);
+                StepSet(lead, -1, desired, aimDistance, desiredTime, desiredDirection, true, Vector3.zero, now, dt, driven, ref limit);
             }
             foreach (KeyValuePair<int, AutoState> pair in autoStates)
             {
@@ -1640,9 +1646,15 @@ namespace ArmorFragments
                 if (!state.Has || !IsAuto(pair.Key)) continue;
                 Gun autoLead = AutoLeadOf(pair.Key);
                 if (autoLead == null) continue;
-                RememberDesired(state.HistoryTime, state.HistoryDirection, state.Desired, now);
-                aimIsMoving = Vector3.Angle(state.Desired, DesiredAt(state.HistoryTime, state.HistoryDirection, state.Desired, now - 0.3f)) > 1f;
-                StepSet(autoLead, pair.Key, state.Desired, state.Distance, state.HistoryTime, state.HistoryDirection, false, now, dt, driven, ref limit);
+                // The aim between two solutions keeps turning at its rate (so it moves smoothly, not in steps of 0.05 s, and the turrets can be told
+                // how fast to turn).
+                Vector3 effective = state.Desired;
+                float ahead = Mathf.Min(now - state.SolvedAt, 0.12f);
+                float omega = state.Omega.magnitude;
+                if (omega > 1e-5f && ahead > 0f) effective = Quaternion.AngleAxis(omega * ahead * Mathf.Rad2Deg, state.Omega / omega) * state.Desired;
+                RememberDesired(state.HistoryTime, state.HistoryDirection, effective, now);
+                aimIsMoving = Vector3.Angle(effective, DesiredAt(state.HistoryTime, state.HistoryDirection, effective, now - 0.3f)) > 1f;
+                StepSet(autoLead, pair.Key, effective, state.Distance, state.HistoryTime, state.HistoryDirection, false, state.Omega, now, dt, driven, ref limit);
             }
 
             foreach (Turret turret in turrets)
@@ -1651,8 +1663,10 @@ namespace ArmorFragments
         }
 
         // One set of turrets aimed together: group -1 = the controlled groups (the cursor), otherwise the one group on automatic.
+        // 'omega': how fast the wanted direction turns (world, rad/s) for a set on automatic aim; the turrets turn at that rate and only close the
+        // rest of the gap. Zero for the cursor.
         private static void StepSet(Gun setLead, int group, Vector3 wanted, float distance, List<float> historyTime, List<Vector3> historyDirection,
-                                    bool manual, float now, float dt, HashSet<Turret> driven, ref bool limit)
+                                    bool manual, Vector3 omega, float now, float dt, HashSet<Turret> driven, ref bool limit)
         {
             Vector3 leadTip = setLead.Cannon.TipPosition;
             Vector3 aimPoint = leadTip + wanted * distance;
@@ -1684,7 +1698,7 @@ namespace ArmorFragments
                     Vector3 toPoint = leadTip + DesiredAt(historyTime, historyDirection, wanted, now - mine * stagger) * distance - gun.Cannon.TipPosition;
                     if (toPoint.sqrMagnitude > 1f) follow = toPoint.normalized;
                 }
-                StepGun(g, gun, manual && gun == setLead, follow, dt, driven, ref limit);
+                StepGun(g, gun, manual && gun == setLead, follow, dt, driven, ref limit, omega, !manual);
             }
         }
 
@@ -1707,6 +1721,7 @@ namespace ArmorFragments
                     {
                         state.Target = null;
                         state.Has = false;
+                        state.Solved = false;
                         state.HistoryTime.Clear();
                         state.HistoryDirection.Clear();
                     }
@@ -1727,6 +1742,7 @@ namespace ArmorFragments
                     {
                         state.Target = null;
                         state.Has = false;
+                        state.Solved = false;
                         state.NextScan = 0f;
                     }
                 }
@@ -1749,9 +1765,24 @@ namespace ArmorFragments
                     {
                         state.Target = null;
                         state.Has = false;
+                        state.Solved = false;
                         state.NextScan = 0f;
                         continue;
                     }
+                    // How fast the aim is turning, from this solution and the one before (for the same target): a turret that is only told where to
+                    // point closes the gap at its gain and trails a moving target by about the target's rate times its time constant (a recording
+                    // of a ship's turrets on a plane: 4 degrees behind a target moving 2 degrees a second). Smoothed over 0.2 s, the solutions being
+                    // 0.05 s apart and the target's own position and velocity arriving in steps.
+                    float span = now - state.SolvedAt;
+                    if (state.Solved && span > 1e-3f && span < 0.5f)
+                    {
+                        Vector3 raw = RotationVector(state.Desired, solution.Direction) / span;
+                        float blend = 1f - Mathf.Exp(-span / 0.2f);
+                        state.Omega += (raw - state.Omega) * blend;
+                    }
+                    else state.Omega = Vector3.zero;
+                    state.Solved = true;
+                    state.SolvedAt = now;
                     state.Has = true;
                     state.Desired = solution.Direction;
                     state.Distance = solution.Range;
@@ -1784,13 +1815,18 @@ namespace ArmorFragments
             if (chosen != null && (state.Target == null || chosen.Source != state.Target.Source))
             {
                 state.RetargetAt = now + 3f;
+                state.Solved = false;   // a new target: the aim's rate of turning starts again
                 ArmorFragmentsPlugin.Log.LogInfo("Turret aim: group " + NameOf(id) + " now aims at '" + chosen.Name + "' (" + (chosen.Air ? "air" : "ground") + ", " +
                                                  chosen.Distance.ToString("F0") + " m, " + chosen.Velocity.magnitude.ToString("F0") + " m/s)");
             }
             else if (chosen == null && state.Target != null)
                 ArmorFragmentsPlugin.Log.LogInfo("Turret aim: group " + NameOf(id) + " has no target now");
             state.Target = chosen;
-            if (chosen == null) state.Has = false;
+            if (chosen == null)
+            {
+                state.Has = false;
+                state.Solved = false;
+            }
         }
 
         // The groups on automatic fire at their targets by themselves (AutoFire): a cannon at a time, when its barrel is within the tolerance of
@@ -1834,9 +1870,12 @@ namespace ArmorFragments
             }
         }
 
-        private static void StepGun(int index, Gun gun, bool isLead, Vector3 want, float dt, HashSet<Turret> driven, ref bool limit)
+        // 'feedRate': how fast 'want' turns in the world (rad/s); the rotators are told to turn at that rate besides closing the gap (zero for the
+        // cursor). 'catchUp': a big gap closes faster than the gentle gain a shared hull needs (see below).
+        private static void StepGun(int index, Gun gun, bool isLead, Vector3 want, float dt, HashSet<Turret> driven, ref bool limit, Vector3 feedRate, bool catchUp)
         {
             Vector3 barrel = gun.Cannon.transform.forward;
+            bool pinned = false;
 
             // The real error (for the marker) and the one the control works from: the barrel is still moving by its own momentum and the joint's
             // lag, so the control aims from where the barrel will be a moment from now (its own angular velocity times the damping time). Without
@@ -1896,7 +1935,11 @@ namespace ArmorFragments
             gun.PreviousBarrel = barrel;
             gun.BarrelKnown = true;
             if (isLead) errorDegrees = trueRotation.magnitude * Mathf.Rad2Deg;
-            if (use.Count == 0) return;
+            if (use.Count == 0)
+            {
+                gun.Pinned = false;
+                return;
+            }
 
             // The rotation split between the rotators by their axes: the small least-squares problem  sum(theta_i * axis_i) = rotation.
             double[] theta = rotation.magnitude * Mathf.Rad2Deg < 0.02f ? new double[use.Count] : Solve(axes, rotation);
@@ -1912,6 +1955,10 @@ namespace ArmorFragments
             // overshoot of a 20 degree move from 18 degrees to none, where lowering the gain did not help.
             float brake = ArmorFragmentsPlugin.TurretDerivative.Value;
             double[] speed = brake > 0f && gun.BarrelKnown ? Solve(axes, gun.FastSpin) : new double[use.Count];
+
+            // Following a moving aim (a target): the rotators turn at the rate the wanted direction turns, and the braking is of the barrel's speed
+            // RELATIVE to it (a barrel that keeps up with the target is not being braked for it).
+            double[] feed = feedRate.sqrMagnitude > 1e-10f ? Solve(axes, feedRate) : new double[use.Count];
 
             // The gap's sign, for the swing detector: the rotator with the biggest gap (the signed value of the one that turns it most).
             int biggest = 0;
@@ -1955,7 +2002,17 @@ namespace ArmorFragments
                 // rounding): the turret then stops short of the cursor. So a step is never smaller than a hundredth of a degree, or the error
                 // itself when that is smaller (it never overshoots). It was a twentieth, which made every turret creep at 5 degrees a second
                 // all the time (fourteen of them shook the ship).
-                float step = (gapUsed - brake * (float)speed[i]) * gain;
+                // The gain is gentle on purpose when turrets share a hull (they rocked it), which is far too slow for a big gap: a turret that is
+                // more than a few degrees off (a new target, a plane that has outrun it) closes it faster, up to the undiluted gain (less, if the
+                // hull has been rocking or this turret has swung), and goes back to the gentle gain as it arrives.
+                float stepGain = gain;
+                if (catchUp)
+                {
+                    float gapDegrees = Mathf.Abs(rawGap) * Mathf.Rad2Deg;
+                    float ceiling = baseGain * hullShake * gun.GainScale;
+                    stepGain = Mathf.Max(gain, Mathf.Min(gain * (1f + gapDegrees / 3f), ceiling));
+                }
+                float step = (gapUsed - brake * ((float)speed[i] - (float)feed[i])) * stepGain;
                 float smallest = Mathf.Min(Mathf.Abs((float)theta[i]), 0.01f * Mathf.Deg2Rad);
                 if (brake <= 0f && Mathf.Abs(step) < smallest) step = Mathf.Sign((float)theta[i]) * smallest;
 
@@ -1969,12 +2026,15 @@ namespace ArmorFragments
                 // 0.3 degrees and the hull spun 23 degrees a second for as long as it lasted).
                 if (gun.Share <= 2 && Mathf.Abs(gap) > SmallestGapDegrees * Mathf.Deg2Rad && Mathf.Sign(step) == Mathf.Sign(gap) && Mathf.Abs(step) < MicroStepDegrees * Mathf.Deg2Rad)
                     step = Mathf.Sign(gap) * Mathf.Min(Mathf.Abs(gap), MicroStepDegrees * Mathf.Deg2Rad);
-                float target = current + turret.Signs[index] * (step + (float)hull[i] * dt * share) * Mathf.Rad2Deg;
+                float target = current + turret.Signs[index] * (step + (float)hull[i] * dt * share + (float)feed[i] * dt) * Mathf.Rad2Deg;
                 if (!turret.Wraps)
                 {
                     float clamped = Mathf.Clamp(target, -turret.Range, turret.Range);
                     if (Mathf.Abs(clamped - target) > 0.001f && Mathf.Abs(current - clamped) < 0.1f && Mathf.Abs((float)theta[i]) * Mathf.Rad2Deg > 0.3f)
+                    {
                         limit = true;
+                        pinned = true;
+                    }
                     target = clamped;
                 }
                 commands[turret.Script] = target;
@@ -1984,6 +2044,7 @@ namespace ArmorFragments
                                                     gun.Hull != null ? (float)Solve(axes, -gun.Hull.angularVelocity)[i] * Mathf.Rad2Deg : 0f);
                 // RELEASE-STRIP-END
             }
+            gun.Pinned = pinned;
         }
 
         // RELEASE-STRIP-BEGIN
