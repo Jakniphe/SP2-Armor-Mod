@@ -628,6 +628,7 @@ namespace ArmorFragments
                 sightGun = null;
                 notice = null;
                 foreach (Gun gun in guns) ResetSwing(gun);
+                hulls.Clear();
                 desiredTime.Clear();
                 desiredDirection.Clear();
                 lastStep = -1f;
@@ -728,6 +729,7 @@ namespace ArmorFragments
             if (sight) LeaveSight(cm);
             activeGroup = (activeGroup + 1) % groupIds.Count;
             foreach (Gun gun in guns) { gun.BarrelKnown = false; ResetSwing(gun); }
+            hulls.Clear();
             desiredTime.Clear();
             desiredDirection.Clear();
             int count = 0;
@@ -1515,7 +1517,17 @@ namespace ArmorFragments
             // 14 turrets, even with the ship on land, and a model fitted to it says the push grows with the number of turrets that turn at once).
             float share = ArmorFragmentsPlugin.TurretShareHull.Value ? Mathf.Pow(Mathf.Max(1, gun.Share), -ArmorFragmentsPlugin.TurretShareStrength.Value) : 1f;
             float baseGain = 1f - Mathf.Exp(-dt / Mathf.Max(ArmorFragmentsPlugin.TurretResponse.Value, 0.02f));
-            float gain = Mathf.Max(baseGain * share * gun.GainScale, Mathf.Min(baseGain, MinimumGain));
+            // The hull rocking at 2 Hz (all the turrets on it pushing it and being pushed): a detector on the hull's own spin, which does not need
+            // the cursor to be still (the ring detector below is switched off while the cursor moves, and the player moves it all the time).
+            float hullShake = 1f;
+            if (gun.Hull != null && gun.BarrelKnown)
+            {
+                double[] hullRawSpin = Solve(axes, -gun.Hull.angularVelocity);
+                int strongest = 0;
+                for (int i = 1; i < use.Count; i++) if (Math.Abs(hullRawSpin[i]) > Math.Abs(hullRawSpin[strongest])) strongest = i;
+                hullShake = WatchHull(gun.Hull, (float)hullRawSpin[strongest] * Mathf.Rad2Deg);
+            }
+            float gain = Mathf.Max(baseGain * share * gun.GainScale * hullShake, Mathf.Min(baseGain, MinimumGain));
             for (int i = 0; i < use.Count; i++)
             {
                 Turret turret = use[i];
@@ -1713,6 +1725,54 @@ namespace ArmorFragments
 
         private static float aimMin, aimMax, aimWindowEnd;
 
+        // One per hull body: the sides its spin takes while the turrets on it work. The spin of a hull that is rocked by its turrets changes side
+        // 4 times a second or more (2 Hz) and by more than a few degrees a second; a hull that only turns because a turret slews changes side
+        // once at most. Each time it happens, the gain of every turret on that hull is cut by 30% (down to 15%), and it comes back slowly when
+        // the hull has been quiet for a few seconds. (Recording of 14 turrets: hull spin 20 deg/s growing to 46 deg/s over 12 s at 2 Hz, the rings
+        // swinging with it, while the cursor was being moved, so the ring detector was off.)
+        private sealed class HullState
+        {
+            public float Scale = 1f, Previous, LastEvent, LastRecover, LastStep = -1f;
+            public readonly List<float> Flips = new List<float>();
+        }
+
+        private static readonly Dictionary<Rigidbody, HullState> hulls = new Dictionary<Rigidbody, HullState>();
+
+        private static float WatchHull(Rigidbody hull, float spinDegrees)
+        {
+            HullState state;
+            if (!hulls.TryGetValue(hull, out state)) hulls[hull] = state = new HullState();
+            float fixedNow = Time.fixedTime;
+            if (state.LastStep == fixedNow) return state.Scale;   // the first turret of the step does the work, the others take the answer
+            state.LastStep = fixedNow;
+
+            float now = Time.unscaledTime;
+            if (Mathf.Abs(spinDegrees) > 4f)
+            {
+                if (state.Previous != 0f && Mathf.Sign(spinDegrees) != Mathf.Sign(state.Previous)) state.Flips.Add(now);
+                state.Previous = spinDegrees;
+            }
+            state.Flips.RemoveAll(t => now - t > 1f);
+            if (state.Flips.Count >= 4)
+            {
+                state.Flips.Clear();
+                state.LastEvent = now;
+                float next = Mathf.Max(0.15f, state.Scale * 0.7f);
+                if (next < state.Scale)
+                {
+                    state.Scale = next;
+                    ArmorFragmentsPlugin.Log.LogInfo("Turret aim: the hull '" + hull.name + "' is rocking (spin " + spinDegrees.ToString("F0") + " deg/s), the gain of the turrets on it is now " +
+                                                     (state.Scale * 100f).ToString("F0") + "%");
+                }
+            }
+            else if (state.Scale < 1f && now - state.LastEvent > 6f && now - state.LastRecover > 3f)
+            {
+                state.LastRecover = now;
+                state.Scale = Mathf.Min(1f, state.Scale + 0.1f);
+            }
+            return state.Scale;
+        }
+
         private static void ResetSwing(Gun gun)
         {
             gun.PreviousTheta = 0f;
@@ -1755,18 +1815,12 @@ namespace ArmorFragments
                 gun.Flips.Clear();
                 gun.LastSwing = now;
                 string what;
-                if (gun.Lag > 0.005f && gun.LagBoost < 0.06f)
-                {
-                    gun.LagBoost = Mathf.Min(0.06f, gun.LagBoost + 0.03f);
-                    what = "it now assumes the barrel is " + ((Mathf.Max(gun.Lag, MinimumAssumedLag) + gun.LagBoost) * 1000f).ToString("F0") + " ms late";
-                }
-                else
-                {
-                    float next = Mathf.Max(0.3f, gun.GainScale * 0.7f);
-                    if (next >= gun.GainScale) return;
-                    gun.GainScale = next;
-                    what = "its gain is now " + (gun.GainScale * 100f).ToString("F0") + "%";
-                }
+                // (It used to add 30 ms to the assumed lag first. With the 130 ms floor that only made it too much: in a recording a lone turret
+                // that was calm at 130 ms swung at 2 Hz for ten seconds after being raised to 190 ms, which the model also gives.)
+                float next = Mathf.Max(0.3f, gun.GainScale * 0.7f);
+                if (next >= gun.GainScale) return;
+                gun.GainScale = next;
+                what = "its gain is now " + (gun.GainScale * 100f).ToString("F0") + "%";
                 ArmorFragmentsPlugin.Log.LogInfo("Turret aim: turret " + (guns.IndexOf(gun) + 1) + " was swinging (error " + errorDegrees.ToString("F2") + " deg, measured lag " +
                     (gun.Lag * 1000f).ToString("F0") + " ms, " + gun.Share + " turret(s) share the hull" +
                     (isLead ? ", aim point " + aimDistance.ToString("F0") + " m away, between " + aimMin.ToString("F0") + " and " + aimMax.ToString("F0") +
