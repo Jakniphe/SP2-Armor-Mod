@@ -183,8 +183,8 @@ Also
 
 # Turret mouse aim
 
-- Mark a rotator as **Turret** (the designer's "Turret" toggle: a turret ring, a gun elevation) and a cannon as **Pointer** ("Pointer" toggle). Then switch the aim on with F7 (or the panel's Tools > "Turret mouse aim") in flight.
+- Mark a rotator as **Turret** (the designer's "Turret" toggle: a turret ring, a gun elevation) and a cannon as **Pointer** ("Pointer" toggle). Then switch the aim on with F10 (or the panel's Tools > "Turret mouse aim") in flight.
 - The mouse turns the camera (an orbit view is selected for you) and the turret turns by itself until the pointer cannon points at what is under the circle in the middle of the screen. A small marker shows where the cannon really points: green when it is on target, yellow while it turns, red at the turret's limit.
 - The aim is stabilized: when the hull pitches or rolls, the turret keeps the gun on the circle. A rotator that does not move the pointer cannon is left out (the log says so).
-- Hold **Alt**: the cursor comes back for the game's interface. Hold **C**: the camera is freed from the turret, which keeps pointing where it was while you look around; let go and the camera comes back gradually. **Right button**: gradual zoom (held). **Left button**: fire.
+- Hold **Alt**: the cursor comes back for the game's interface. Hold **Backspace**: the camera is freed from the turret, which keeps pointing where it was while you look around; let go and the camera comes back gradually. **Right button**: gradual zoom (held). **Left button**: fire.
 - The turret turns at the rotator's own speed (and the crew's aim efficiency, if you use the crew). Settings: `[TurretAim]` in the config (toggle key, look key, zoom, response).

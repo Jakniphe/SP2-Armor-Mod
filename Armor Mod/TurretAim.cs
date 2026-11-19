@@ -688,10 +688,12 @@ namespace ArmorFragments
 
         private static GameObject hudRoot;
         private static RectTransform ringRect, markerRect;
-        private static Image ringImage, markerImage;
-        private static Sprite ringSprite, dotSprite;
+        private static RawImage ringImage, markerImage;
+        private static Texture2D ringTexture, dotTexture;
 
-        private static Sprite MakeSprite(int size, Func<float, float> alphaAtRadius)
+        // A white picture whose alpha is a function of the distance from the middle (0 at the middle, 1 at the edge). Drawn by a RawImage, which
+        // takes the texture as it is, so what is drawn is only the alpha and the color the RawImage is given.
+        private static Texture2D MakeTexture(int size, Func<float, float> alphaAtRadius)
         {
             Texture2D texture = new Texture2D(size, size, TextureFormat.RGBA32, false)
             {
@@ -711,11 +713,11 @@ namespace ArmorFragments
                 }
             }
             texture.SetPixels32(pixels);
-            texture.Apply(false, true);
-            return Sprite.Create(texture, new Rect(0, 0, size, size), new Vector2(0.5f, 0.5f), 100f);
+            texture.Apply(false, false);   // stays readable (the check below reads it)
+            return texture;
         }
 
-        private static Image MakeImage(Transform parent, string name, Sprite sprite, float size, out RectTransform rect)
+        private static RawImage MakeImage(Transform parent, string name, Texture2D texture, float size, out RectTransform rect)
         {
             GameObject go = new GameObject(name);
             go.transform.SetParent(parent, false);
@@ -723,8 +725,8 @@ namespace ArmorFragments
             rect.anchorMin = rect.anchorMax = Vector2.zero;
             rect.pivot = new Vector2(0.5f, 0.5f);
             rect.sizeDelta = new Vector2(size, size);
-            Image image = go.AddComponent<Image>();
-            image.sprite = sprite;
+            RawImage image = go.AddComponent<RawImage>();
+            image.texture = texture;
             image.raycastTarget = false;
             return image;
         }
@@ -732,17 +734,30 @@ namespace ArmorFragments
         private static void MakeHud()
         {
             DestroyHud();
-            if (ringSprite == null)
-                ringSprite = MakeSprite(128, r => 1f - Mathf.SmoothStep(0.03f, 0.075f, Mathf.Abs(r - 0.88f)));
-            if (dotSprite == null)
-                dotSprite = MakeSprite(48, r => (1f - Mathf.SmoothStep(0.5f, 0.7f, r)) * 0.9f + (1f - Mathf.SmoothStep(0.86f, 0.95f, Mathf.Abs(r - 0.9f))) * 0.3f);
+            if (ringTexture == null)
+                ringTexture = MakeTexture(128, r => 1f - Mathf.SmoothStep(0.03f, 0.075f, Mathf.Abs(r - 0.88f)));
+            if (dotTexture == null)
+                dotTexture = MakeTexture(48, r => (1f - Mathf.SmoothStep(0.5f, 0.7f, r)) * 0.9f + (1f - Mathf.SmoothStep(0.86f, 0.95f, Mathf.Abs(r - 0.9f))) * 0.3f);
 
             hudRoot = new GameObject("ArmorFragments turret aim");
             Canvas canvas = hudRoot.AddComponent<Canvas>();
             canvas.renderMode = RenderMode.ScreenSpaceOverlay;
             canvas.sortingOrder = 400;
-            ringImage = MakeImage(hudRoot.transform, "circle", ringSprite, 64f, out ringRect);
-            markerImage = MakeImage(hudRoot.transform, "gun marker", dotSprite, 16f, out markerRect);
+            ringImage = MakeImage(hudRoot.transform, "circle", ringTexture, 64f, out ringRect);
+            markerImage = MakeImage(hudRoot.transform, "gun marker", dotTexture, 16f, out markerRect);
+
+            // If the circle shows up as a plain square again, this says whether the picture itself is right (alpha 0 in the middle of the ring,
+            // 255 on it) and which shader the picture is drawn with.
+            try
+            {
+                Material material = ringImage.materialForRendering;
+                ArmorFragmentsPlugin.Log.LogInfo("Turret aim HUD: the ring picture has alpha " + ringTexture.GetPixel(64, 64).a.ToString("F2") + " in the middle and " +
+                    ringTexture.GetPixel(64 + 56, 64).a.ToString("F2") + " on the ring; drawn with shader '" + (material != null && material.shader != null ? material.shader.name : "none") + "'");
+            }
+            catch (Exception e)
+            {
+                ArmorFragmentsPlugin.Log.LogWarning("Turret aim HUD check failed: " + e.Message);
+            }
         }
 
         private static void DestroyHud()
