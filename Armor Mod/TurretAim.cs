@@ -127,7 +127,7 @@ namespace ArmorFragments
 
         // The gain never goes below this per physics step (0.4 a second), however many turrets share a hull and however often the swing detector cut it.
         private const float MinimumGain = 0.004f;
-        private const float SmallestGapDegrees = 0.05f;   // below this gap the turret rests
+        private const float SmallestGapDegrees = 0.12f;   // below this gap the turret rests (the settled gap is noisy by about a tenth of a degree)
         private const float MicroStepDegrees = 0.02f;     // the least a step asks for above it
 
         // The braking term needs the gun's speed without much delay (a delay in it is what lets a swing grow): only a few physics steps of smoothing.
@@ -1242,6 +1242,8 @@ namespace ArmorFragments
         private static readonly List<float> desiredTime = new List<float>();
         private static readonly List<Vector3> desiredDirection = new List<Vector3>();
 
+        private static bool aimIsMoving;   // the cursor moved more than a degree in the last 0.3 s: a gap that changes side is the cursor, not a swing
+
         private static void RememberDesired(float now)
         {
             desiredTime.Add(now);
@@ -1295,6 +1297,7 @@ namespace ArmorFragments
             bool limit = false;
             float now = Time.fixedTime;
             RememberDesired(now);
+            aimIsMoving = Vector3.Angle(desired, DesiredAt(now - 0.3f)) > 1f;
             float stagger = ArmorFragmentsPlugin.TurretMoveStagger.Value;
             int rank = 0;
             foreach (Gun gun in guns)
@@ -1545,18 +1548,26 @@ namespace ArmorFragments
         // The gap closing (the rotator with the biggest gap) changing side over and over (4 times in a second, each time more than a third of a
         // degree: two swings of 2 Hz) is swinging. Each turret has its own detector: a ship's turrets are not all alike.
         //
-        // The measured lag comes from a slow 3 degree move; at the speed a turret swings the barrel follows much later (a recording of a turret
-        // that swung: the barrel trailed the angle by about 180 ms, the measure said 70 ms), and a predictor that thinks the barrel is quicker than
-        // it is makes the swing. In a model, raising the assumed lag to the real one ends the swing, while lowering the gain does not. So a swing
-        // first adds 50 ms to the lag the turret assumes (up to 200 ms more); only when that is used up is the gain cut by 40% (down to a tenth).
-        // When it has been calm for a few seconds the gain creeps back up (the added lag stays: it is what the turret needed).
+        // It only counts when the turret is close to the cursor and the cursor is still: a gap that changes side because the cursor was swept
+        // across the sky (or flicked to the other side, where the turret is stopped at its limit and the gap jumps by 180 degrees) is not a
+        // swing. Counting those cut every turret's gain to a fifth and added 200 ms to every assumed lag in a recording where the player only
+        // moved the mouse, which made the turrets slow and gave them a slow wobble of their own.
         //
-        // (The detector used to forget the last side whenever the gap went through zero, so it only saw a swing that jumped across it: a steady
-        // swing was never seen.)
+        // The measured lag comes from a slow 3 degree move; at the speed a turret swings the barrel follows later (a recording of a turret that
+        // swung: the barrel trailed the angle by about 180 ms, the measure said 70 ms), and a predictor that thinks the barrel is quicker than
+        // it is makes the swing. In a model, raising the assumed lag to the real one ends the swing, while lowering the gain does not (and too
+        // much lag makes a small ripple). So a swing first adds 30 ms to the lag the turret assumes (up to 120 ms more); only when that is used up
+        // is the gain cut by 30% (down to 30%). When it has been calm for a few seconds the gain creeps back up (the added lag stays).
         private static void WatchForSwinging(Gun gun, float theta, float errorDegrees, bool isLead)
         {
             float now = Time.unscaledTime;
-            if (Mathf.Abs(theta) > 0.3f)
+            bool counts = !aimIsMoving && errorDegrees < 8f && Mathf.Abs(theta) < 8f;
+            if (!counts)
+            {
+                gun.Flips.Clear();
+                gun.PreviousTheta = 0f;
+            }
+            else if (Mathf.Abs(theta) > 0.3f)
             {
                 if (gun.PreviousTheta != 0f && Mathf.Sign(theta) != Mathf.Sign(gun.PreviousTheta)) gun.Flips.Add(now);
                 gun.PreviousTheta = theta;
@@ -1568,14 +1579,14 @@ namespace ArmorFragments
                 gun.Flips.Clear();
                 gun.LastSwing = now;
                 string what;
-                if (gun.Lag > 0.005f && gun.LagBoost < 0.2f)
+                if (gun.Lag > 0.005f && gun.LagBoost < 0.12f)
                 {
-                    gun.LagBoost = Mathf.Min(0.2f, gun.LagBoost + 0.05f);
+                    gun.LagBoost = Mathf.Min(0.12f, gun.LagBoost + 0.03f);
                     what = "it now assumes the barrel is " + ((gun.Lag + gun.LagBoost) * 1000f).ToString("F0") + " ms late";
                 }
                 else
                 {
-                    float next = Mathf.Max(0.1f, gun.GainScale * 0.6f);
+                    float next = Mathf.Max(0.3f, gun.GainScale * 0.7f);
                     if (next >= gun.GainScale) return;
                     gun.GainScale = next;
                     what = "its gain is now " + (gun.GainScale * 100f).ToString("F0") + "%";
@@ -1585,7 +1596,7 @@ namespace ArmorFragments
                     (isLead ? ", aim point " + aimDistance.ToString("F0") + " m away, between " + aimMin.ToString("F0") + " and " + aimMax.ToString("F0") +
                               " m in the last 2 s, camera pivot height " + pivotY.ToString("F2") : "") + "), " + what);
             }
-            else if (gun.GainScale < 1f && now - gun.LastSwing > 5f && now - gun.LastRecover > 3f)
+            else if (gun.GainScale < 1f && now - gun.LastSwing > 3f && now - gun.LastRecover > 1.5f)
             {
                 gun.LastRecover = now;
                 gun.GainScale = Mathf.Min(1f, gun.GainScale + 0.1f);
