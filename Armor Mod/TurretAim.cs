@@ -152,6 +152,7 @@ namespace ArmorFragments
             orbitTargetRef(orbit) = () => pivotTransform;
             orbitCenterRef(orbit) = false;
             nextColliders = 0f;
+            pivotYKnown = false;
             UpdatePivot();
         }
 
@@ -182,12 +183,26 @@ namespace ArmorFragments
             {
                 nextColliders = Time.unscaledTime + 2f;
                 bodyColliders.Clear();
+                // The gun (the body the pointer cannons are in) is left out of the highest point: its top moves with the elevation, and the pivot
+                // that follows it moves the camera, which changes where the gun is told to point, which moves its top... With the highest point
+                // jumping between the barrel's tip and another part, the aim flipped between two positions.
+                HashSet<Rigidbody> gunBodies = new HashSet<Rigidbody>();
+                foreach (CannonScript cannon in pointers)
+                {
+                    Rigidbody body = cannon != null ? BodyOf(cannon.PartScript) : null;
+                    if (body != null) gunBodies.Add(body);
+                }
                 foreach (PartData data in craft.Aircraft.Assembly.Parts)
                 {
                     PartScript part = data != null ? data.PartScript : null;
                     if (part == null) continue;
                     foreach (Collider collider in part.GetComponentsInChildren<Collider>())
-                        if (collider != null && !collider.isTrigger) bodyColliders.Add(collider);
+                    {
+                        if (collider == null || collider.isTrigger) continue;
+                        Rigidbody attached = collider.attachedRigidbody;
+                        if (attached != null && gunBodies.Contains(attached)) continue;
+                        bodyColliders.Add(collider);
+                    }
                 }
             }
 
@@ -205,10 +220,19 @@ namespace ArmorFragments
             if (count == 0) return;
             center /= count;
 
+            // The height eases toward its target (about half a second), so even a jump of the highest point from one part to another moves the
+            // camera gently and can't set the aim swinging.
+            float wanted = top + ArmorFragmentsPlugin.TurretCameraHeight.Value;
+            pivotY = pivotYKnown ? Mathf.Lerp(pivotY, wanted, 1f - Mathf.Exp(-Time.unscaledDeltaTime / 0.5f)) : wanted;
+            pivotYKnown = true;
+
             // Centered on the vehicle: the hull's centre of mass once it is known, else the middle of its colliders.
             Vector3 middle = hullBody != null ? hullBody.worldCenterOfMass : center;
-            pivot.transform.position = new Vector3(middle.x, top + ArmorFragmentsPlugin.TurretCameraHeight.Value, middle.z);
+            pivot.transform.position = new Vector3(middle.x, pivotY, middle.z);
         }
+
+        private static float pivotY;
+        private static bool pivotYKnown;
 
         // ---- Switching on and off -------------------------------------------------------------------------------
 
@@ -518,6 +542,15 @@ namespace ArmorFragments
                     aimDistance = distance;
                 }
                 haveDesired = true;
+
+                // For the log if the aim swings: how far the aim point jumped about in the last couple of seconds.
+                if (Time.unscaledTime >= aimWindowEnd)
+                {
+                    aimWindowEnd = Time.unscaledTime + 2f;
+                    aimMin = aimMax = aimDistance;
+                }
+                aimMin = Mathf.Min(aimMin, aimDistance);
+                aimMax = Mathf.Max(aimMax, aimDistance);
             }
 
             UpdateHud(cam, muzzle, pointer.transform.forward, look || returning);
@@ -721,6 +754,7 @@ namespace ArmorFragments
         private static float gainScale = 1f;
         private static float lastSwing, lastRecover;
         private static readonly List<float> flips = new List<float>();
+        private static float aimMin, aimMax, aimWindowEnd;
 
         // The error changing side, over and over (6 times in a second, each one more than a tenth of a degree), is swinging. Then the gain is cut
         // by a quarter (down to a third of itself) and logged; when it has been calm for a few seconds the gain creeps back up.
@@ -742,7 +776,8 @@ namespace ArmorFragments
                 {
                     gainScale = next;
                     ArmorFragmentsPlugin.Log.LogInfo("Turret aim: the aim was swinging (error " + degrees.ToString("F2") + " deg, aim point " + aimDistance.ToString("F0") +
-                        " m away), the turret's gain is now " + (gainScale * 100f).ToString("F0") + "%");
+                        " m away, between " + aimMin.ToString("F0") + " and " + aimMax.ToString("F0") + " m in the last 2 s, camera pivot height " + pivotY.ToString("F2") +
+                        "), the turret's gain is now " + (gainScale * 100f).ToString("F0") + "%");
                 }
             }
             else if (gainScale < 1f && now - lastSwing > 3f && now - lastRecover > 2f)
