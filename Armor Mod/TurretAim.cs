@@ -522,6 +522,40 @@ namespace ArmorFragments
 
         // ---- Every frame ----------------------------------------------------------------------------------------
 
+        // RELEASE-STRIP-BEGIN
+        // The plugin is being unloaded (a hot reload): the aim is switched off (camera, pivot, fire input, circle and marker are taken back) and
+        // what was made for the crosshair is freed.
+        public static void Shutdown()
+        {
+            Deactivate("the plugin is unloading");
+            if (invertMaterial != null) UnityEngine.Object.Destroy(invertMaterial);
+            if (ringTexture != null) UnityEngine.Object.Destroy(ringTexture);
+            if (dotTexture != null) UnityEngine.Object.Destroy(dotTexture);
+            invertMaterial = null;
+            ringTexture = dotTexture = null;
+        }
+
+        // What an earlier copy of the plugin left in the scene when it was unloaded without this clean-up: its circle and marker (frozen on the
+        // screen) and its camera pivot. Called a moment after loading, before this copy has made any.
+        public static int RemoveLeftovers()
+        {
+            int removed = 0;
+            foreach (Canvas canvas in UnityEngine.Object.FindObjectsByType<Canvas>(FindObjectsInactive.Include, FindObjectsSortMode.None))
+            {
+                if (canvas == null || canvas.gameObject.name != "ArmorFragments turret aim") continue;
+                UnityEngine.Object.Destroy(canvas.gameObject);
+                removed++;
+            }
+            foreach (Transform transform in UnityEngine.Object.FindObjectsByType<Transform>(FindObjectsInactive.Include, FindObjectsSortMode.None))
+            {
+                if (transform == null || transform.gameObject.name != "ArmorFragments turret camera pivot") continue;
+                UnityEngine.Object.Destroy(transform.gameObject);
+                removed++;
+            }
+            return removed;
+        }
+        // RELEASE-STRIP-END
+
         // ---- Changing a key from the panel: the next key pressed is the new one (Escape cancels) --------------------
 
         private static ConfigEntry<Key> capturing;

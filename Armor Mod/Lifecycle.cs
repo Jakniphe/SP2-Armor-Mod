@@ -63,6 +63,9 @@ namespace ArmorFragments
                 UnityEngine.Object.Destroy(renderer.gameObject);
                 removed++;
             }
+            int turret = TurretAim.RemoveLeftovers();
+            if (turret > 0)
+                ArmorFragmentsPlugin.Log.LogInfo("[LIFECYCLE] Removed " + turret + " turret aim object(s) (circle, marker, camera pivot) that an earlier build left in the scene");
             if (removed > 0)
                 ArmorFragmentsPlugin.Log.LogInfo("[LIFECYCLE] Removed " + removed + " X-ray ghost(s) that an earlier build left in the scene");
             return removed;
@@ -83,6 +86,7 @@ namespace ArmorFragments
             Step("host settings", NetSync.RestoreUser);
 
             // Things on screen and in the scene.
+            Step("turret aim", TurretAim.Shutdown);
             Step("impact camera", ImpactCamera.Stop);
             Step("x-ray view", XRayView.Shutdown);
             Step("rays and bubbles", RayDrawer.Shutdown);
