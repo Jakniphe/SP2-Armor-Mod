@@ -85,6 +85,7 @@ namespace ArmorFragments
             public float PreviousTheta;   // the last signed gap (degrees) of the rotator with the biggest one
             public int Share = 1;         // turrets of the active group on the same hull body (itself included)
             public float GainScale = 1f;
+            public float LagBoost;        // seconds added to the measured lag after the turret swung (the measured one was too short at the speed it swings)
             public float LastSwing, LastRecover;
             public readonly List<float> Flips = new List<float>();
         }
@@ -1297,9 +1298,11 @@ namespace ArmorFragments
             foreach (Gun gun in guns)
             {
                 if (!InActiveGroup(gun) || !Live(gun)) continue;
+                // The turrets of a group are on one vehicle, and the bodies of a vehicle are joined (in a recording of 14 turrets on a ship, 13
+                // sat on one body and the lead on another joined to it: the lone one kept the full gain and was the only one that swung).
                 int share = 0;
                 foreach (Gun other in guns)
-                    if (InActiveGroup(other) && Live(other) && other.Hull == gun.Hull) share++;
+                    if (InActiveGroup(other) && Live(other)) share++;
                 gun.Share = Mathf.Max(1, share);
             }
             for (int g = 0; g < guns.Count; g++)
@@ -1368,13 +1371,14 @@ namespace ArmorFragments
             // WILL be once it has arrived. Without this it keeps asking for what is already on its way, overshoots, and the turret swings.
             float pendingDegrees = 0f;
             float now = Time.fixedTime;
+            float lagUsed = gun.Lag + gun.LagBoost;
             if (gun.Lag > 0.005f && use.Count > 0)
             {
                 Vector3 settled = barrel;
                 for (int i = 0; i < use.Count; i++)
                 {
                     float angleNow = angleRef(use[i].Script);
-                    float pending = angleNow - AngleAt(use[i], now - gun.Lag, angleNow);
+                    float pending = angleNow - AngleAt(use[i], now - lagUsed, angleNow);
                     float sign = use[i].Signs[index];
                     float scale = use[i].Scales[index] > 0.05f ? use[i].Scales[index] : 1f;
                     float travel = sign * scale * pending;
@@ -1446,7 +1450,7 @@ namespace ArmorFragments
                 commands[turret.Script] = target;
                 driven.Add(turret);
                 // RELEASE-STRIP-BEGIN
-                if (recorder != null) RecordRow(index, trueRotation, rotation, turret, current, target, (float)theta[i], (float)hull[i], step, gain, gun.GainScale, gun.Lag, pendingDegrees,
+                if (recorder != null) RecordRow(index, trueRotation, rotation, turret, current, target, (float)theta[i], (float)hull[i], step, gain, gun.GainScale, lagUsed, pendingDegrees,
                                                     gun.Hull != null ? (float)Solve(axes, -gun.Hull.angularVelocity)[i] * Mathf.Rad2Deg : 0f);
                 // RELEASE-STRIP-END
             }
@@ -1524,13 +1528,21 @@ namespace ArmorFragments
         {
             gun.PreviousTheta = 0f;
             gun.GainScale = 1f;
+            gun.LagBoost = 0f;
             gun.Flips.Clear();
         }
 
         // The gap closing (the rotator with the biggest gap) changing side over and over (4 times in a second, each time more than a third of a
-        // degree: two swings of 2 Hz) is swinging. Then that turret's gain is cut by 40% (down to a tenth of itself) and logged; when it has been
-        // calm for a few seconds the gain creeps back up. Each turret has its own: a ship's turrets are not all alike. (It used to watch the
-        // direction of the whole error, which did not change sign while the gap along the turret ring did, so it never saw a swing like that.)
+        // degree: two swings of 2 Hz) is swinging. Each turret has its own detector: a ship's turrets are not all alike.
+        //
+        // The measured lag comes from a slow 3 degree move; at the speed a turret swings the barrel follows much later (a recording of a turret
+        // that swung: the barrel trailed the angle by about 180 ms, the measure said 70 ms), and a predictor that thinks the barrel is quicker than
+        // it is makes the swing. In a model, raising the assumed lag to the real one ends the swing, while lowering the gain does not. So a swing
+        // first adds 50 ms to the lag the turret assumes (up to 200 ms more); only when that is used up is the gain cut by 40% (down to a tenth).
+        // When it has been calm for a few seconds the gain creeps back up (the added lag stays: it is what the turret needed).
+        //
+        // (The detector used to forget the last side whenever the gap went through zero, so it only saw a swing that jumped across it: a steady
+        // swing was never seen.)
         private static void WatchForSwinging(Gun gun, float theta, float errorDegrees, bool isLead)
         {
             float now = Time.unscaledTime;
@@ -1539,23 +1551,29 @@ namespace ArmorFragments
                 if (gun.PreviousTheta != 0f && Mathf.Sign(theta) != Mathf.Sign(gun.PreviousTheta)) gun.Flips.Add(now);
                 gun.PreviousTheta = theta;
             }
-            else gun.PreviousTheta = 0f;
 
             gun.Flips.RemoveAll(t => now - t > 1f);
             if (gun.Flips.Count >= 4)
             {
                 gun.Flips.Clear();
                 gun.LastSwing = now;
-                float next = Mathf.Max(0.1f, gun.GainScale * 0.6f);
-                if (next < gun.GainScale)
+                string what;
+                if (gun.Lag > 0.005f && gun.LagBoost < 0.2f)
                 {
-                    gun.GainScale = next;
-                    ArmorFragmentsPlugin.Log.LogInfo("Turret aim: turret " + (guns.IndexOf(gun) + 1) + " was swinging (error " + errorDegrees.ToString("F2") + " deg, lag " +
-                        (gun.Lag * 1000f).ToString("F0") + " ms, " + gun.Share + " turret(s) on its hull" +
-                        (isLead ? ", aim point " + aimDistance.ToString("F0") + " m away, between " + aimMin.ToString("F0") + " and " + aimMax.ToString("F0") +
-                                  " m in the last 2 s, camera pivot height " + pivotY.ToString("F2") : "") +
-                        "), its gain is now " + (gun.GainScale * 100f).ToString("F0") + "%");
+                    gun.LagBoost = Mathf.Min(0.2f, gun.LagBoost + 0.05f);
+                    what = "it now assumes the barrel is " + ((gun.Lag + gun.LagBoost) * 1000f).ToString("F0") + " ms late";
                 }
+                else
+                {
+                    float next = Mathf.Max(0.1f, gun.GainScale * 0.6f);
+                    if (next >= gun.GainScale) return;
+                    gun.GainScale = next;
+                    what = "its gain is now " + (gun.GainScale * 100f).ToString("F0") + "%";
+                }
+                ArmorFragmentsPlugin.Log.LogInfo("Turret aim: turret " + (guns.IndexOf(gun) + 1) + " was swinging (error " + errorDegrees.ToString("F2") + " deg, measured lag " +
+                    (gun.Lag * 1000f).ToString("F0") + " ms, " + gun.Share + " turret(s) share the hull" +
+                    (isLead ? ", aim point " + aimDistance.ToString("F0") + " m away, between " + aimMin.ToString("F0") + " and " + aimMax.ToString("F0") +
+                              " m in the last 2 s, camera pivot height " + pivotY.ToString("F2") : "") + "), " + what);
             }
             else if (gun.GainScale < 1f && now - gun.LastSwing > 5f && now - gun.LastRecover > 3f)
             {
