@@ -319,6 +319,8 @@ namespace ArmorFragments.UI
                 new KeyValuePair<string, Action>("Change fire key", () => TurretAim.CaptureKey(ArmorFragmentsPlugin.TurretFireKey)),
                 new KeyValuePair<string, Action>("Change next group key", () => TurretAim.CaptureKey(ArmorFragmentsPlugin.TurretGroupKey)),
             });
+            ToggleSetting(ArmorFragmentsPlugin.TurretGroupsHudEnabled, "Show turret groups on the flight screen",
+                "A bar for each turret group at the bottom right of the flight screen (above the camera buttons): lit = follows the mouse aim, dark = holds. Click one (Alt frees the cursor) to switch it; several can be controlled together.");
             ToggleSetting(ArmorFragmentsPlugin.TurretTestSingle, "Control only one turret (test)",
                 "Only one turret of the active group is controlled and fires; the others hold where they are. Pick it with the buttons below. For finding out whether a swing comes from one turret or from many on one hull.");
             Live("Turret under test", () => TurretAim.TestStatus);

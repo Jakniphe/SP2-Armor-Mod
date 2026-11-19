@@ -1,4 +1,5 @@
 using System;
+using System.Text;
 using System.Collections.Generic;
 using Assets.Scripts.Craft;
 using Assets.Scripts.Craft.Parts;
@@ -101,10 +102,20 @@ namespace ArmorFragments
         }
 
         private static readonly List<int> groupIds = new List<int>();
-        private static int activeGroup;                 // index in groupIds
+        private static readonly HashSet<int> controlled = new HashSet<int>();   // the groups that follow the mouse aim now (the others hold)
         private static Gun sightGun;                    // the turret whose sight camera is the view now
 
-        private static int ActiveGroupId { get { return groupIds.Count > 0 ? groupIds[Mathf.Clamp(activeGroup, 0, groupIds.Count - 1)] : 0; } }
+        // The groups controlled now, for texts: "1", "1+3".
+        private static string ControlledLabel
+        {
+            get
+            {
+                StringBuilder text = new StringBuilder();
+                foreach (int id in groupIds)
+                    if (controlled.Contains(id)) text.Append(text.Length > 0 ? "+" : "").Append(id);
+                return text.Length > 0 ? text.ToString() : "-";
+            }
+        }
         private static bool Live(Gun gun) { return gun != null && gun.Cannon != null && gun.Cannon.PartScript != null; }
         // In the test mode only one turret of the active group counts as active: it is the only one controlled, mirrored in the share of the
         // gain, and fired; the others hold where they are.
@@ -113,7 +124,7 @@ namespace ArmorFragments
         private static int GroupCount()
         {
             int n = 0;
-            foreach (Gun gun in guns) if (gun.GroupId == ActiveGroupId) n++;
+            foreach (Gun gun in guns) if (controlled.Contains(gun.GroupId)) n++;
             return n;
         }
 
@@ -122,7 +133,7 @@ namespace ArmorFragments
             int n = 0;
             foreach (Gun gun in guns)
             {
-                if (gun.GroupId != ActiveGroupId) continue;
+                if (!controlled.Contains(gun.GroupId)) continue;
                 if (n == position) return gun;
                 n++;
             }
@@ -131,7 +142,7 @@ namespace ArmorFragments
 
         private static bool InActiveGroup(Gun gun)
         {
-            if (gun.GroupId != ActiveGroupId) return false;
+            if (!controlled.Contains(gun.GroupId)) return false;
             if (!ArmorFragmentsPlugin.TurretTestSingle.Value) return true;
             return gun == GroupGun(Mathf.Clamp(testIndex, 0, Mathf.Max(0, GroupCount() - 1)));
         }
@@ -142,7 +153,7 @@ namespace ArmorFragments
             {
                 if (!ArmorFragmentsPlugin.TurretTestSingle.Value) return "Off (all the turrets of the group are controlled)";
                 int n = GroupCount();
-                return n == 0 ? "No turret" : "Turret " + (Mathf.Clamp(testIndex, 0, n - 1) + 1) + " of " + n + " in group " + ActiveGroupId;
+                return n == 0 ? "No turret" : "Turret " + (Mathf.Clamp(testIndex, 0, n - 1) + 1) + " of " + n + " in the group(s) " + ControlledLabel;
             }
         }
 
@@ -155,7 +166,7 @@ namespace ArmorFragments
             testIndex = ((Mathf.Clamp(testIndex, 0, n - 1) + delta) % n + n) % n;
             ResetForTestChange();
             if (Active) Notice("testing turret " + (testIndex + 1) + " of " + n);
-            ArmorFragmentsPlugin.Log.LogInfo("Turret aim: only turret " + (testIndex + 1) + " of " + n + " in group " + ActiveGroupId + " is controlled now");
+            ArmorFragmentsPlugin.Log.LogInfo("Turret aim: only turret " + (testIndex + 1) + " of " + n + " in the group(s) " + ControlledLabel + " is controlled now");
         }
 
         private static bool testWasOn;
@@ -600,7 +611,8 @@ namespace ArmorFragments
                 Collect(aircraft);
                 if (turrets.Count == 0) { Status = "Off: mark a rotator as Turret in the designer"; return; }
                 if (guns.Count == 0) { Status = "Off: create a turret group on a cannon in the designer"; return; }
-                activeGroup = 0;
+                controlled.Clear();
+                controlled.Add(groupIds[0]);
                 sightGun = null;
 
                 CameraManagerScript cm = CameraManagerScript.Instance;
@@ -725,19 +737,78 @@ namespace ArmorFragments
             }
         }
 
-        // The next turret group takes the mouse aim (the key in the config).
+        // The key in the config: ONLY the next turret group takes the mouse aim (the groups controlled together become that one).
         private static void NextGroup(CameraManagerScript cm)
         {
             if (sight) LeaveSight(cm);
-            activeGroup = (activeGroup + 1) % groupIds.Count;
+            int current = 0;
+            for (int i = 0; i < groupIds.Count; i++) if (controlled.Contains(groupIds[i])) { current = i; break; }
+            controlled.Clear();
+            controlled.Add(groupIds[(current + 1) % groupIds.Count]);
+            ResetControlState();
+            int count = GroupCount();
+            Notice("turret group " + ControlledLabel + " (" + count + (count == 1 ? " turret)" : " turrets)"));
+            ArmorFragmentsPlugin.Log.LogInfo("Turret aim: turret group " + ControlledLabel + " is aimed now (" + count + " turret(s))");
+        }
+
+        // Whatever changed which turrets are controlled: nothing carries over (the barrels' speeds, the swing detectors, the hulls' watches, the
+        // history of the cursor for the staggered start).
+        private static void ResetControlState()
+        {
             foreach (Gun gun in guns) { gun.BarrelKnown = false; ResetSwing(gun); }
             hulls.Clear();
             desiredTime.Clear();
             desiredDirection.Clear();
-            int count = 0;
-            foreach (Gun gun in guns) if (InActiveGroup(gun)) count++;
-            Notice("turret group " + ActiveGroupId + " (" + count + (count == 1 ? " turret)" : " turrets)"));
-            ArmorFragmentsPlugin.Log.LogInfo("Turret aim: turret group " + ActiveGroupId + " is aimed now (" + count + " turret(s))");
+        }
+
+        // ---- The groups, for the flight screen (TurretGroupsHud) -------------------------------------------------------------------------
+
+        internal struct GroupHud
+        {
+            public int Id;
+            public int Total, Live, OnTarget;
+            public bool Controlled;
+        }
+
+        internal static void GetGroups(List<GroupHud> output)
+        {
+            output.Clear();
+            float tolerance = ArmorFragmentsPlugin.TurretFireTolerance.Value;
+            foreach (int id in groupIds)
+            {
+                GroupHud group = new GroupHud { Id = id, Controlled = controlled.Contains(id) };
+                foreach (Gun gun in guns)
+                {
+                    if (gun.GroupId != id) continue;
+                    group.Total++;
+                    if (!Live(gun)) continue;
+                    group.Live++;
+                    if (group.Controlled && calibrated && Time.fixedTime - gun.AimStamp < 0.25f && gun.AimError <= tolerance) group.OnTarget++;
+                }
+                output.Add(group);
+            }
+        }
+
+        // A click on a group's bar: it joins the groups that follow the mouse aim, or leaves them (one group always stays controlled).
+        internal static void ToggleGroup(int id)
+        {
+            if (!Active || !groupIds.Contains(id)) return;
+            if (controlled.Contains(id))
+            {
+                if (controlled.Count <= 1)
+                {
+                    Notice("one turret group has to stay controlled");
+                    return;
+                }
+                controlled.Remove(id);
+            }
+            else controlled.Add(id);
+            CameraManagerScript cm = CameraManagerScript.Instance;
+            if (sight && cm != null) LeaveSight(cm);
+            ResetControlState();
+            int count = GroupCount();
+            Notice("controlling group " + ControlledLabel + " (" + count + (count == 1 ? " turret)" : " turrets)"));
+            ArmorFragmentsPlugin.Log.LogInfo("Turret aim: the groups controlled now: " + ControlledLabel + " (" + count + " turret(s))");
         }
 
         public static void Deactivate(string reason)
@@ -1089,7 +1160,7 @@ namespace ArmorFragments
                     : errorDegrees < 0.5f ? "On target"
                     : "Turning (" + errorDegrees.ToString("F1") + " deg off)";
                 Status = notice != null && Time.unscaledTime < noticeUntil ? notice
-                    : (groupIds.Count > 1 ? "Group " + ActiveGroupId + ": " : "") + (sight ? "Sight: " : "") + state;
+                    : (groupIds.Count > 1 ? "Group " + ControlledLabel + ": " : "") + (sight ? "Sight: " : "") + state;
             }
 
             // RELEASE-STRIP-BEGIN
@@ -1453,7 +1524,7 @@ namespace ArmorFragments
 
             List<Turret> use = new List<Turret>();
             foreach (Turret turret in gun.Drivers)
-                if (turret.Usable && Moves(turret)) use.Add(turret);
+                if (turret.Usable && Moves(turret) && !driven.Contains(turret)) use.Add(turret);   // (a ring that two controlled groups share goes to the first)
 
             Vector3[] axes = new Vector3[use.Count];
             for (int i = 0; i < use.Count; i++) axes[i] = AxisOf(use[i].Script);
@@ -1631,7 +1702,7 @@ namespace ArmorFragments
             text.AppendLine("Salvo ripple (FireStaggerSeconds): " + ArmorFragmentsPlugin.TurretFireStagger.Value);
             text.AppendLine("Check line of fire (CheckLineOfFire): " + ArmorFragmentsPlugin.TurretLineOfFire.Value);
             text.AppendLine("Test one turret: " + ArmorFragmentsPlugin.TurretTestSingle.Value + (ArmorFragmentsPlugin.TurretTestSingle.Value ? " (turret " + (testIndex + 1) + " of the group)" : ""));
-            text.AppendLine("Active group: " + ActiveGroupId + ", turrets in the group: " + GroupCount() + ", turrets in all: " + guns.Count + ", rotators: " + turrets.Count);
+            text.AppendLine("Controlled groups: " + ControlledLabel + ", turrets controlled: " + GroupCount() + ", turrets in all: " + guns.Count + ", rotators: " + turrets.Count);
             text.AppendLine("Physics step: " + Time.fixedDeltaTime + " s");
             return text.ToString();
         }

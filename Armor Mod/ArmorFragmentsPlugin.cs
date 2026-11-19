@@ -174,6 +174,7 @@ namespace ArmorFragments
         internal static ConfigEntry<float> TurretDerivative;
         internal static ConfigEntry<bool> TurretFireOnTarget, TurretLineOfFire, TurretShareHull;
         internal static ConfigEntry<float> TurretShareStrength, TurretErrorFilter;
+        internal static ConfigEntry<bool> TurretGroupsHudEnabled;
         internal static ConfigEntry<bool> TurretTestSingle;
         internal static ConfigEntry<float> TurretFireTolerance, TurretFireStagger, TurretMoveStagger;
         internal static ConfigEntry<UnityEngine.InputSystem.Key> TurretSightKey;
@@ -238,6 +239,7 @@ namespace ArmorFragments
             ImpactEffects.Tick(); PerfMonitor.Lap("ImpactEffects");
             TurretAim.Tick(); PerfMonitor.Lap("TurretAim");
             AmmoHud.Tick(); PerfMonitor.Lap("AmmoHud");
+            TurretGroupsHud.Tick();
             PerfMonitor.End();
         }
 
@@ -360,6 +362,9 @@ namespace ArmorFragments
                     "of turrets (14 turrets: 1.9 / 14 = a seventh of the gain). A model of 14 turrets on a ship (and a recording of one) put the limit of a steady aim at about " +
                     "1 turn a second of gain for 14 turrets; fewer turrets can have more.",
                     new AcceptableValueRange<float>(1f, 20f)));
+            TurretGroupsHudEnabled = Config.Bind("TurretAim", "GroupsDisplay", true,
+                "In mouse aim, with more than one turret group, shows a bar for each group at the bottom right of the flight screen, above the camera buttons: lit = the group follows the mouse aim, dark = it holds. " +
+                "A click switches the group (several can be controlled together); hold Alt to free the cursor for it.");
             TurretErrorFilter = Config.Bind("TurretAim", "ErrorFilterSeconds", 0.4f,
                 new ConfigDescription("When several turrets share a hull, the gap each one is closing is smoothed over this many seconds, so a hull that rocks (2 times a second) is not chased " +
                     "by the turrets, which would rock it more. In the model it lets the gain be 4 times higher for the same steadiness. 0 = off. A single turret is never smoothed.",
