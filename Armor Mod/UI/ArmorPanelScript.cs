@@ -66,6 +66,7 @@ namespace ArmorFragments.UI
                 BuildSimulation();
                 BuildMultiplayer();
                 BuildMouseAim();
+                BuildAmmoDisplay();
                 BuildImpactCamera();
                 BuildXRayPerformance();
                 BuildEnergyModel();
@@ -271,6 +272,16 @@ namespace ArmorFragments.UI
                 "How much the cone leans toward the plate's normal on slanted hits.", 0.05f, "");
             FloatSetting(ArmorFragmentsPlugin.SpreadAnisotropy, "Spread anisotropy",
                 "How much wider the cone is along the plane of incidence (1 = round).", 0.1f, "x");
+        }
+
+        // The ammo racks' bars on the flight screen (AmmoHud.cs).
+        private void BuildAmmoDisplay()
+        {
+            builder.Header("Ammo display", collapsed: true);
+            ToggleSetting(ArmorFragmentsPlugin.AmmoHudEnabled, "Show ammo racks on the flight screen",
+                "A bar for each ammo rack above the fire buttons: the rack's round (caliber and kind) on the left and its rounds left on the right.");
+            ToggleSetting(ArmorFragmentsPlugin.AmmoHudRelative, "Show percent instead of rounds",
+                "The bars show the percent of the rack that is left instead of the rounds left. A click on any bar does the same.");
         }
 
         // Mouse aim for turrets (TurretAim.cs): rotators marked Turret and cannons marked Pointer in the designer follow the circle on the screen.

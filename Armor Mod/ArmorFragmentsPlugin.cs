@@ -175,6 +175,10 @@ namespace ArmorFragments
         internal static ConfigEntry<float> TurretSightZoom;
         internal static ConfigEntry<float> TurretSightSensitivity;
         internal static ConfigEntry<bool> TurretCrosshairFlipY;
+
+        // The rounds left in each ammo rack, on the flight screen (see AmmoHud.cs). Local.
+        internal static ConfigEntry<bool> AmmoHudEnabled;
+        internal static ConfigEntry<bool> AmmoHudRelative;
         internal static ConfigEntry<TurretFireMouse> TurretFireMouseButton;
         internal static ConfigEntry<UnityEngine.InputSystem.Key> TurretGroupKey;
         internal static ConfigEntry<UnityEngine.InputSystem.Key> TurretFireKey;
@@ -228,6 +232,7 @@ namespace ArmorFragments
             PlateDamageMaps.Tick(); PerfMonitor.Lap("PlateDamageMaps");
             ImpactEffects.Tick(); PerfMonitor.Lap("ImpactEffects");
             TurretAim.Tick(); PerfMonitor.Lap("TurretAim");
+            AmmoHud.Tick(); PerfMonitor.Lap("AmmoHud");
             PerfMonitor.End();
         }
 
@@ -330,6 +335,10 @@ namespace ArmorFragments
             TurretCameraHeight = Config.Bind("TurretAim", "PivotHeight", 0.5f,
                 new ConfigDescription("The point the camera turns around (where it sits at full zoom) is centered on the vehicle and this many meters above its highest point.",
                     new AcceptableValueRange<float>(0f, 10f)));
+            AmmoHudEnabled = Config.Bind("AmmoDisplay", "Enabled", true,
+                "Shows a bar for each ammo rack above the fire buttons (bottom left of the flight screen): the rack's round (caliber and kind) and its rounds left. Clicking a bar switches them all between rounds and percent.");
+            AmmoHudRelative = Config.Bind("AmmoDisplay", "ShowPercent", false,
+                "The bars show the percent of the rack that is left instead of the rounds left (a click on a bar switches it).");
             TurretGroupKey = Config.Bind("TurretAim", "GroupKey", UnityEngine.InputSystem.Key.Tab,
                 "In mouse aim, switches to the next turret group when the vehicle has more than one (the turrets of the active group are aimed and fire; the others hold). 'None' disables it.");
             TurretFireMouseButton = Config.Bind("TurretAim", "FireMouseButton", TurretFireMouse.Left,
