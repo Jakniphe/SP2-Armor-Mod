@@ -114,10 +114,15 @@ namespace ArmorFragments
         // the turret is trying to close (found in a recording), so small angles were never followed.
         private const float VelocityFilterSeconds = 0.12f;
 
-        private static Vector3 Smooth(Vector3 current, Vector3 sample, bool first, float dt)
+        // The hull's own spin is smoothed more: it only feeds the stabilizer, and the turret can't follow a shake faster than about a turn a
+        // second anyway (a rotator turns at 10 degrees a second or so). A ship's hull shaking at 2 Hz fed through a short filter made the
+        // turrets chase it back and forth at their speed limit, all fourteen together, which shook the ship more (found in a recording).
+        private const float HullFilterSeconds = 0.4f;
+
+        private static Vector3 Smooth(Vector3 current, Vector3 sample, bool first, float dt, float tau = VelocityFilterSeconds)
         {
             if (first) return sample;
-            float a = 1f - Mathf.Exp(-dt / VelocityFilterSeconds);
+            float a = 1f - Mathf.Exp(-dt / tau);
             return current + (sample - current) * a;
         }
 
@@ -520,6 +525,7 @@ namespace ArmorFragments
                 calibrated = false;
                 graphTried = false;
                 edges = null;
+                calBase = null;
                 hullBody = null;
                 sight = false;
                 sightController = null;
@@ -1190,7 +1196,7 @@ namespace ArmorFragments
             if (gun.BarrelKnown && dt > 1e-4f)
                 gun.Spin = Smooth(gun.Spin, RotationVector(gun.PreviousBarrel, barrel) / dt, false, dt);   // rad/s, world
             if (gun.Hull != null)
-                gun.HullSpin = Smooth(gun.HullSpin, gun.Hull.angularVelocity, !gun.BarrelKnown, dt);
+                gun.HullSpin = Smooth(gun.HullSpin, gun.Hull.angularVelocity, !gun.BarrelKnown, dt, HullFilterSeconds);
 
             List<Turret> use = new List<Turret>();
             foreach (Turret turret in gun.Drivers)
@@ -1250,10 +1256,11 @@ namespace ArmorFragments
                 Turret turret = use[i];
                 float current = angleRef(turret.Script);
                 // A very small error asks for a very small step (gain x error), which the joint may not answer at all (friction, the game's own
-                // rounding): the turret then stops short of the cursor. So a step is never smaller than a twentieth of a degree, or the error itself
-                // when that is smaller (it never overshoots).
+                // rounding): the turret then stops short of the cursor. So a step is never smaller than a hundredth of a degree, or the error
+                // itself when that is smaller (it never overshoots). It was a twentieth, which made every turret creep at 5 degrees a second
+                // all the time (fourteen of them shook the ship).
                 float step = (float)theta[i] * gain;
-                float smallest = Mathf.Min(Mathf.Abs((float)theta[i]), 0.05f * Mathf.Deg2Rad);
+                float smallest = Mathf.Min(Mathf.Abs((float)theta[i]), 0.01f * Mathf.Deg2Rad);
                 if (Mathf.Abs(step) < smallest) step = Mathf.Sign((float)theta[i]) * smallest;
                 float target = current + turret.Signs[index] * (step + (float)hull[i] * dt) * Mathf.Rad2Deg;
                 if (!turret.Wraps)
@@ -1266,7 +1273,8 @@ namespace ArmorFragments
                 commands[turret.Script] = target;
                 driven.Add(turret);
                 // RELEASE-STRIP-BEGIN
-                if (recorder != null) RecordRow(index, trueRotation, rotation, turret, current, target, (float)theta[i], (float)hull[i], step, gain, gun.GainScale, gun.Lag, pendingDegrees);
+                if (recorder != null) RecordRow(index, trueRotation, rotation, turret, current, target, (float)theta[i], (float)hull[i], step, gain, gun.GainScale, gun.Lag, pendingDegrees,
+                                                    gun.Hull != null ? (float)Solve(axes, -gun.Hull.angularVelocity)[i] * Mathf.Rad2Deg : 0f);
                 // RELEASE-STRIP-END
             }
         }
@@ -1291,7 +1299,7 @@ namespace ArmorFragments
             {
                 recordPath = System.IO.Path.Combine(BepInEx.Paths.BepInExRootPath, "turret-aim-log.csv");
                 recorder = new System.Text.StringBuilder(4 * 1024 * 1024);
-                recorder.AppendLine("time_s,gun,error_deg,aimed_from_deg,rotator,angle_deg,target_deg,theta_deg,hull_deg_per_s,step_deg,gain,gain_scale,at_limit,lag_s,pending_deg");
+                recorder.AppendLine("time_s,gun,error_deg,aimed_from_deg,rotator,angle_deg,target_deg,theta_deg,hull_deg_per_s,step_deg,gain,gain_scale,at_limit,lag_s,pending_deg,hull_raw_deg_per_s");
                 recordStarted = Time.unscaledTime;
                 recordRows = 0;
                 ArmorFragmentsPlugin.Log.LogInfo("Turret aim: recording to " + recordPath + " (it stops by itself after 120 s, or press the button again)");
@@ -1313,7 +1321,7 @@ namespace ArmorFragments
         }
 
         private static void RecordRow(int gun, Vector3 trueRotation, Vector3 aimedFrom, Turret turret, float angle, float target, float theta, float hull, float step, float gain,
-                                      float gainScale, float lag, float pending)
+                                      float gainScale, float lag, float pending, float hullRaw)
         {
             try
             {
@@ -1323,7 +1331,7 @@ namespace ArmorFragments
                                    (aimedFrom.magnitude * Mathf.Rad2Deg).ToString("F4", c) + "," + turret.Name.Replace(',', ' ') + "," + angle.ToString("F4", c) + "," +
                                    target.ToString("F4", c) + "," + (theta * Mathf.Rad2Deg).ToString("F4", c) + "," + (hull * Mathf.Rad2Deg).ToString("F4", c) + "," +
                                    (step * Mathf.Rad2Deg).ToString("F4", c) + "," + gain.ToString("F4", c) + "," + gainScale.ToString("F2", c) + "," + (atLimit ? 1 : 0) + "," +
-                                   lag.ToString("F3", c) + "," + pending.ToString("F4", c));
+                                   lag.ToString("F3", c) + "," + pending.ToString("F4", c) + "," + hullRaw.ToString("F4", c));
                 recordRows++;
                 if (now - recordStarted > 120f) StopRecording();
             }
@@ -1346,23 +1354,23 @@ namespace ArmorFragments
             gun.Flips.Clear();
         }
 
-        // The error changing side, over and over (6 times in a second, each one more than a tenth of a degree), is swinging. Then that turret's
-        // gain is cut by a quarter (down to a third of itself) and logged; when it has been calm for a few seconds the gain creeps back up.
+        // The error changing side, over and over (4 times in a second, each one more than a third of a degree: two swings of 2 Hz), is swinging.
+        // Then that turret's gain is cut by 30% (down to 15% of itself) and logged; when it has been calm for a few seconds the gain creeps back up.
         // Each turret has its own: a ship's turrets are not all alike.
         private static void WatchForSwinging(Gun gun, Vector3 error, bool isLead)
         {
             float now = Time.unscaledTime;
             float degrees = error.magnitude * Mathf.Rad2Deg;
-            if (degrees > 0.1f && gun.PreviousError.sqrMagnitude > 0f && Vector3.Dot(error, gun.PreviousError) < 0f)
+            if (degrees > 0.3f && gun.PreviousError.sqrMagnitude > 0f && Vector3.Dot(error, gun.PreviousError) < 0f)
                 gun.Flips.Add(now);
-            gun.PreviousError = degrees > 0.1f ? error : Vector3.zero;
+            gun.PreviousError = degrees > 0.3f ? error : Vector3.zero;
 
             gun.Flips.RemoveAll(t => now - t > 1f);
-            if (gun.Flips.Count >= 6)
+            if (gun.Flips.Count >= 4)
             {
                 gun.Flips.Clear();
                 gun.LastSwing = now;
-                float next = Mathf.Max(0.33f, gun.GainScale * 0.75f);
+                float next = Mathf.Max(0.15f, gun.GainScale * 0.7f);
                 if (next < gun.GainScale)
                 {
                     gun.GainScale = next;
@@ -1388,8 +1396,21 @@ namespace ArmorFragments
         // rotator moves (see Predict), so rotators that move different guns are turned together, in a batch. What is measured is checked against
         // what was expected: if a gun that should not have moved did, or one that should have did not, the rotators of that batch are turned
         // alone, the slow way, so a wrong guess costs time and never a wrong answer.
+        private const float JogDegrees = 3f;          // how far a rotator is turned to see what it moves
+        private const float SettleSeconds = 0.3f;     // how long the barrels get to arrive after that
         private static bool graphTried;
         private static List<BodyEdge> edges;
+        private static Rigidbody calBase;   // the vehicle's heaviest body: while calibrating, the barrels are watched from it (a ship shaking at 2 Hz is not a turret turning)
+
+        private static Vector3 LocalDir(Vector3 world)
+        {
+            return calBase != null ? Quaternion.Inverse(calBase.rotation) * world : world;
+        }
+
+        private static Vector3 BarrelLocal(int gun)
+        {
+            return guns[gun].Cannon != null ? LocalDir(guns[gun].Cannon.transform.forward) : Vector3.forward;
+        }
 
         private sealed class BodyEdge
         {
@@ -1413,6 +1434,15 @@ namespace ArmorFragments
                     foreach (Turret turret in turrets)
                         if (turret.Script != null && jointRef(turret.Script) == joint) { edge.Turret = turret; break; }
                     found.Add(edge);
+                }
+                calBase = null;
+                foreach (Gun gun in guns)
+                {
+                    Rigidbody body = gun.Cannon != null ? BodyOf(gun.Cannon.PartScript) : null;
+                    if (body == null) continue;
+                    foreach (Rigidbody candidate in Reach(found, body, null))
+                        if (candidate != null && (calBase == null || candidate.mass > calBase.mass)) calBase = candidate;
+                    break;
                 }
                 foreach (Turret turret in turrets) turret.Expect = Predict(found, turret);
                 edges = found;
@@ -1502,24 +1532,32 @@ namespace ArmorFragments
                     return;
                 }
 
-                // The batch: the first rotator left, and every later one that moves other guns than those already in it.
+                // The batch: the first rotator left, and every later one that either moves other guns than those already in it, or moves a gun
+                // that one of them moves too but about a clearly different axis (a turret ring and its elevation: the barrel's rotation then
+                // splits between them, see Along).
                 List<Turret> members = new List<Turret> { first };
                 if (!first.Solo && first.Expect != null)
                 {
-                    HashSet<int> taken = new HashSet<int>(first.Expect);
                     foreach (Turret other in turrets)
                     {
                         if (other == first || other.Done || other.Solo || other.Expect == null || !Moves(other) || other.Range < 1f) continue;
-                        if (other.Expect.Overlaps(taken)) continue;
-                        taken.UnionWith(other.Expect);
-                        members.Add(other);
+                        Vector3 axisOther = AxisOf(other.Script);
+                        bool fits = true;
+                        int sharing = 0;
+                        foreach (Turret member in members)
+                        {
+                            if (!member.Expect.Overlaps(other.Expect)) continue;
+                            sharing++;
+                            if (Mathf.Abs(Vector3.Dot(axisOther, AxisOf(member.Script))) > 0.5f) { fits = false; break; }
+                        }
+                        if (fits && sharing < 2) members.Add(other);   // at most two rotators share a gun in a batch
                     }
                 }
                 bool together = members.Count > 1 || (!first.Solo && first.Expect != null);
 
                 Calibration made = new Calibration();
                 made.Barrels0 = new Vector3[guns.Count];
-                for (int g = 0; g < guns.Count; g++) made.Barrels0[g] = guns[g].Cannon != null ? guns[g].Cannon.transform.forward : Vector3.forward;
+                for (int g = 0; g < guns.Count; g++) made.Barrels0[g] = BarrelLocal(g);
                 foreach (Turret turret in members)
                 {
                     float angle0 = angleRef(turret.Script);
@@ -1527,8 +1565,8 @@ namespace ArmorFragments
                     {
                         Turret = turret,
                         Angle0 = angle0,
-                        Delta = turret.Wraps || angle0 + 5f <= turret.Range ? 5f : -5f,
-                        Axis = AxisOf(turret.Script),
+                        Delta = turret.Wraps || angle0 + JogDegrees <= turret.Range ? JogDegrees : -JogDegrees,
+                        Axis = LocalDir(AxisOf(turret.Script)),
                         Expect = together ? turret.Expect : null,
                     });
                 }
@@ -1551,7 +1589,7 @@ namespace ArmorFragments
             c.Elapsed += dt;
             Sample sample = new Sample { Time = c.Elapsed, Angles = new float[c.Jogs.Count], Barrels = new Vector3[guns.Count] };
             for (int j = 0; j < c.Jogs.Count; j++) sample.Angles[j] = angleRef(c.Jogs[j].Turret.Script);
-            for (int g = 0; g < guns.Count; g++) sample.Barrels[g] = guns[g].Cannon != null ? guns[g].Cannon.transform.forward : Vector3.forward;
+            for (int g = 0; g < guns.Count; g++) sample.Barrels[g] = BarrelLocal(g);
             c.Samples.Add(sample);
 
             if (c.Phase == 0)
@@ -1562,17 +1600,33 @@ namespace ArmorFragments
                 if (reached || c.Timer > 4f) { c.Phase = 1; c.Timer = 0f; }
                 return;
             }
-            if (c.Timer < 0.5f) return;
+            if (c.Timer < SettleSeconds) return;
 
             EvaluateJogs(c);
             calibration = null;
+        }
+
+        // How far (radians) a jog's rotator turned the gun's barrel, when the barrel has gone from where it was to `barrelNow`. A gun moved by one
+        // rotator of the batch: the rotation along its axis. A gun moved by two (ring and elevation): the rotation split between the two axes.
+        private static float Along(Calibration c, int jogIndex, int gun, Vector3 barrelNow)
+        {
+            Vector3 rotation = RotationVector(c.Barrels0[gun], barrelNow);
+            Jog jog = c.Jogs[jogIndex];
+            if (jog.Expect == null) return Vector3.Dot(rotation, jog.Axis);
+            List<int> sharing = new List<int>();
+            for (int j = 0; j < c.Jogs.Count; j++) if (c.Jogs[j].Expect != null && c.Jogs[j].Expect.Contains(gun)) sharing.Add(j);
+            if (sharing.Count < 2) return Vector3.Dot(rotation, jog.Axis);
+            Vector3[] axes = new Vector3[sharing.Count];
+            for (int k = 0; k < sharing.Count; k++) axes[k] = c.Jogs[sharing[k]].Axis;
+            double[] split = Solve(axes, rotation);
+            return (float)split[sharing.IndexOf(jogIndex)];
         }
 
         private static void EvaluateJogs(Calibration c)
         {
             Vector3[] moved = new Vector3[guns.Count];
             for (int g = 0; g < guns.Count; g++)
-                moved[g] = guns[g].Cannon != null ? RotationVector(c.Barrels0[g], guns[g].Cannon.transform.forward) : Vector3.zero;
+                moved[g] = guns[g].Cannon != null ? RotationVector(c.Barrels0[g], BarrelLocal(g)) : Vector3.zero;
 
             bool together = c.Jogs[0].Expect != null;
             bool unexpected = false;
@@ -1602,7 +1656,7 @@ namespace ArmorFragments
                     if (guns[g].Cannon == null) continue;
                     bool wanted = jog.Expect != null && jog.Expect.Contains(g);
                     if (jog.Expect != null && !wanted) continue;
-                    float along = Vector3.Dot(moved[g], jog.Axis);
+                    float along = Along(c, j, g, BarrelLocal(g));
                     if (Mathf.Abs(along) < 0.3f * Mathf.Abs(expected))
                     {
                         if (wanted) missing = true;
@@ -1651,7 +1705,7 @@ namespace ArmorFragments
             foreach (Sample sample in c.Samples)
             {
                 float angle = Mathf.Abs(sample.Angles[jogIndex] - jog.Angle0);
-                float barrel = sign * Vector3.Dot(RotationVector(c.Barrels0[gun], sample.Barrels[gun]), jog.Axis);
+                float barrel = sign * Along(c, jogIndex, gun, sample.Barrels[gun]);
                 if (timeAngle < 0f && angle >= halfAngle)
                     timeAngle = previousTime + (sample.Time - previousTime) * Mathf.Clamp01((halfAngle - previousAngle) / Mathf.Max(angle - previousAngle, 1e-6f));
                 if (timeBarrel < 0f && barrel >= halfBarrel)
