@@ -58,6 +58,20 @@ namespace ArmorFragments
             public Rigidbody Hull;
             public Vector3 PreviousBarrel;
             public bool BarrelKnown;
+            public Vector3 Spin;       // the barrel's angular velocity (rad/s), smoothed
+            public Vector3 HullSpin;   // the hull's angular velocity (rad/s), smoothed
+        }
+
+        // The velocities the control uses are smoothed over this long. A vibrating engine makes the hull's measured angular velocity flip sign
+        // almost every physics step (tens of degrees a second); fed straight into the targets, that is a jitter bigger than the small errors
+        // the turret is trying to close (found in a recording), so small angles were never followed.
+        private const float VelocityFilterSeconds = 0.12f;
+
+        private static Vector3 Smooth(Vector3 current, Vector3 sample, bool first, float dt)
+        {
+            if (first) return sample;
+            float a = 1f - Mathf.Exp(-dt / VelocityFilterSeconds);
+            return current + (sample - current) * a;
         }
 
         private sealed class Calibration
@@ -1024,9 +1038,13 @@ namespace ArmorFragments
             Vector3 trueRotation = RotationVector(barrel, want);
             Vector3 rotation = trueRotation;
             float lead = ArmorFragmentsPlugin.TurretDamping.Value;
+            if (gun.BarrelKnown && dt > 1e-4f)
+                gun.Spin = Smooth(gun.Spin, RotationVector(gun.PreviousBarrel, barrel) / dt, false, dt);   // rad/s, world
+            if (gun.Hull != null)
+                gun.HullSpin = Smooth(gun.HullSpin, gun.Hull.angularVelocity, !gun.BarrelKnown, dt);
             if (lead > 0f && gun.BarrelKnown && dt > 1e-4f)
             {
-                Vector3 spin = RotationVector(gun.PreviousBarrel, barrel) / dt;   // rad/s, world
+                Vector3 spin = gun.Spin;
                 float spinSpeed = spin.magnitude;
                 if (spinSpeed > 1e-5f)
                 {
@@ -1055,7 +1073,7 @@ namespace ArmorFragments
             // Stabilizer: while the hull turns, pitches or rolls, the rotators must turn the other way at the same rate, or the barrel would
             // always trail behind it (the error alone only catches up). The same split, for the hull's angular velocity.
             double[] hull = new double[use.Count];
-            if (gun.Hull != null) hull = Solve(axes, -gun.Hull.angularVelocity);
+            if (gun.Hull != null) hull = Solve(axes, -gun.HullSpin);
 
             float gain = (1f - Mathf.Exp(-dt / Mathf.Max(ArmorFragmentsPlugin.TurretResponse.Value, 0.02f))) * gainScale;
             for (int i = 0; i < use.Count; i++)
@@ -1087,8 +1105,8 @@ namespace ArmorFragments
         // RELEASE-STRIP-BEGIN
         // ---- Recording for diagnosis: one CSV row per rotator per physics step (the panel's "Record turret data" button) ------------------
 
-        private static System.IO.StreamWriter recorder;
-        private static float recordStarted, recordLastFlush;
+        private static System.Text.StringBuilder recorder;   // kept in memory and written when it stops (writing while playing made the game stutter)
+        private static float recordStarted;
         private static int recordRows;
         private static string recordPath;
 
@@ -1103,9 +1121,9 @@ namespace ArmorFragments
             try
             {
                 recordPath = System.IO.Path.Combine(BepInEx.Paths.BepInExRootPath, "turret-aim-log.csv");
-                recorder = new System.IO.StreamWriter(recordPath, false);
-                recorder.WriteLine("time_s,gun,error_deg,aimed_from_deg,rotator,angle_deg,target_deg,theta_deg,hull_deg_per_s,step_deg,gain,gain_scale,at_limit");
-                recordStarted = recordLastFlush = Time.unscaledTime;
+                recorder = new System.Text.StringBuilder(4 * 1024 * 1024);
+                recorder.AppendLine("time_s,gun,error_deg,aimed_from_deg,rotator,angle_deg,target_deg,theta_deg,hull_deg_per_s,step_deg,gain,gain_scale,at_limit");
+                recordStarted = Time.unscaledTime;
                 recordRows = 0;
                 ArmorFragmentsPlugin.Log.LogInfo("Turret aim: recording to " + recordPath + " (it stops by itself after 120 s, or press the button again)");
             }
@@ -1119,8 +1137,9 @@ namespace ArmorFragments
         public static void StopRecording()
         {
             if (recorder == null) return;
-            try { recorder.Flush(); recorder.Dispose(); } catch (Exception) { }
+            System.Text.StringBuilder text = recorder;
             recorder = null;
+            try { System.IO.File.WriteAllText(recordPath, text.ToString()); } catch (Exception e) { ArmorFragmentsPlugin.Log.LogError("Turret aim: can't write the recording: " + e.Message); }
             ArmorFragmentsPlugin.Log.LogInfo("Turret aim: recording stopped, " + recordRows + " rows in " + recordPath);
         }
 
@@ -1130,12 +1149,11 @@ namespace ArmorFragments
             {
                 float now = Time.unscaledTime;
                 System.Globalization.CultureInfo c = System.Globalization.CultureInfo.InvariantCulture;
-                recorder.WriteLine((now - recordStarted).ToString("F3", c) + "," + gun + "," + (trueRotation.magnitude * Mathf.Rad2Deg).ToString("F4", c) + "," +
+                recorder.AppendLine((now - recordStarted).ToString("F3", c) + "," + gun + "," + (trueRotation.magnitude * Mathf.Rad2Deg).ToString("F4", c) + "," +
                                    (aimedFrom.magnitude * Mathf.Rad2Deg).ToString("F4", c) + "," + turret.Name.Replace(',', ' ') + "," + angle.ToString("F4", c) + "," +
                                    target.ToString("F4", c) + "," + (theta * Mathf.Rad2Deg).ToString("F4", c) + "," + (hull * Mathf.Rad2Deg).ToString("F4", c) + "," +
                                    (step * Mathf.Rad2Deg).ToString("F4", c) + "," + gain.ToString("F4", c) + "," + gainScale.ToString("F2", c) + "," + (atLimit ? 1 : 0));
                 recordRows++;
-                if (now - recordLastFlush > 2f) { recorder.Flush(); recordLastFlush = now; }
                 if (now - recordStarted > 120f) StopRecording();
             }
             catch (Exception e)
