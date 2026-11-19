@@ -534,6 +534,9 @@ namespace ArmorFragments
         {
             bool was = Active;
             Active = false;
+            // RELEASE-STRIP-BEGIN
+            StopRecording();
+            // RELEASE-STRIP-END
             try
             {
                 if (craft != null && craft.Controls != null && GameInputs.Instance != null)
@@ -1075,8 +1078,73 @@ namespace ArmorFragments
                 }
                 commands[turret.Script] = target;
                 driven.Add(turret);
+                // RELEASE-STRIP-BEGIN
+                if (recorder != null) RecordRow(index, trueRotation, rotation, turret, current, target, (float)theta[i], (float)hull[i], step, gain);
+                // RELEASE-STRIP-END
             }
         }
+
+        // RELEASE-STRIP-BEGIN
+        // ---- Recording for diagnosis: one CSV row per rotator per physics step (the panel's "Record turret data" button) ------------------
+
+        private static System.IO.StreamWriter recorder;
+        private static float recordStarted, recordLastFlush;
+        private static int recordRows;
+        private static string recordPath;
+
+        public static string RecordStatus
+        {
+            get { return recorder != null ? "Recording: " + recordRows + " rows (" + (Time.unscaledTime - recordStarted).ToString("F0") + " s) -> " + recordPath : "Not recording"; }
+        }
+
+        public static void ToggleRecording()
+        {
+            if (recorder != null) { StopRecording(); return; }
+            try
+            {
+                recordPath = System.IO.Path.Combine(BepInEx.Paths.BepInExRootPath, "turret-aim-log.csv");
+                recorder = new System.IO.StreamWriter(recordPath, false);
+                recorder.WriteLine("time_s,gun,error_deg,aimed_from_deg,rotator,angle_deg,target_deg,theta_deg,hull_deg_per_s,step_deg,gain,gain_scale,at_limit");
+                recordStarted = recordLastFlush = Time.unscaledTime;
+                recordRows = 0;
+                ArmorFragmentsPlugin.Log.LogInfo("Turret aim: recording to " + recordPath + " (it stops by itself after 120 s, or press the button again)");
+            }
+            catch (Exception e)
+            {
+                recorder = null;
+                ArmorFragmentsPlugin.Log.LogError("Turret aim: can't record: " + e.Message);
+            }
+        }
+
+        public static void StopRecording()
+        {
+            if (recorder == null) return;
+            try { recorder.Flush(); recorder.Dispose(); } catch (Exception) { }
+            recorder = null;
+            ArmorFragmentsPlugin.Log.LogInfo("Turret aim: recording stopped, " + recordRows + " rows in " + recordPath);
+        }
+
+        private static void RecordRow(int gun, Vector3 trueRotation, Vector3 aimedFrom, Turret turret, float angle, float target, float theta, float hull, float step, float gain)
+        {
+            try
+            {
+                float now = Time.unscaledTime;
+                System.Globalization.CultureInfo c = System.Globalization.CultureInfo.InvariantCulture;
+                recorder.WriteLine((now - recordStarted).ToString("F3", c) + "," + gun + "," + (trueRotation.magnitude * Mathf.Rad2Deg).ToString("F4", c) + "," +
+                                   (aimedFrom.magnitude * Mathf.Rad2Deg).ToString("F4", c) + "," + turret.Name.Replace(',', ' ') + "," + angle.ToString("F4", c) + "," +
+                                   target.ToString("F4", c) + "," + (theta * Mathf.Rad2Deg).ToString("F4", c) + "," + (hull * Mathf.Rad2Deg).ToString("F4", c) + "," +
+                                   (step * Mathf.Rad2Deg).ToString("F4", c) + "," + gain.ToString("F4", c) + "," + gainScale.ToString("F2", c) + "," + (atLimit ? 1 : 0));
+                recordRows++;
+                if (now - recordLastFlush > 2f) { recorder.Flush(); recordLastFlush = now; }
+                if (now - recordStarted > 120f) StopRecording();
+            }
+            catch (Exception e)
+            {
+                ArmorFragmentsPlugin.Log.LogError("Turret aim: recording failed: " + e.Message);
+                StopRecording();
+            }
+        }
+        // RELEASE-STRIP-END
 
         // ---- Swinging: if the aim swings back and forth around the target, the gain is lowered by itself ----------------
 

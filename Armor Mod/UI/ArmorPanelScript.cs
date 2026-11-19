@@ -282,6 +282,13 @@ namespace ArmorFragments.UI
             {
                 new KeyValuePair<string, Action>("Mouse aim on / off", TurretAim.Toggle),
             });
+            // RELEASE-STRIP-BEGIN
+            Live("Recording", () => TurretAim.RecordStatus);
+            builder.Buttons(new List<KeyValuePair<string, Action>>
+            {
+                new KeyValuePair<string, Action>("Record turret data (CSV)", TurretAim.ToggleRecording),
+            });
+            // RELEASE-STRIP-END
             Live("Aim key", () => TurretAim.KeyText(ArmorFragmentsPlugin.TurretAimKey));
             Live("Free look key", () => TurretAim.KeyText(ArmorFragmentsPlugin.TurretLookKey));
             Live("Sight key", () => TurretAim.KeyText(ArmorFragmentsPlugin.TurretSightKey));
