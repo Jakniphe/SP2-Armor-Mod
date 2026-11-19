@@ -53,19 +53,47 @@ namespace ArmorFragments
             public float[] Signs;        // per gun: +1 / -1 the gun's barrel turns this way about Axis when the angle grows, 0 = does not move it
         }
 
-        // A cannon that is aimed: the pointer cannon (index 0) or an auxiliary one. Each is turned by its own group of rotators, all at the same
-        // aim point.
+        // A turret: a cannon the mouse aim points, in a turret group (the turrets of the active group are aimed at the same point at the same time;
+        // they are equals). Each is turned by its own rotators.
         private sealed class Gun
         {
             public CannonScript Cannon;
-            public readonly List<Turret> Group = new List<Turret>();   // the rotators that turn this gun and no earlier one
+            public int GroupId;
+            public bool FiresByKey;    // fires with the fire key instead of the mouse button
+            public float NextFire;     // Time.time of the next shot
+            public CameraVantageScript Sight;
+            public readonly List<FixedCannon> FixedCannons = new List<FixedCannon>();
+            public readonly List<Turret> Drivers = new List<Turret>();   // the rotators that turn this turret and no earlier turret of its group
             public Rigidbody Hull;
             public Vector3 PreviousBarrel;
             public bool BarrelKnown;
-            public bool FiresByKey;    // fires with the fire key instead of the mouse button
-            public float NextFire;     // Time.time of the next shot
             public Vector3 Spin;       // the barrel's angular velocity (rad/s), smoothed
             public Vector3 HullSpin;   // the hull's angular velocity (rad/s), smoothed
+        }
+
+        // A cannon fixed to a turret: it moves with it and fires with its own input, but nothing aims it by itself.
+        private sealed class FixedCannon
+        {
+            public CannonScript Cannon;
+            public bool ByKey;
+            public float NextFire;
+        }
+
+        private static readonly List<int> groupIds = new List<int>();
+        private static int activeGroup;                 // index in groupIds
+        private static Gun sightGun;                    // the turret whose sight camera is the view now
+
+        private static int ActiveGroupId { get { return groupIds.Count > 0 ? groupIds[Mathf.Clamp(activeGroup, 0, groupIds.Count - 1)] : 0; } }
+        private static bool Live(Gun gun) { return gun != null && gun.Cannon != null && gun.Cannon.PartScript != null; }
+        private static bool InActiveGroup(Gun gun) { return gun.GroupId == ActiveGroupId; }
+
+        // The turret the screen follows: the one whose sight camera is on, else the first live one of the active group.
+        private static Gun Lead()
+        {
+            if (sight && Live(sightGun) && InActiveGroup(sightGun)) return sightGun;
+            foreach (Gun gun in guns)
+                if (InActiveGroup(gun) && Live(gun)) return gun;
+            return null;
         }
 
         // The velocities the control uses are smoothed over this long. A vibrating engine makes the hull's measured angular velocity flip sign
@@ -92,7 +120,6 @@ namespace ArmorFragments
         private static AircraftScript craft;
         private static readonly List<Gun> guns = new List<Gun>();
         private static readonly List<Turret> turrets = new List<Turret>();
-        private static readonly List<CannonScript> pointers = new List<CannonScript>();
         private static readonly Dictionary<JointRotatorScript, float> commands = new Dictionary<JointRotatorScript, float>();
         private static Calibration calibration;
         private static bool calibrated;
@@ -276,11 +303,6 @@ namespace ArmorFragments
                 // that follows it moves the camera, which changes where the gun is told to point, which moves its top... With the highest point
                 // jumping between the barrel's tip and another part, the aim flipped between two positions.
                 HashSet<Rigidbody> gunBodies = new HashSet<Rigidbody>();
-                foreach (CannonScript cannon in pointers)
-                {
-                    Rigidbody body = cannon != null ? BodyOf(cannon.PartScript) : null;
-                    if (body != null) gunBodies.Add(body);
-                }
                 foreach (Gun gun in guns)
                 {
                     Rigidbody body = gun.Cannon != null ? BodyOf(gun.Cannon.PartScript) : null;
@@ -353,11 +375,16 @@ namespace ArmorFragments
             return Active && sight && asked == sightController;
         }
 
-        private static void EnterSight(CameraManagerScript cm, CannonScript pointer)
+        private static void EnterSight(CameraManagerScript cm)
         {
+            // The first turret of the active group that has a sight camera.
+            Gun sightTurret = null;
+            foreach (Gun gun in guns)
+                if (InActiveGroup(gun) && Live(gun) && gun.Sight != null) { sightTurret = gun; break; }
+            sightScript = sightTurret != null ? sightTurret.Sight : null;
             if (sightScript == null || vantageControllerRef == null || fovTargetRef == null)
             {
-                Notice("no sight camera: pick one on the cannon in the designer (Pointer > Pick sight camera)");
+                Notice("no sight camera on this group's turrets: pick one on a turret in the designer (Turret group > Pick sight camera)");
                 return;
             }
             InteractiveCameraController target = vantageControllerRef(sightScript) as InteractiveCameraController;
@@ -373,12 +400,13 @@ namespace ArmorFragments
                 return;
             }
             sightController = target;
+            sightGun = sightTurret;
             sight = true;
             target.MouseLook = false;
             rotationRef(target) = Vector2.zero;
             if (!haveDesired)
             {
-                desired = pointer.transform.forward;
+                desired = sightTurret.Cannon.transform.forward;
                 haveDesired = true;
             }
             decoupled = returning = false;
@@ -399,6 +427,7 @@ namespace ArmorFragments
             decoupled = returning = false;
             sight = false;
             sightController = null;
+            sightGun = null;
             fovVelocity = 0f;
             try
             {
@@ -436,7 +465,9 @@ namespace ArmorFragments
 
                 Collect(aircraft);
                 if (turrets.Count == 0) { Status = "Off: mark a rotator as Turret in the designer"; return; }
-                if (pointers.Count == 0) { Status = "Off: mark a cannon as Pointer in the designer"; return; }
+                if (guns.Count == 0) { Status = "Off: create a turret group on a cannon in the designer"; return; }
+                activeGroup = 0;
+                sightGun = null;
 
                 CameraManagerScript cm = CameraManagerScript.Instance;
                 if (cm == null) { Status = "Off: no camera"; return; }
@@ -459,6 +490,7 @@ namespace ArmorFragments
                 hullBody = null;
                 sight = false;
                 sightController = null;
+                sightGun = null;
                 notice = null;
                 previousError = Vector3.zero;
                 gainScale = 1f;
@@ -476,8 +508,8 @@ namespace ArmorFragments
                 MakeHud();
                 Active = true;
                 Status = "Calibrating the turret...";
-                ArmorFragmentsPlugin.Log.LogInfo("Turret aim on: " + turrets.Count + " turret rotator(s), " + pointers.Count + " pointer cannon(s), " +
-                                                 (guns.Count - 1) + " auxiliary cannon(s)");
+                ArmorFragmentsPlugin.Log.LogInfo("Turret aim on: " + turrets.Count + " turret rotator(s), " + guns.Count + " turret(s) in " + groupIds.Count +
+                                                 " group(s)");
             }
             catch (Exception e)
             {
@@ -489,12 +521,15 @@ namespace ArmorFragments
         private static void Collect(AircraftScript aircraft)
         {
             turrets.Clear();
-            pointers.Clear();
             guns.Clear();
+            groupIds.Clear();
             sightScript = null;
-            int sightId = -1;
-            List<int> auxIds = new List<int>();
-            List<int> altIds = new List<int>();
+            sightGun = null;
+            Dictionary<int, PartData> byId = new Dictionary<int, PartData>();
+            foreach (PartData data in aircraft.Aircraft.Assembly.Parts)
+                if (data != null && !byId.ContainsKey(data.Id)) byId.Add(data.Id, data);
+
+            List<PointerTag> pointerTags = new List<PointerTag>();
             foreach (PartData data in aircraft.Aircraft.Assembly.Parts)
             {
                 PartScript part = data != null ? data.PartScript : null;
@@ -517,40 +552,49 @@ namespace ArmorFragments
                     CannonScript cannon = part.GetModifier<CannonScript>();
                     if (cannon != null)
                     {
-                        pointers.Add(cannon);
-                        if (sightId < 0 && tags.Pointer.Camera.HasValue) sightId = tags.Pointer.Camera.Value;
-                        foreach (int id in tags.Pointer.Aux) if (!auxIds.Contains(id)) auxIds.Add(id);
-                        foreach (int id in tags.Pointer.Alt) if (!altIds.Contains(id)) altIds.Add(id);
+                        guns.Add(new Gun { Cannon = cannon, GroupId = Mathf.Max(1, tags.Pointer.Group), FiresByKey = tags.Pointer.ByKey });
+                        pointerTags.Add(tags.Pointer);
                     }
                 }
             }
 
-            // The guns: the pointer cannon first (found again at every step, since the first one may be lost), then the auxiliary ones.
-            guns.Add(new Gun { Cannon = pointers.Count > 0 ? pointers[0] : null });
-            foreach (int id in auxIds)
+            // The sight cameras and the fixed cannons of each turret (a cannon is in one place only: a turret, or fixed to one turret).
+            HashSet<CannonScript> used = new HashSet<CannonScript>();
+            foreach (Gun gun in guns) used.Add(gun.Cannon);
+            for (int i = 0; i < guns.Count; i++)
             {
-                foreach (PartData data in aircraft.Aircraft.Assembly.Parts)
+                PointerTag tag = pointerTags[i];
+                Gun gun = guns[i];
+                PartData cameraPart;
+                if (tag.Camera.HasValue && byId.TryGetValue(tag.Camera.Value, out cameraPart) && cameraPart.PartScript != null)
+                    gun.Sight = cameraPart.PartScript.GetModifier<CameraVantageScript>();
+                foreach (int id in tag.Fixed)
                 {
-                    if (data == null || data.Id != id || data.PartScript == null) continue;
-                    CannonScript cannon = data.PartScript.GetModifier<CannonScript>();
-                    bool known = cannon == null || pointers.Contains(cannon);
-                    foreach (Gun gun in guns) if (gun.Cannon == cannon) known = true;
-                    if (!known) guns.Add(new Gun { Cannon = cannon });
-                    break;
+                    PartData fixedPart;
+                    if (!byId.TryGetValue(id, out fixedPart) || fixedPart.PartScript == null) continue;
+                    CannonScript fixedCannon = fixedPart.PartScript.GetModifier<CannonScript>();
+                    if (fixedCannon == null || !used.Add(fixedCannon)) continue;
+                    gun.FixedCannons.Add(new FixedCannon { Cannon = fixedCannon, ByKey = tag.FixedByKey.Contains(id) });
                 }
+                if (!groupIds.Contains(gun.GroupId)) groupIds.Add(gun.GroupId);
             }
-            foreach (Gun gun in guns)
-                gun.FiresByKey = gun.Cannon != null && gun.Cannon.PartScript != null && gun.Cannon.PartScript.Part != null && altIds.Contains(gun.Cannon.PartScript.Part.Id);
+            groupIds.Sort();
             foreach (Turret turret in turrets) turret.Signs = new float[guns.Count];
-            if (sightId >= 0)
-            {
-                foreach (PartData data in aircraft.Aircraft.Assembly.Parts)
-                {
-                    if (data == null || data.Id != sightId || data.PartScript == null) continue;
-                    sightScript = data.PartScript.GetModifier<CameraVantageScript>();
-                    break;
-                }
-            }
+        }
+
+        // The next turret group takes the mouse aim (the key in the config).
+        private static void NextGroup(CameraManagerScript cm)
+        {
+            if (sight) LeaveSight(cm);
+            activeGroup = (activeGroup + 1) % groupIds.Count;
+            gainScale = 1f;
+            flips.Clear();
+            previousError = Vector3.zero;
+            foreach (Gun gun in guns) gun.BarrelKnown = false;
+            int count = 0;
+            foreach (Gun gun in guns) if (InActiveGroup(gun)) count++;
+            Notice("turret group " + ActiveGroupId + " (" + count + (count == 1 ? " turret)" : " turrets)"));
+            ArmorFragmentsPlugin.Log.LogInfo("Turret aim: turret group " + ActiveGroupId + " is aimed now (" + count + " turret(s))");
         }
 
         public static void Deactivate(string reason)
@@ -575,6 +619,7 @@ namespace ArmorFragments
             catch (Exception) { }
             sight = false;
             sightController = null;
+            sightGun = null;
             DestroyHud();
             ReleasePivot();
 
@@ -734,23 +779,27 @@ namespace ArmorFragments
             if (cam == null) return;
             UpdatePivot();
 
-            CannonScript pointer = FirstPointer();
-            if (pointer == null)
-            {
-                Deactivate("the pointer cannon is gone");
-                return;
-            }
-
             Keyboard keyboard = Keyboard.current;
             Mouse mouse = Mouse.current;
             bool alt = keyboard != null && (keyboard.leftAltKey.isPressed || keyboard.rightAltKey.isPressed);
+            Key groupKey = ArmorFragmentsPlugin.TurretGroupKey.Value;
+            if (keyboard != null && groupKey != Key.None && groupIds.Count > 1 && keyboard[groupKey].wasPressedThisFrame) NextGroup(cm);
             Key sightKey = ArmorFragmentsPlugin.TurretSightKey.Value;
             if (keyboard != null && sightKey != Key.None && keyboard[sightKey].wasPressedThisFrame)
             {
                 if (sight) LeaveSight(cm);
-                else EnterSight(cm, pointer);
+                else EnterSight(cm);
                 if (!Active) return;
             }
+
+            Gun leadGun = Lead();
+            if (leadGun == null)
+            {
+                Deactivate("the cannons of the turret group are gone");
+                return;
+            }
+            CannonScript pointer = leadGun.Cannon;
+            hullBody = leadGun.Hull;
 
             Key lookKey = ArmorFragmentsPlugin.TurretLookKey.Value;
             bool look = keyboard != null && lookKey != Key.None && keyboard[lookKey].isPressed;
@@ -881,7 +930,7 @@ namespace ArmorFragments
                 aimMax = Mathf.Max(aimMax, aimDistance);
             }
 
-            UpdateHud(cam, muzzle, pointer.transform.forward, look || returning);
+            UpdateHud(cam, muzzle, look || returning);
 
             if (Time.unscaledTime >= nextStatus)
             {
@@ -891,15 +940,9 @@ namespace ArmorFragments
                     : atLimit ? "At the turret's limit"
                     : errorDegrees < 0.5f ? "On target"
                     : "Turning (" + errorDegrees.ToString("F1") + " deg off)";
-                Status = notice != null && Time.unscaledTime < noticeUntil ? notice : (sight ? "Sight: " : "") + state;
+                Status = notice != null && Time.unscaledTime < noticeUntil ? notice
+                    : (groupIds.Count > 1 ? "Group " + ActiveGroupId + ": " : "") + (sight ? "Sight: " : "") + state;
             }
-        }
-
-        private static CannonScript FirstPointer()
-        {
-            foreach (CannonScript cannon in pointers)
-                if (cannon != null && cannon.PartScript != null) return cannon;
-            return null;
         }
 
         // What the camera sees along a ray, ignoring this vehicle (the camera sits outside it, so the first hits are usually its own parts).
@@ -941,28 +984,35 @@ namespace ArmorFragments
             return t * t * (3f - 2f * t);
         }
 
-        // Fires each cannon of the group whose input is held and whose own delay is over: the Firing Delay (stretched by the crew's load) and the
-        // game's checks (ammo, barrel clear of the last shell; a rack-fed cannon needs a round and a loader in its own patch of CannonScript.Fire).
+        // Fires each cannon of the active group (the turrets, and the cannons fixed to them) whose input is held and whose own delay is over: the
+        // Firing Delay (stretched by the crew's load) and the game's checks (ammo, barrel clear of the last shell; a rack-fed cannon needs a round
+        // and a loader in its own patch of CannonScript.Fire).
         private static void FireGuns()
         {
             float now = Time.time;
             foreach (Gun gun in guns)
             {
-                CannonScript cannon = gun.Cannon;
-                if (cannon == null || cannon.PartScript == null || !(gun.FiresByKey ? fireKey : fireMouse)) continue;
-                if (now < gun.NextFire) continue;
-                IWeapon weapon = cannon;
-                if (weapon.IsDestroyed || weapon.CurrentAmmo <= 0 || !cannon.CanFire || !AmmoRacks.CanFire(cannon)) continue;
-                try
-                {
-                    weapon.Fire(null);
-                    gun.NextFire = now + Mathf.Max(cannon.FiringDelay * Crew.ReloadFactor(cannon), 0.02f);
-                }
-                catch (Exception e)
-                {
-                    gun.NextFire = now + 1f;
-                    ArmorFragmentsPlugin.Log.LogWarning("Turret aim: a cannon could not fire: " + e.Message);
-                }
+                if (!InActiveGroup(gun)) continue;
+                TryFire(gun.Cannon, gun.FiresByKey, now, ref gun.NextFire);
+                foreach (FixedCannon fixedCannon in gun.FixedCannons)
+                    TryFire(fixedCannon.Cannon, fixedCannon.ByKey, now, ref fixedCannon.NextFire);
+            }
+        }
+
+        private static void TryFire(CannonScript cannon, bool byKey, float now, ref float nextFire)
+        {
+            if (cannon == null || cannon.PartScript == null || !(byKey ? fireKey : fireMouse) || now < nextFire) return;
+            IWeapon weapon = cannon;
+            if (weapon.IsDestroyed || weapon.CurrentAmmo <= 0 || !cannon.CanFire || !AmmoRacks.CanFire(cannon)) return;
+            try
+            {
+                weapon.Fire(null);
+                nextFire = now + Mathf.Max(cannon.FiringDelay * Crew.ReloadFactor(cannon), 0.02f);
+            }
+            catch (Exception e)
+            {
+                nextFire = now + 1f;
+                ArmorFragmentsPlugin.Log.LogWarning("Turret aim: a cannon could not fire: " + e.Message);
             }
         }
 
@@ -1021,9 +1071,8 @@ namespace ArmorFragments
 
         private static void Step(float dt)
         {
-            CannonScript pointer = FirstPointer();
-            if (pointer == null) return;
-            guns[0].Cannon = pointer;
+            Gun lead = Lead();
+            if (lead == null) return;
 
             if (!calibrated)
             {
@@ -1036,31 +1085,30 @@ namespace ArmorFragments
                 return;
             }
 
-            // Every gun is turned toward the same point: the pointer cannon along the wanted direction, an auxiliary one from where it is to the
-            // point the pointer cannon's line reaches at the aim distance.
-            Vector3 aimPoint = pointer.TipPosition + desired * aimDistance;
+            // Every turret of the active group is turned toward the same point: the lead along the wanted direction, the others from where they are
+            // to the point the lead's line reaches at the aim distance. The rotators of the other groups keep their place.
+            Vector3 aimPoint = lead.Cannon.TipPosition + desired * aimDistance;
             HashSet<Turret> driven = new HashSet<Turret>();
             bool limit = false;
             for (int g = 0; g < guns.Count; g++)
             {
                 Gun gun = guns[g];
-                if (gun.Cannon == null || gun.Cannon.PartScript == null || gun.Group.Count == 0) continue;
+                if (!InActiveGroup(gun) || !Live(gun) || gun.Drivers.Count == 0) continue;
                 Vector3 want = desired;
-                if (g > 0)
+                if (gun != lead)
                 {
                     Vector3 toPoint = aimPoint - gun.Cannon.TipPosition;
                     if (toPoint.sqrMagnitude > 1f) want = toPoint.normalized;
                 }
-                StepGun(g, gun, want, dt, driven, ref limit);
+                StepGun(g, gun, gun == lead, want, dt, driven, ref limit);
             }
 
-            // The rotators that don't take part keep their place.
             foreach (Turret turret in turrets)
                 if (!driven.Contains(turret) && turret.Script != null) commands[turret.Script] = angleRef(turret.Script);
             atLimit = limit;
         }
 
-        private static void StepGun(int index, Gun gun, Vector3 want, float dt, HashSet<Turret> driven, ref bool limit)
+        private static void StepGun(int index, Gun gun, bool isLead, Vector3 want, float dt, HashSet<Turret> driven, ref bool limit)
         {
             Vector3 barrel = gun.Cannon.transform.forward;
 
@@ -1086,14 +1134,14 @@ namespace ArmorFragments
             }
             gun.PreviousBarrel = barrel;
             gun.BarrelKnown = true;
-            if (index == 0)
+            if (isLead)
             {
                 errorDegrees = trueRotation.magnitude * Mathf.Rad2Deg;
                 WatchForSwinging(trueRotation);
             }
 
             List<Turret> use = new List<Turret>();
-            foreach (Turret turret in gun.Group)
+            foreach (Turret turret in gun.Drivers)
                 if (turret.Usable && Moves(turret)) use.Add(turret);
             if (use.Count == 0) return;
 
@@ -1293,7 +1341,7 @@ namespace ArmorFragments
                 if (Mathf.Abs(along) < 0.3f * Mathf.Abs(expected)) continue;
                 c.Turret.Signs[g] = along / expected > 0f ? 1f : -1f;
                 c.Turret.Usable = true;
-                effects += (effects.Length > 0 ? ", " : "") + (g == 0 ? "pointer cannon" : "auxiliary cannon " + g) + " " +
+                effects += (effects.Length > 0 ? ", " : "") + "turret " + (g + 1) + " (group " + guns[g].GroupId + ")" + " " +
                            (along * Mathf.Rad2Deg).ToString("F1") + " deg (sign " + (c.Turret.Signs[g] > 0f ? "+" : "-") + ")";
             }
             if (c.Turret.Usable)
@@ -1309,34 +1357,40 @@ namespace ArmorFragments
             calibration = null;
         }
 
-        // After the last rotator: each gun gets the rotators that turn it and no earlier gun, so no rotator is driven by two guns.
+        // After the last rotator: within each group, each turret gets the rotators that turn it and no earlier turret of the group (so no rotator is
+        // driven by two turrets of a group); the same rotator can serve turrets of different groups, only one group being aimed at a time.
         private static void FinishCalibration()
         {
-            HashSet<Turret> taken = new HashSet<Turret>();
-            for (int g = 0; g < guns.Count; g++)
+            foreach (Gun gun in guns) gun.Drivers.Clear();
+            bool any = false;
+            foreach (int groupId in groupIds)
             {
-                guns[g].Group.Clear();
-                if (guns[g].Cannon == null) continue;
-                foreach (Turret turret in turrets)
+                HashSet<Turret> taken = new HashSet<Turret>();
+                for (int g = 0; g < guns.Count; g++)
                 {
-                    if (!turret.Usable || turret.Signs[g] == 0f || taken.Contains(turret)) continue;
-                    guns[g].Group.Add(turret);
-                    taken.Add(turret);
+                    Gun gun = guns[g];
+                    if (gun.GroupId != groupId || gun.Cannon == null) continue;
+                    foreach (Turret turret in turrets)
+                    {
+                        if (!turret.Usable || turret.Signs[g] == 0f || taken.Contains(turret)) continue;
+                        gun.Drivers.Add(turret);
+                        taken.Add(turret);
+                    }
+                    string label = gun.Cannon.PartScript != null && gun.Cannon.PartScript.Part != null ? gun.Cannon.PartScript.Part.Name : "?";
+                    ArmorFragmentsPlugin.Log.LogInfo("Turret aim: turret " + (g + 1) + " ('" + label + "', group " + groupId + ") is turned by " + gun.Drivers.Count + " rotator(s)");
+                    if (gun.Drivers.Count == 0)
+                        ArmorFragmentsPlugin.Log.LogWarning("Turret aim: turret " + (g + 1) + " ('" + label + "') is not turned by any rotator marked Turret that an earlier turret of its group " +
+                                                            "doesn't already use: it only follows that turret");
+                    else any = true;
                 }
-                string label = guns[g].Cannon.PartScript != null && guns[g].Cannon.PartScript.Part != null ? guns[g].Cannon.PartScript.Part.Name : "?";
-                ArmorFragmentsPlugin.Log.LogInfo("Turret aim: " + (g == 0 ? "the pointer cannon" : "auxiliary cannon " + g + " ('" + label + "')") +
-                                                 " is turned by " + guns[g].Group.Count + " rotator(s)");
-                if (g > 0 && guns[g].Group.Count == 0)
-                    ArmorFragmentsPlugin.Log.LogWarning("Turret aim: auxiliary cannon " + g + " ('" + label + "') is not turned by any rotator marked Turret that the pointer cannon " +
-                                                        "doesn't already use: it only follows the pointer cannon's turret");
             }
-            if (guns[0].Group.Count == 0) { Deactivate("no marked rotator moves the pointer cannon"); return; }
+            if (!any) { Deactivate("no marked rotator moves any turret cannon"); return; }
             FindHull();
         }
 
         // The hull: from a gun's body, each rotator that has the body on one side leads to the body on its other side, and so on to the
         // vehicle's base. That body's angular velocity is what the stabilizer works against.
-        private static Rigidbody hullBody;   // the pointer cannon's (the camera pivot is centered on it)
+        private static Rigidbody hullBody;   // the lead turret's (the camera pivot is centered on it)
 
         private static Rigidbody BodyOf(PartScript part)
         {
@@ -1369,8 +1423,7 @@ namespace ArmorFragments
                     current = parent;
                 }
                 gun.Hull = current;
-                if (g == 0) hullBody = current;
-                ArmorFragmentsPlugin.Log.LogInfo("Turret aim: the hull of " + (g == 0 ? "the pointer cannon" : "auxiliary cannon " + g) + " is the body '" +
+                ArmorFragmentsPlugin.Log.LogInfo("Turret aim: the hull of turret " + (g + 1) + " is the body '" +
                                                  (current != null ? current.name : "?") + "' (" +
                                                  (left.Count == 0 ? "every rotator is on the way to it" : left.Count + " rotator(s) are not on the way") + ")");
             }
@@ -1506,18 +1559,31 @@ namespace ArmorFragments
         // out (see OnGui). The canvas pictures above are only the fallback if that can not be drawn.
         private static bool hudRingShown, hudMarkerShown;
         private static Vector2 hudRingAt, hudMarkerAt;   // screen pixels, y up
+        private static readonly List<Vector2> hudMarkers = new List<Vector2>();   // one for each turret of the active group
 
-        private static void UpdateHud(Camera cam, Vector3 muzzle, Vector3 barrel, bool freeLook)
+        private static void UpdateHud(Camera cam, Vector3 muzzle, bool freeLook)
         {
             hudRingShown = hudMarkerShown = false;
+            hudMarkers.Clear();
             if (haveDesired)
             {
-                Vector3 ring = cam.WorldToScreenPoint(muzzle + desired * aimDistance);
-                Vector3 marker = cam.WorldToScreenPoint(muzzle + barrel.normalized * aimDistance);
+                Vector3 aimPoint = muzzle + desired * aimDistance;
+                Vector3 ring = cam.WorldToScreenPoint(aimPoint);
                 hudRingShown = ring.z > 0f;
-                hudMarkerShown = marker.z > 0f && !sight;
                 hudRingAt = new Vector2(ring.x, ring.y);
-                hudMarkerAt = new Vector2(marker.x, marker.y);
+                // Where each turret's barrel really points, at the distance of the aim point (not through the sight: the camera is on the gun).
+                if (!sight)
+                {
+                    foreach (Gun gun in guns)
+                    {
+                        if (!InActiveGroup(gun) || !Live(gun)) continue;
+                        Vector3 tip = gun.Cannon.TipPosition;
+                        Vector3 marker = cam.WorldToScreenPoint(tip + gun.Cannon.transform.forward.normalized * Mathf.Max((aimPoint - tip).magnitude, 1f));
+                        if (marker.z > 0f) hudMarkers.Add(new Vector2(marker.x, marker.y));
+                    }
+                }
+                hudMarkerShown = hudMarkers.Count > 0;
+                if (hudMarkerShown) hudMarkerAt = hudMarkers[0];
             }
 
             if (hudRoot == null || ringImage == null) return;
@@ -1626,7 +1692,7 @@ namespace ArmorFragments
                 GL.LoadPixelMatrix(0f, width, height, 0f);   // pixels, the origin at the top left
                 GL.Begin(GL.TRIANGLES);
                 if (hudRingShown) DrawRing(hudRingAt.x, flip ? hudRingAt.y : height - hudRingAt.y, 26f, 0.9f);
-                if (hudMarkerShown) DrawDot(hudMarkerAt.x, flip ? hudMarkerAt.y : height - hudMarkerAt.y, 2.6f);
+                foreach (Vector2 marker in hudMarkers) DrawDot(marker.x, flip ? marker.y : height - marker.y, 2.6f);
                 GL.End();
             }
             finally

@@ -22,7 +22,7 @@ namespace ArmorFragments
         {
             if (part == null || idMap == null || idMap.Count == 0) return;
 
-            // The sight camera ([PTR c=]) and the auxiliary cannons ([PTR a=]) of a pointer cannon are part ids too.
+            // The sight camera ([PTR c=]) and the fixed cannons ([PTR x=], [PTR k=]) of a turret are part ids too.
             PointerTag pointer = TagCodec.Parse(part.Name).Pointer;
             if (pointer != null)
             {
@@ -30,21 +30,9 @@ namespace ArmorFragments
                 bool linksChanged = false;
                 int mapped;
                 if (camera.HasValue && idMap.TryGetValue(camera.Value, out mapped) && mapped != camera.Value) { camera = mapped; linksChanged = true; }
-                List<int> aux = new List<int>();
-                foreach (int id in pointer.Aux)
-                {
-                    int keptAux = idMap.TryGetValue(id, out mapped) ? mapped : id;
-                    if (keptAux != id) linksChanged = true;
-                    if (!aux.Contains(keptAux)) aux.Add(keptAux);
-                }
-                List<int> alt = new List<int>();
-                foreach (int id in pointer.Alt)
-                {
-                    int keptAlt = idMap.TryGetValue(id, out mapped) ? mapped : id;
-                    if (keptAlt != id) linksChanged = true;
-                    if (!alt.Contains(keptAlt)) alt.Add(keptAlt);
-                }
-                if (linksChanged) SetName(part, TagCodec.WithPointerLinks(part.Name, camera, aux, alt));
+                List<int> fixedIds = MapIds(pointer.Fixed, idMap, ref linksChanged);
+                List<int> byKey = MapIds(pointer.FixedByKey, idMap, ref linksChanged);
+                if (linksChanged) SetName(part, TagCodec.WithPointerLinks(part.Name, camera, fixedIds, byKey));
             }
 
             CannonTag cannon = TagCodec.Parse(part.Name).Cannon;
@@ -62,6 +50,19 @@ namespace ArmorFragments
             if (changed) SetName(part, TagCodec.WithCannonRacks(part.Name, ids));
         }
 
+        private static List<int> MapIds(List<int> ids, Dictionary<int, int> idMap, ref bool changed)
+        {
+            List<int> result = new List<int>();
+            foreach (int id in ids)
+            {
+                int newId;
+                int kept = idMap.TryGetValue(id, out newId) ? newId : id;
+                if (kept != id) changed = true;
+                if (!result.Contains(kept)) result.Add(kept);
+            }
+            return result;
+        }
+
         // Takes 'removedId' out of the rack list of every cannon among 'parts'.
         public static void Forget(IEnumerable<PartData> parts, int removedId)
         {
@@ -69,13 +70,13 @@ namespace ArmorFragments
             {
                 if (part == null) continue;
                 PointerTag pointer = TagCodec.Parse(part.Name).Pointer;
-                if (pointer != null && (pointer.Camera == removedId || pointer.Aux.Contains(removedId) || pointer.Alt.Contains(removedId)))
+                if (pointer != null && (pointer.Camera == removedId || pointer.Fixed.Contains(removedId) || pointer.FixedByKey.Contains(removedId)))
                 {
-                    List<int> aux = new List<int>(pointer.Aux);
-                    aux.Remove(removedId);
-                    List<int> alt = new List<int>(pointer.Alt);
-                    alt.Remove(removedId);
-                    SetName(part, TagCodec.WithPointerLinks(part.Name, pointer.Camera == removedId ? null : pointer.Camera, aux, alt));
+                    List<int> fixedIds = new List<int>(pointer.Fixed);
+                    fixedIds.Remove(removedId);
+                    List<int> byKey = new List<int>(pointer.FixedByKey);
+                    byKey.Remove(removedId);
+                    SetName(part, TagCodec.WithPointerLinks(part.Name, pointer.Camera == removedId ? null : pointer.Camera, fixedIds, byKey));
                 }
 
                 CannonTag cannon = TagCodec.Parse(part.Name).Cannon;

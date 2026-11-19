@@ -292,6 +292,7 @@ namespace ArmorFragments.UI
             Live("Aim key", () => TurretAim.KeyText(ArmorFragmentsPlugin.TurretAimKey));
             Live("Free look key", () => TurretAim.KeyText(ArmorFragmentsPlugin.TurretLookKey));
             Live("Sight key", () => TurretAim.KeyText(ArmorFragmentsPlugin.TurretSightKey));
+            Live("Next group key", () => TurretAim.KeyText(ArmorFragmentsPlugin.TurretGroupKey));
             Live("Fire mouse button", () => ArmorFragmentsPlugin.TurretFireMouseButton.Value.ToString());
             Live("Fire key", () => TurretAim.KeyText(ArmorFragmentsPlugin.TurretFireKey));
             builder.Buttons(new List<KeyValuePair<string, Action>>
@@ -305,6 +306,7 @@ namespace ArmorFragments.UI
                 new KeyValuePair<string, Action>("Change fire mouse button", () =>
                     ArmorFragmentsPlugin.TurretFireMouseButton.Value = ArmorFragmentsPlugin.TurretFireMouseButton.Value == TurretFireMouse.Left ? TurretFireMouse.Middle : TurretFireMouse.Left),
                 new KeyValuePair<string, Action>("Change fire key", () => TurretAim.CaptureKey(ArmorFragmentsPlugin.TurretFireKey)),
+                new KeyValuePair<string, Action>("Change next group key", () => TurretAim.CaptureKey(ArmorFragmentsPlugin.TurretGroupKey)),
             });
             FloatSetting(ArmorFragmentsPlugin.TurretZoom, "Zoom",
                 "How many times the right mouse button zooms in (held: gradually in, let go: gradually out).", 0.5f, " x");
@@ -318,7 +320,7 @@ namespace ArmorFragments.UI
                 "The turret aims from where the gun will be this many seconds from now, so it does not overshoot and swing around the circle. 0 = off. Raise it if the gun still swings; too much makes it sluggish.", 0.01f, " s");
             FloatSetting(ArmorFragmentsPlugin.TurretCameraHeight, "Camera pivot height",
                 "The point the camera turns around (where it sits at full zoom) is centered on the vehicle and this many meters above its highest point.", 0.1f, " m");
-            builder.Text("How to", "Designer: Turret on the rotators, Pointer on the cannon (and Pick sight camera). Alt: cursor. Free look key: orbit the camera. Sight key: the cannon's sight camera. Right: zoom. Left: fire.");
+            builder.Text("How to", "Designer: Turret on the rotators; on a cannon, Create turret group (add more turrets, fixed cannons, a sight camera, and what each fires with). Alt: cursor. Free look key: orbit the camera. Sight key: a turret's sight camera. Group key: next turret group. Right: zoom. Mouse button / fire key: fire.");
         }
 
         private void BuildImpactCamera()
