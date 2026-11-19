@@ -82,6 +82,7 @@ namespace ArmorFragments
             public Vector3 Want;       // where the gun should point (the cursor), world direction: what firing is judged against
             public float AimError;     // degrees between the barrel and Want
             public float AimStamp = -10f;   // Time.fixedTime of the last measure
+            public bool LineBlocked;        // the barrel points at a part of its own vehicle (checked a few times a second for the flight-screen bars)
             public float Lag;          // how long the barrel takes to follow its rotators (s), the slowest of them; 0 = not measured
 
             // Swinging (each turret has its own): the error changing side over and over cuts this turret's gain.
@@ -766,14 +767,21 @@ namespace ArmorFragments
         internal struct GroupHud
         {
             public int Id;
-            public int Total, Live, OnTarget;
+            public int Total, Live, OnTarget, Blocked;
             public bool Controlled;
         }
+
+        private static float nextBlockedCheck;
 
         internal static void GetGroups(List<GroupHud> output)
         {
             output.Clear();
             float tolerance = ArmorFragmentsPlugin.TurretFireTolerance.Value;
+            if (Time.unscaledTime >= nextBlockedCheck)
+            {
+                nextBlockedCheck = Time.unscaledTime + 0.3f;
+                foreach (Gun gun in guns) gun.LineBlocked = controlled.Contains(gun.GroupId) && Live(gun) && !LineClear(gun.Cannon);
+            }
             foreach (int id in groupIds)
             {
                 GroupHud group = new GroupHud { Id = id, Controlled = controlled.Contains(id) };
@@ -784,6 +792,7 @@ namespace ArmorFragments
                     if (!Live(gun)) continue;
                     group.Live++;
                     if (group.Controlled && calibrated && Time.fixedTime - gun.AimStamp < 0.25f && gun.AimError <= tolerance) group.OnTarget++;
+                    if (group.Controlled && gun.LineBlocked) group.Blocked++;
                 }
                 output.Add(group);
             }
@@ -1227,9 +1236,15 @@ namespace ArmorFragments
         private const float LineOfFireMeters = 20f;
         private const float LineOfFireIgnoreMeters = 0.3f;   // what is this close to the muzzle is the barrel's own fittings
 
+        // Why a held fire button did not fire (counted over one call of FireGuns, said once in a while in the log and in the panel's status).
+        private static int refuseTarget, refuseLine, refuseReload, refuseAmmo;
+        private static float nextRefuseLog;
+
         private static void FireGuns()
         {
             float now = Time.time;
+            refuseTarget = refuseLine = refuseReload = refuseAmmo = 0;
+            int firedNow = 0;
             shooters.Clear();
             foreach (Gun gun in guns)
             {
@@ -1251,11 +1266,22 @@ namespace ArmorFragments
                 bool fired = shooter.Fixed != null ? TryFire(shooter.Cannon, shooter.ByKey, shooter.Owner, now, ref shooter.Fixed.NextFire)
                                                    : TryFire(shooter.Cannon, shooter.ByKey, shooter.Owner, now, ref shooter.Owner.NextFire);
                 if (!fired) continue;
+                firedNow++;
                 fireStart = (index + 1) % count;
                 if (stagger > 0f)
                 {
                     if (shooter.ByKey) gateKey = now + stagger; else gateMouse = now + stagger;
                 }
+            }
+
+            if (firedNow == 0 && refuseTarget + refuseLine + refuseAmmo > 0 && Time.unscaledTime >= nextRefuseLog)
+            {
+                nextRefuseLog = Time.unscaledTime + 2f;
+                string why = (refuseTarget > 0 ? refuseTarget + " not on target (more than " + ArmorFragmentsPlugin.TurretFireTolerance.Value.ToString("F1") + " deg off)" : "") +
+                             (refuseLine > 0 ? (refuseTarget > 0 ? ", " : "") + refuseLine + " pointing into its own vehicle" : "") +
+                             (refuseAmmo > 0 ? (refuseTarget + refuseLine > 0 ? ", " : "") + refuseAmmo + " with no round, no crew or no ammo" : "");
+                Notice("not firing: " + why);
+                ArmorFragmentsPlugin.Log.LogInfo("Turret aim: the fire button is held and nothing fires: " + why + (refuseReload > 0 ? "; " + refuseReload + " reloading" : ""));
             }
         }
 
@@ -1283,10 +1309,12 @@ namespace ArmorFragments
 
         private static bool TryFire(CannonScript cannon, bool byKey, Gun owner, float now, ref float nextFire)
         {
-            if (cannon == null || cannon.PartScript == null || !(byKey ? fireKey : fireMouse) || now < nextFire) return false;
+            if (cannon == null || cannon.PartScript == null || !(byKey ? fireKey : fireMouse)) return false;
+            if (now < nextFire) { refuseReload++; return false; }
             IWeapon weapon = cannon;
-            if (weapon.IsDestroyed || weapon.CurrentAmmo <= 0 || !cannon.CanFire || !AmmoRacks.CanFire(cannon)) return false;
-            if (!OnTarget(owner) || !LineClear(cannon)) return false;
+            if (weapon.IsDestroyed || weapon.CurrentAmmo <= 0 || !cannon.CanFire || !AmmoRacks.CanFire(cannon)) { refuseAmmo++; return false; }
+            if (!OnTarget(owner)) { refuseTarget++; return false; }
+            if (!LineClear(cannon)) { refuseLine++; return false; }
             try
             {
                 weapon.Fire(null);

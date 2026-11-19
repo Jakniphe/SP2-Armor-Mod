@@ -13,7 +13,7 @@ namespace ArmorFragments
     // The turret groups, on the flight screen (bottom right, above the game's row of buttons: recenter view, enter/exit, change view): one bar for
     // each group, made like the game's own pills (the same classes and the same way the ammo bars are made, see AmmoHud.cs). A lit bar is a group
     // that follows the mouse aim now, a dark one is a group that holds where it is; a click on a bar switches it (several groups can be controlled
-    // together). Only while the mouse aim is on and the vehicle has more than one group. The cursor is locked in mouse aim: hold Alt to click.
+    // together). Only while the mouse aim is on (with one group too: it shows how many of its turrets are on target or blocked). The cursor is locked in mouse aim: hold Alt to click.
     internal static class TurretGroupsHud
     {
         private const string IdPrefix = "af-groups-";
@@ -28,7 +28,7 @@ namespace ArmorFragments
             public ImageWidget Fill;
             public TextWidget Name, State;
             public int Group;
-            public int Controlled = -1, Live = -1, OnTarget = -1, Total = -1;
+            public int Controlled = -1, Live = -1, OnTarget = -1, Total = -1, Blocked = -1;
         }
 
         private static readonly List<Pill> pills = new List<Pill>();
@@ -51,7 +51,7 @@ namespace ArmorFragments
             try
             {
                 TurretAim.GetGroups(groups);
-                if (groups.Count < 2)
+                if (groups.Count < 1)
                 {
                     if (pills.Count > 0) Clear();
                     return;
@@ -144,11 +144,12 @@ namespace ArmorFragments
                 Pill pill = pills[i];
                 TurretAim.GroupHud group = groups[i];
                 int controlled = group.Controlled ? 1 : 0;
-                if (pill.Controlled == controlled && pill.Live == group.Live && pill.OnTarget == group.OnTarget && pill.Total == group.Total) continue;
+                if (pill.Controlled == controlled && pill.Live == group.Live && pill.OnTarget == group.OnTarget && pill.Total == group.Total && pill.Blocked == group.Blocked) continue;
                 pill.Controlled = controlled;
                 pill.Live = group.Live;
                 pill.OnTarget = group.OnTarget;
                 pill.Total = group.Total;
+                pill.Blocked = group.Blocked;
 
                 Color color = group.Live == 0 ? Gone : group.Controlled ? Controlled : Held;
                 if (pill.Fill != null)
@@ -159,8 +160,9 @@ namespace ArmorFragments
                 if (pill.State != null)
                 {
                     pill.State.Text = group.Live == 0 ? "destroyed"
-                        : group.Controlled ? group.OnTarget.ToString(CultureInfo.InvariantCulture) + "/" + group.Live.ToString(CultureInfo.InvariantCulture) + " on target"
-                        : group.Live.ToString(CultureInfo.InvariantCulture) + (group.Live == 1 ? " turret, held" : " turrets, held");
+                        : group.Controlled ? group.OnTarget.ToString(CultureInfo.InvariantCulture) + "/" + group.Live.ToString(CultureInfo.InvariantCulture) + " aimed" +
+                                             (group.Blocked > 0 ? " (" + group.Blocked.ToString(CultureInfo.InvariantCulture) + " blocked)" : "")
+                        : group.Live.ToString(CultureInfo.InvariantCulture) + " held";
                 }
             }
         }
