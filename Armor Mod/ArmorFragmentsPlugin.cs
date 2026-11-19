@@ -179,6 +179,8 @@ namespace ArmorFragments
         internal static ConfigEntry<float> TurretFireTolerance, TurretFireStagger, TurretMoveStagger;
         internal static ConfigEntry<bool> TurretAutoFire, TurretAutoLead, TurretAutoDrop, TurretAutoClearView, TurretAutoSkipFriendly;
         internal static ConfigEntry<float> TurretAutoRange, TurretAutoAirAgl, TurretAutoAirSpeed;
+        internal static ConfigEntry<bool> TurretObstacleStop;
+        internal static ConfigEntry<float> TurretObstacleDegrees, TurretObstacleRetry;
         internal static ConfigEntry<UnityEngine.InputSystem.Key> TurretSightKey;
         internal static ConfigEntry<float> TurretSightZoom;
         internal static ConfigEntry<float> TurretSightSensitivity;
@@ -401,6 +403,14 @@ namespace ArmorFragments
                     new AcceptableValueRange<float>(2f, 200f)));
             TurretAutoAirSpeed = Config.Bind("TurretAim", "AutoAirSpeed", 70f,
                 new ConfigDescription("A player's vehicle faster than this (m/s) and more than 3 m above the ground counts as air, however low it flies.", new AcceptableValueRange<float>(10f, 400f)));
+            TurretObstacleStop = Config.Bind("TurretAim", "StopAtObstacles", true,
+                "A rotator that is blocked by something (a barrel on the deck, a turret on another) stops pushing: the joint is asked to stay where the part is, the rotator may turn away from the " +
+                "obstacle but not further into it, and it tries again after ObstacleRetrySeconds. Without it the angle the rotator asks for keeps running ahead and the joint pushes harder and harder.");
+            TurretObstacleDegrees = Config.Bind("TurretAim", "ObstacleDegrees", 2.5f,
+                new ConfigDescription("A rotator counts as blocked when the angle it asks for is this many degrees ahead of where the part really is and the part is not catching up. " +
+                    "Lower stops it sooner; too low can stop a heavy, slow turret that is only following.", new AcceptableValueRange<float>(0.5f, 15f)));
+            TurretObstacleRetry = Config.Bind("TurretAim", "ObstacleRetrySeconds", 4f,
+                new ConfigDescription("How long a blocked rotator waits before it tries to turn further again (it also tries again at once if it backs off 2 degrees).", new AcceptableValueRange<float>(0.5f, 30f)));
             TurretFireKey = Config.Bind("TurretAim", "FireKey",UnityEngine.InputSystem.Key.Space,
                 "In mouse aim, the key that fires the cannons of the turret group that are set to fire by key in the designer (Pointer > Fire by key). 'None' disables it.");
             TurretSightKey = Config.Bind("TurretAim", "SightKey", UnityEngine.InputSystem.Key.LeftShift,

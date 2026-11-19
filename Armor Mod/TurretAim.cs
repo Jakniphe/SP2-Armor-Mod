@@ -60,6 +60,25 @@ namespace ArmorFragments
             public HashSet<int> Expect;  // the guns it should move, from the way the bodies are joined (null = can't tell)
             public readonly List<float> HistoryTime = new List<float>();    // the angle the rotator had, step by step (the last second)
             public readonly List<float> HistoryAngle = new List<float>();
+
+            // Where the part really is (see GuardRotator): the game's own "Current Angle" of the joint, turned into the units of the rotator's angle by
+            // a sign and an anchor measured when the rotator is calibrated. PhysSign 0 = not known (the guard is off for this rotator).
+            public float PhysSign;
+            public float PhysAngle;      // the part's real angle, in the rotator's own units (unwrapped)
+            public float PhysBeta;       // the joint's measured angle the last time
+            public float PhysRate;       // how fast the part really turns (deg/s), smoothed
+            public float CommandRate;    // how fast the commanded angle turns (deg/s), smoothed
+            public float PreviousCommand;
+            public bool PhysKnown;
+            public float StallSince = -1f;
+            public bool Blocked;         // an obstacle: the rotator has stopped pushing
+            public float BlockDirection; // which way it was being turned when it met it
+            public float BlockAngle;     // where the part stopped
+            public float BlockedAt;
+            public float LastLogged = -10f;
+            public float AheadBase;      // how far the asked-for angle sits from the part's when nothing moves (a heavy barrel sags on its drive): not a push
+            public int Strikes;          // blocked again at the same place: each time it waits twice as long before trying again
+            public float LastBlockAngle, LastBlockEnd = -100f;
         }
 
         // A turret: a cannon the mouse aim points, in a turret group (the turrets of the active group are aimed at the same point at the same time;
@@ -291,6 +310,8 @@ namespace ArmorFragments
         {
             public Turret Turret;
             public float Angle0, Delta;
+            public float Beta0;          // the joint's measured angle before the move (for the obstacle guard's sign)
+            public bool BetaOk;
             public Vector3 Axis;
             public HashSet<int> Expect;   // the guns it should move (from the way the bodies are joined); null = any (it is turned alone)
         }
@@ -343,6 +364,9 @@ namespace ArmorFragments
         private static AccessTools.FieldRef<JointRotatorScript, ConfigurableJoint> jointRef;
         private static AccessTools.FieldRef<JointRotatorScript, float> angleRef, targetRef;
         private static AccessTools.FieldRef<JointRotatorScript, bool> freeSpinRef, floppyRef;
+        private static AccessTools.FieldRef<JointRotatorScript, Vector3> perpendicularRef, connectedPerpendicularRef;
+        private static bool guardRefsOk;
+        private static readonly Dictionary<JointRotatorScript, Turret> turretOf = new Dictionary<JointRotatorScript, Turret>();
         private static AccessTools.FieldRef<InteractiveCameraController, Vector2> rotationRef;
         private static AccessTools.FieldRef<InteractiveCameraController, float> sensitivityRef;
         private static System.Reflection.MethodInfo selectCamera;
@@ -364,6 +388,18 @@ namespace ArmorFragments
                 targetRef = AccessTools.FieldRefAccess<JointRotatorScript, float>("_targetAngle");
                 freeSpinRef = AccessTools.FieldRefAccess<JointRotatorScript, bool>("_freeSpin");
                 floppyRef = AccessTools.FieldRefAccess<JointRotatorScript, bool>("_floppyJoint");
+                try
+                {
+                    // For the obstacle guard (where the part really is). If the game changes these, only the guard is lost.
+                    perpendicularRef = AccessTools.FieldRefAccess<JointRotatorScript, Vector3>("_perpendicularVector");
+                    connectedPerpendicularRef = AccessTools.FieldRefAccess<JointRotatorScript, Vector3>("_connectedPerpendicularVector");
+                    guardRefsOk = true;
+                }
+                catch (Exception e)
+                {
+                    guardRefsOk = false;
+                    ArmorFragmentsPlugin.Log.LogWarning("Turret aim: the rotators' measured angle can't be read, the obstacle guard is off (" + e.Message + ")");
+                }
                 rotationRef = AccessTools.FieldRefAccess<InteractiveCameraController, Vector2>("_deltaRotation");
                 sensitivityRef = AccessTools.FieldRefAccess<InteractiveCameraController, float>("_rotationSensitivity");
                 selectCamera = AccessTools.Method(typeof(CameraManagerScript), "SelectCamera");
@@ -801,11 +837,13 @@ namespace ArmorFragments
                 if (!groupIds.Contains(gun.GroupId)) groupIds.Add(gun.GroupId);
             }
             groupIds.Sort();
+            turretOf.Clear();
             foreach (Turret turret in turrets)
             {
                 turret.Signs = new float[guns.Count];
                 turret.Scales = new float[guns.Count];
                 turret.Lags = new float[guns.Count];
+                turretOf[turret.Script] = turret;
             }
         }
 
@@ -1503,7 +1541,170 @@ namespace ArmorFragments
                 }
             }
             float target;
-            if (commands.TryGetValue(script, out target) && targetRef != null) targetRef(script) = target;
+            if (commands.TryGetValue(script, out target) && targetRef != null)
+            {
+                Turret owner;
+                if (guardRefsOk && turretOf.TryGetValue(script, out owner)) target = GuardRotator(owner, target, Time.fixedDeltaTime);
+                targetRef(script) = target;
+            }
+        }
+
+        // ---- Obstacle guard ---------------------------------------------------------------------------------------------------------
+        //
+        // A rotator's angle (JointRotatorScript._angle) is only what it ASKS the joint for: it moves toward the target at the rotator's speed, and the
+        // joint's drive pulls the part there however hard it takes. A barrel that meets something (the deck, another turret) is not stopped by
+        // that: the asked-for angle keeps running ahead and the drive pushes harder and harder (turrets of a ship were tearing it apart). The part's
+        // REAL angle is what the game shows as the rotator's "Current Angle": the angle between a direction fixed to each side of the joint. Here
+        // that is followed (turned into the units of _angle by a sign found when the rotator is calibrated), and when the asked-for angle runs
+        // ahead of the real one and the part does not follow, the rotator is blocked: its asked-for angle is put back where the part is (nothing
+        // pushes any more), it may turn away from the obstacle but not further into it, and after a few seconds it tries again.
+
+        private const float StallSeconds = 0.1f;
+
+        // The joint's own measured angle, as the game computes its "Current Angle" output (JointRotatorScript.UpdateOutputs).
+        private static bool MeasureBeta(JointRotatorScript script, out float beta)
+        {
+            beta = 0f;
+            ConfigurableJoint joint = jointRef(script);
+            if (joint == null || joint.connectedBody == null) return false;
+            Vector3 axis = joint.transform.TransformVector(-joint.axis);
+            Vector3 own = Vector3.ProjectOnPlane(joint.transform.TransformVector(perpendicularRef(script)), axis);
+            Vector3 other = Vector3.ProjectOnPlane(joint.connectedBody.transform.TransformVector(connectedPerpendicularRef(script)), axis);
+            if (own.sqrMagnitude < 1e-8f || other.sqrMagnitude < 1e-8f) return false;
+            beta = Vector3.SignedAngle(own, other, axis);
+            return true;
+        }
+
+        private static float AheadOf(Turret turret, float from, float to)
+        {
+            return turret.Wraps ? Mathf.DeltaAngle(from, to) : to - from;
+        }
+
+        // May turn away from the obstacle, not further into it.
+        private static float KeepOutOf(Turret turret, float target)
+        {
+            return AheadOf(turret, turret.BlockAngle, target) * turret.BlockDirection > 0f ? turret.BlockAngle : target;
+        }
+
+        // Called each physics step for each marked rotator, with the angle the control wants; returns the angle to ask for.
+        private static float GuardRotator(Turret turret, float target, float dt)
+        {
+            JointRotatorScript script = turret.Script;
+            float beta;
+            if (turret.PhysSign == 0f || dt < 1e-4f || !MeasureBeta(script, out beta))
+            {
+                turret.PhysKnown = false;
+                return target;
+            }
+            float command = angleRef(script);
+            float moved = Mathf.DeltaAngle(turret.PhysBeta, beta);
+            turret.PhysBeta = beta;
+            if (!turret.PhysKnown || Mathf.Abs(moved) > 30f)
+            {
+                // The first reading, or the joint was rebuilt: start from the angle that was asked for.
+                turret.PhysAngle = command;
+                turret.PreviousCommand = command;
+                turret.PhysRate = turret.CommandRate = 0f;
+                turret.AheadBase = 0f;
+                turret.StallSince = -1f;
+                turret.PhysKnown = true;
+                return target;
+            }
+            float previous = turret.PhysAngle;
+            turret.PhysAngle += turret.PhysSign * moved;
+            float blend = 1f - Mathf.Exp(-dt / 0.05f);
+            turret.PhysRate += ((turret.PhysAngle - previous) / dt - turret.PhysRate) * blend;
+            turret.CommandRate += (AheadOf(turret, turret.PreviousCommand, command) / dt - turret.CommandRate) * blend;
+            turret.PreviousCommand = command;
+
+            if (calibration != null || !ArmorFragmentsPlugin.TurretObstacleStop.Value || !Moves(turret))
+            {
+                turret.Blocked = false;
+                turret.StallSince = -1f;
+                return target;
+            }
+
+            float now = Time.fixedTime;
+            if (turret.Blocked)
+            {
+                float into = AheadOf(turret, turret.BlockAngle, turret.PhysAngle) * turret.BlockDirection;   // + further in, - backed off
+                // The wait doubles each time it is blocked again at the same place (up to 30 s), so a turret whose target is behind the
+                // superstructure does not keep tapping it.
+                float wait = Mathf.Min(30f, ArmorFragmentsPlugin.TurretObstacleRetry.Value * Mathf.Pow(2f, Mathf.Max(0, turret.Strikes - 1)));
+                if (now - turret.BlockedAt > wait || into < -2f)
+                {
+                    turret.LastBlockAngle = turret.BlockAngle;
+                    turret.LastBlockEnd = now;
+                    turret.Blocked = false;
+                    turret.StallSince = -1f;
+                    turret.AheadBase = AheadOf(turret, turret.PhysAngle, command);
+                    if (now - turret.LastLogged > 2f)
+                    {
+                        turret.LastLogged = now;
+                        ArmorFragmentsPlugin.Log.LogInfo("Turret aim: rotator '" + turret.Name + "' tries to turn again (" + (into < -2f ? "it backed off" : "time is up") + ")");
+                    }
+                    return target;
+                }
+                angleRef(script) = turret.PhysAngle;   // nothing pushes: the joint is asked to stay where the part is
+                turret.PreviousCommand = turret.PhysAngle;
+                return KeepOutOf(turret, target);
+            }
+
+            // The asked-for angle is ahead of the part by more than the threshold, and the part is not catching up with it: something is in the way.
+            // (A heavy barrel sags on its drive, so the two angles are not exactly equal at rest: that offset is learned while nothing moves, and
+            // only the asked-for angle running ahead of it counts.)
+            float ahead = AheadOf(turret, turret.PhysAngle, command);
+            if (Mathf.Abs(turret.CommandRate) < 1.5f && Mathf.Abs(turret.PhysRate) < 1.5f) turret.AheadBase += (ahead - turret.AheadBase) * (1f - Mathf.Exp(-dt / 0.5f));
+            float excess = ahead - turret.AheadBase;
+            float direction = Mathf.Sign(excess);
+            bool pushing = Mathf.Abs(excess) > ArmorFragmentsPlugin.TurretObstacleDegrees.Value;
+            float partToward = turret.PhysRate * direction, askedToward = turret.CommandRate * direction;
+            bool stalled = pushing && partToward < 0.3f * Mathf.Max(askedToward, 3f);
+            if (!stalled)
+            {
+                turret.StallSince = -1f;
+                return target;
+            }
+            if (turret.StallSince < 0f) turret.StallSince = now;
+            if (now - turret.StallSince < StallSeconds) return target;
+
+            turret.Strikes = now - turret.LastBlockEnd < 40f && Mathf.Abs(AheadOf(turret, turret.LastBlockAngle, turret.PhysAngle)) < 3f ? turret.Strikes + 1 : 1;
+            turret.Blocked = true;
+            turret.BlockDirection = direction;
+            turret.BlockAngle = turret.PhysAngle;
+            turret.BlockedAt = now;
+            turret.StallSince = -1f;
+            angleRef(script) = turret.PhysAngle;
+            turret.PreviousCommand = turret.PhysAngle;
+            if (now - turret.LastLogged > 2f)
+            {
+                turret.LastLogged = now;
+                ArmorFragmentsPlugin.Log.LogInfo("Turret aim: rotator '" + turret.Name + "' is blocked by something: it was asked to turn to " + command.ToString("F1") + " deg, the part is at " +
+                                                 turret.PhysAngle.ToString("F1") + " deg and not moving (" + turret.PhysRate.ToString("F1") + " deg/s); it stops pushing for up to " +
+                                                 Mathf.Min(30f, ArmorFragmentsPlugin.TurretObstacleRetry.Value * Mathf.Pow(2f, turret.Strikes - 1)).ToString("F0") + " s" +
+                                                 (turret.Strikes > 1 ? " (blocked here " + turret.Strikes + " times)" : ""));
+            }
+            return KeepOutOf(turret, target);
+        }
+
+        // For the panel: how many rotators the guard can watch, and how many are blocked now.
+        public static string ObstacleStatus
+        {
+            get
+            {
+                if (!Active) return "Off";
+                int watched = 0, blocked = 0, total = 0;
+                foreach (Turret turret in turrets)
+                {
+                    if (!turret.Usable) continue;
+                    total++;
+                    if (turret.PhysSign != 0f) watched++;
+                    if (turret.Blocked) blocked++;
+                }
+                return !ArmorFragmentsPlugin.TurretObstacleStop.Value ? "Off in the settings"
+                    : !calibrated ? "Calibrating"
+                    : watched + " of " + total + " rotators watched, " + blocked + " blocked now";
+            }
         }
 
         private static bool Moves(Turret turret)
@@ -2037,6 +2238,9 @@ namespace ArmorFragments
                     }
                     target = clamped;
                 }
+                // A rotator that has met an obstacle and is asked to go further into it is held (see GuardRotator): that turret can't reach, so it
+                // is not counted in the hull share either.
+                if (turret.Blocked && AheadOf(turret, turret.BlockAngle, target) * turret.BlockDirection > 0.001f) pinned = true;
                 commands[turret.Script] = target;
                 driven.Add(turret);
                 // RELEASE-STRIP-BEGIN
@@ -2499,6 +2703,8 @@ namespace ArmorFragments
                         Expect = together ? turret.Expect : null,
                     });
                 }
+                if (guardRefsOk)
+                    foreach (Jog jog in made.Jogs) jog.BetaOk = MeasureBeta(jog.Turret.Script, out jog.Beta0);
                 calibration = made;
                 if (together)
                     ArmorFragmentsPlugin.Log.LogInfo("Turret aim: calibrating " + members.Count + " rotator(s) at once (" +
@@ -2606,6 +2812,7 @@ namespace ArmorFragments
                 }
 
                 turret.Done = true;
+                if (guardRefsOk) FindPhysicalSign(turret, jog);
                 if (anyMoved)
                 {
                     turret.Usable = true;
@@ -2619,6 +2826,29 @@ namespace ArmorFragments
                         jog.Delta.ToString("F0") + " deg: it is left out");
                 }
             }
+        }
+
+        // Which way the joint's measured angle turns when the rotator's angle grows (the game's two conventions are not assumed to agree): from the
+        // calibration move. A rotator whose part did not follow the move (about as far as asked) is not watched by the obstacle guard.
+        private static void FindPhysicalSign(Turret turret, Jog jog)
+        {
+            turret.PhysSign = 0f;
+            turret.PhysKnown = false;
+            float after;
+            if (!jog.BetaOk || !MeasureBeta(turret.Script, out after))
+            {
+                ArmorFragmentsPlugin.Log.LogInfo("Turret aim: rotator '" + turret.Name + "' has no measured angle: the obstacle guard does not watch it");
+                return;
+            }
+            float asked = angleRef(turret.Script) - jog.Angle0;   // how far the angle that was asked for went
+            float measured = Mathf.DeltaAngle(jog.Beta0, after);   // how far the joint says the part went
+            if (Mathf.Abs(asked) < 0.5f * Mathf.Abs(jog.Delta) || Mathf.Abs(measured) < 0.5f * Mathf.Abs(asked) || Mathf.Abs(measured) > 1.6f * Mathf.Abs(asked))
+            {
+                ArmorFragmentsPlugin.Log.LogInfo("Turret aim: rotator '" + turret.Name + "' was asked for " + asked.ToString("F1") + " deg and the joint measured " + measured.ToString("F1") +
+                                                 " deg: the obstacle guard does not watch it");
+                return;
+            }
+            turret.PhysSign = measured * asked > 0f ? 1f : -1f;
         }
 
         // How late the barrel follows the rotator: the time the barrel needed to get half way, minus the time the angle needed (the angle is

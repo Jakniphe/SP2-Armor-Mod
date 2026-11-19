@@ -362,6 +362,13 @@ namespace ArmorFragments.UI
                 "A vehicle of a player higher than this above the ground counts as air (the game does not say what it is).", 1f, " m");
             FloatSetting(ArmorFragmentsPlugin.TurretAutoAirSpeed, "Player vehicle is air above speed",
                 "A vehicle of a player faster than this and more than 3 meters above the ground counts as air, however low it flies.", 5f, " m/s");
+            ToggleSetting(ArmorFragmentsPlugin.TurretObstacleStop, "Stop rotators at obstacles",
+                "A rotator blocked by something (a barrel on the deck, a turret on another) stops pushing and may only turn away from it; it tries again after the wait below. Without it the joint keeps pushing harder and harder.");
+            Live("Obstacle guard", () => TurretAim.ObstacleStatus);
+            FloatSetting(ArmorFragmentsPlugin.TurretObstacleDegrees, "Obstacle: degrees ahead",
+                "A rotator counts as blocked when the angle it asks for is this far ahead of the part and the part is not catching up. Lower stops sooner; too low can stop a heavy turret that is only following.", 0.5f, " deg");
+            FloatSetting(ArmorFragmentsPlugin.TurretObstacleRetry, "Obstacle: wait before trying again",
+                "How long a blocked rotator waits before turning further again (it also tries again at once if it backs off 2 degrees).", 0.5f, " s");
             FloatSetting(ArmorFragmentsPlugin.TurretZoom, "Zoom",
                 "How many times the right mouse button zooms in (held: gradually in, let go: gradually out).", 0.5f, " x");
             FloatSetting(ArmorFragmentsPlugin.TurretSightZoom, "Sight zoom",
