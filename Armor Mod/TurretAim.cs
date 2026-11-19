@@ -127,6 +127,8 @@ namespace ArmorFragments
 
         // The gain never goes below this per physics step (0.4 a second), however many turrets share a hull and however often the swing detector cut it.
         private const float MinimumGain = 0.004f;
+        private const float SmallestGapDegrees = 0.05f;   // below this gap the turret rests
+        private const float MicroStepDegrees = 0.02f;     // the least a step asks for above it
 
         // The braking term needs the gun's speed without much delay (a delay in it is what lets a swing grow): only a few physics steps of smoothing.
         private const float BrakeFilterSeconds = 0.03f;
@@ -1425,7 +1427,7 @@ namespace ArmorFragments
 
             // Turrets on one hull body push it together: the more of them, the gentler each is (the hull rocked 5 degrees at 2 Hz in a recording of
             // 14 turrets, even with the ship on land, and a model fitted to it says the push grows with the number of turrets that turn at once).
-            float share = ArmorFragmentsPlugin.TurretShareHull.Value ? 1f / Mathf.Max(1, gun.Share) : 1f;
+            float share = ArmorFragmentsPlugin.TurretShareHull.Value ? Mathf.Pow(Mathf.Max(1, gun.Share), -ArmorFragmentsPlugin.TurretShareStrength.Value) : 1f;
             float baseGain = 1f - Mathf.Exp(-dt / Mathf.Max(ArmorFragmentsPlugin.TurretResponse.Value, 0.02f));
             float gain = Mathf.Max(baseGain * share * gun.GainScale, Mathf.Min(baseGain, MinimumGain));
             for (int i = 0; i < use.Count; i++)
@@ -1439,6 +1441,14 @@ namespace ArmorFragments
                 float step = ((float)theta[i] - brake * (float)speed[i]) * gain;
                 float smallest = Mathf.Min(Mathf.Abs((float)theta[i]), 0.01f * Mathf.Deg2Rad);
                 if (brake <= 0f && Mathf.Abs(step) < smallest) step = Mathf.Sign((float)theta[i]) * smallest;
+
+                // Small errors: with the gain divided among many turrets a gap of a fraction of a degree asks for a step the joint does not answer
+                // (a hundredth of a degree), and the turret sat still short of the cursor. So while the gap is bigger than a twentieth of a degree
+                // and the step goes the right way, a step is at least 0.02 degrees (2 degrees a second), or the gap itself when that is smaller.
+                // The gap is the settled one (what is still on its way is already taken off), so this ends where the gap does and does not creep.
+                float gap = (float)theta[i];
+                if (Mathf.Abs(gap) > SmallestGapDegrees * Mathf.Deg2Rad && Mathf.Sign(step) == Mathf.Sign(gap) && Mathf.Abs(step) < MicroStepDegrees * Mathf.Deg2Rad)
+                    step = Mathf.Sign(gap) * Mathf.Min(Mathf.Abs(gap), MicroStepDegrees * Mathf.Deg2Rad);
                 float target = current + turret.Signs[index] * (step + (float)hull[i] * dt * share) * Mathf.Rad2Deg;
                 if (!turret.Wraps)
                 {
