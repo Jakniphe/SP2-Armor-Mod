@@ -169,6 +169,7 @@ namespace ArmorFragments
         internal static ConfigEntry<UnityEngine.InputSystem.Key> TurretLookKey;
         internal static ConfigEntry<float> TurretZoom;
         internal static ConfigEntry<float> TurretResponse;
+        internal static ConfigEntry<float> TurretCameraHeight;
 
         // Crew ([CRW] seats, see Crew.cs).
         internal static ConfigEntry<bool> CrewEnabled;
@@ -312,6 +313,9 @@ namespace ArmorFragments
             TurretZoom = Config.Bind("TurretAim", "Zoom", 4f,
                 new ConfigDescription("How many times the right mouse button zooms in (held: gradually in, let go: gradually out).",
                     new AcceptableValueRange<float>(1.5f, 12f)));
+            TurretCameraHeight = Config.Bind("TurretAim", "CameraHeight", 1f,
+                new ConfigDescription("The point the camera turns around (where it sits at full zoom) is centered on the vehicle and this many meters above its highest point.",
+                    new AcceptableValueRange<float>(0f, 10f)));
             TurretResponse = Config.Bind("TurretAim", "ResponseSeconds", 0.12f,
                 new ConfigDescription("How quickly the turret closes on the cursor, in seconds (the time the gap takes to shrink to a third). " +
                     "Smaller is snappier; if the gun swings back and forth around the cursor, raise it.",

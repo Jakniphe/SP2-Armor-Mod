@@ -89,7 +89,9 @@ namespace ArmorFragments
         private static AccessTools.FieldRef<InteractiveCameraController, Vector2> rotationRef;
         private static AccessTools.FieldRef<InteractiveCameraController, float> sensitivityRef;
         private static System.Reflection.MethodInfo selectCamera;
-        private static bool refsTried, refsOk;
+        private static AccessTools.FieldRef<OrbitCameraController, Func<Transform>> orbitTargetRef;
+        private static AccessTools.FieldRef<OrbitCameraController, bool> orbitCenterRef;
+        private static bool refsTried, refsOk, orbitRefsOk;
 
         private static bool EnsureRefs()
         {
@@ -112,7 +114,99 @@ namespace ArmorFragments
                 ArmorFragmentsPlugin.Log.LogWarning("Turret aim: the game's rotator or camera changed, it is off (" + e.Message + ")");
                 refsOk = false;
             }
+            try
+            {
+                orbitTargetRef = AccessTools.FieldRefAccess<OrbitCameraController, Func<Transform>>("_targetTransform");
+                orbitCenterRef = AccessTools.FieldRefAccess<OrbitCameraController, bool>("_centerOnRigidBody");
+                orbitRefsOk = true;
+            }
+            catch (Exception e)
+            {
+                ArmorFragmentsPlugin.Log.LogWarning("Turret aim: the orbit camera's pivot can't be moved (" + e.Message + "), it stays where the game puts it");
+            }
             return refsOk;
+        }
+
+        // ---- The orbit camera's pivot ---------------------------------------------------------------------------
+        // The point the orbit camera turns around (where it sits at full zoom) is, in the game, the vehicle's own position. Here it is a point of
+        // our own, centered on the vehicle and TurretAim/CameraHeight meters above the highest point of the vehicle, so the camera looks over
+        // the turret from above.
+
+        private static OrbitCameraController orbit;
+        private static Func<Transform> originalTarget;
+        private static bool originalCenter;
+        private static GameObject pivot;
+        private static readonly List<Collider> bodyColliders = new List<Collider>();
+        private static float nextColliders;
+
+        private static void TakePivot(OrbitCameraController controllerToMove)
+        {
+            if (!orbitRefsOk || controllerToMove == null) return;
+            orbit = controllerToMove;
+            originalTarget = orbitTargetRef(orbit);
+            originalCenter = orbitCenterRef(orbit);
+            pivot = new GameObject("ArmorFragments turret camera pivot");
+            pivot.transform.position = craft.transform.position;
+            Transform pivotTransform = pivot.transform;
+            orbitTargetRef(orbit) = () => pivotTransform;
+            orbitCenterRef(orbit) = false;
+            nextColliders = 0f;
+            UpdatePivot();
+        }
+
+        private static void ReleasePivot()
+        {
+            try
+            {
+                if (orbit != null && orbitRefsOk)
+                {
+                    if (originalTarget != null) orbitTargetRef(orbit) = originalTarget;
+                    orbitCenterRef(orbit) = originalCenter;
+                }
+            }
+            catch (Exception) { }
+            if (pivot != null) UnityEngine.Object.Destroy(pivot);
+            pivot = null;
+            orbit = null;
+            originalTarget = null;
+            bodyColliders.Clear();
+        }
+
+        private static void UpdatePivot()
+        {
+            if (pivot == null || craft == null) return;
+
+            // The vehicle's colliders, looked up again now and then (parts get destroyed and torn off).
+            if (Time.unscaledTime >= nextColliders)
+            {
+                nextColliders = Time.unscaledTime + 2f;
+                bodyColliders.Clear();
+                foreach (PartData data in craft.Aircraft.Assembly.Parts)
+                {
+                    PartScript part = data != null ? data.PartScript : null;
+                    if (part == null) continue;
+                    foreach (Collider collider in part.GetComponentsInChildren<Collider>())
+                        if (collider != null && !collider.isTrigger) bodyColliders.Add(collider);
+                }
+            }
+
+            float top = float.NegativeInfinity;
+            Vector3 center = Vector3.zero;
+            int count = 0;
+            foreach (Collider collider in bodyColliders)
+            {
+                if (collider == null || !collider.enabled || !collider.gameObject.activeInHierarchy) continue;
+                Bounds bounds = collider.bounds;
+                if (bounds.max.y > top) top = bounds.max.y;
+                center += bounds.center;
+                count++;
+            }
+            if (count == 0) return;
+            center /= count;
+
+            // Centered on the vehicle: the hull's centre of mass once it is known, else the middle of its colliders.
+            Vector3 middle = hullBody != null ? hullBody.worldCenterOfMass : center;
+            pivot.transform.position = new Vector3(middle.x, top + ArmorFragmentsPlugin.TurretCameraHeight.Value, middle.z);
         }
 
         // ---- Switching on and off -------------------------------------------------------------------------------
@@ -150,6 +244,7 @@ namespace ArmorFragments
 
                 craft = aircraft;
                 craft.Controls.SetInputOverride(GameInputs.Instance.FireWeapons, FireFunc);
+                TakePivot(controller as OrbitCameraController);
 
                 commands.Clear();
                 calibration = null;
@@ -222,6 +317,7 @@ namespace ArmorFragments
             haveDesired = false;
             fireHeld = false;
             DestroyHud();
+            ReleasePivot();
 
             CameraManagerScript cm = CameraManagerScript.Instance;
             try
@@ -303,6 +399,7 @@ namespace ArmorFragments
             }
             Camera cam = cm.MainCamera;
             if (cam == null) return;
+            UpdatePivot();
 
             CannonScript pointer = FirstPointer();
             if (pointer == null)

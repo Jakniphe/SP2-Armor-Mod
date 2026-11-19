@@ -188,3 +188,4 @@ Also
 - The aim is stabilized: when the hull pitches or rolls, the turret keeps the gun on the circle. A rotator that does not move the pointer cannon is left out (the log says so).
 - Hold **Alt**: the cursor comes back for the game's interface. Hold **C**: the camera is freed from the turret, which keeps pointing where it was while you look around; let go and the camera comes back gradually. **Right button**: gradual zoom (held). **Left button**: fire.
 - The turret turns at the rotator's own speed (and the crew's aim efficiency, if you use the crew). Settings: `[TurretAim]` in the config (toggle key, look key, zoom, response).
+- In mouse aim the camera turns around a point centered on the vehicle and 1 meter above its highest point (`CameraHeight` in `[TurretAim]`), so at full zoom it looks over the turret from above.
