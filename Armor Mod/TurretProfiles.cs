@@ -88,7 +88,7 @@ namespace ArmorFragments
                 {
                     EnsureLoaded();
                     bool same = Matches(selected);
-                    return "'" + NameOf(selected) + "' (profile " + selected + ")" + (same ? " (the settings are as saved)" : " (changed since it was saved: Save keeps the changes)");
+                    return NameOf(selected) + " (" + selected + "): " + (same ? "as saved" : "changed, not saved");
                 }
                 catch (Exception e)
                 {

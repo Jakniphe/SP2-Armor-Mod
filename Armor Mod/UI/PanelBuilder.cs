@@ -56,6 +56,25 @@ namespace ArmorFragments.UI
             return control;
         }
 
+        // A paragraph: the text rows are one line high, so a long text is broken into lines of about `width` characters, one row each (the label
+        // on the first). One long row would spill over the rows around it.
+        public void Note(string label, string text, int width = 44)
+        {
+            string line = "";
+            bool first = true;
+            foreach (string word in text.Split(' '))
+            {
+                if (line.Length > 0 && line.Length + 1 + word.Length > width)
+                {
+                    Text(first ? label : "", line);
+                    first = false;
+                    line = word;
+                }
+                else line = line.Length == 0 ? word : line + " " + word;
+            }
+            if (line.Length > 0) Text(first ? label : "", line);
+        }
+
         public ToggleControl Toggle(string label, string tooltip, bool value, Action<bool> changed)
         {
             ToggleControl control = new ToggleControl(Template("control-toggle", label, tooltip));

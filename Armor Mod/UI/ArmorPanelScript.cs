@@ -331,7 +331,7 @@ namespace ArmorFragments.UI
             });
             // Five saved sets of the control's gains (direct control, response, braking, damping, shared hull...): pick one to load it, Save to
             // write the numbers in use into the picked one.
-            builder.Text("Control profiles", "Pick a profile to load its gains (direct control and its ramp, gain, braking and dead band; response, braking, damping; shared hull; gap smoothing; start stagger). " +
+            builder.Note("Control profiles", "Pick a profile to load its gains (direct control and its ramp, gain, braking and dead band; response, braking, damping; shared hull; gap smoothing; start stagger). " +
                 "Change the sliders below as you like and press Save to keep them in the picked profile.");
             Live("Control profile", () => TurretProfiles.Status);
             builder.Buttons(new List<KeyValuePair<string, Action>>
@@ -392,7 +392,7 @@ namespace ArmorFragments.UI
                 "A cannon does not fire while its barrel points at a part of its own vehicle within 20 meters.");
             FloatSetting(ArmorFragmentsPlugin.TurretMoveStagger, "Turret start stagger",
                 "The turrets of a group start following the cursor one after another, each this many seconds after the one before, so they don't all push the hull at once. 0 = together.", 0.005f, " s");
-            builder.Text("Automatic aim", "The Ground and Air buttons under a turret group's bar (with both lit the group takes both) make the group aim and fire by itself at the nearest target it can reach. A vehicle of a player counts as air above the height or speed below, otherwise as ground; the game's own NPC aircraft, ground vehicles and ships say what they are.");
+            builder.Note("Automatic aim", "The Ground and Air buttons under a turret group's bar (with both lit the group takes both) make the group aim and fire by itself at the nearest target it can reach. A vehicle of a player counts as air above the height or speed below, otherwise as ground; the game's own NPC aircraft, ground vehicles and ships say what they are.");
             ToggleSetting(ArmorFragmentsPlugin.TurretAutoFire, "Automatic groups fire",
                 "A group on automatic aim fires by itself, one cannon at a time, when its gun is on the target (within the on-target tolerance), clear of its own vehicle and the target is in range. Off: it only aims.");
             FloatSetting(ArmorFragmentsPlugin.TurretAutoRange, "Automatic aim range",
@@ -430,7 +430,7 @@ namespace ArmorFragments.UI
                 "The turret aims from where the gun will be this many seconds from now, so it does not overshoot and swing around the circle. 0 = off. Raise it if the gun still swings; too much makes it sluggish.", 0.01f, " s");
             FloatSetting(ArmorFragmentsPlugin.TurretCameraHeight, "Camera pivot height",
                 "The point the camera turns around (where it sits at full zoom) is centered on the vehicle and this many meters above its highest point.", 0.1f, " m");
-            builder.Text("How to", "Designer: Turret on the rotators; on a cannon, Create turret group (add more turrets, fixed cannons, a sight camera, and what each fires with). Alt: cursor. Free look key: orbit the camera. Sight key: a turret's sight camera. Group key: next turret group. Right: zoom. Mouse button / fire key: fire.");
+            builder.Note("How to", "Designer: Turret on the rotators; on a cannon, Create turret group (add more turrets, fixed cannons, a sight camera, and what each fires with). Alt: cursor. Free look key: orbit the camera. Sight key: a turret's sight camera. Group key: next turret group. Right: zoom. Mouse button / fire key: fire.");
         }
 
         private void BuildImpactCamera()
