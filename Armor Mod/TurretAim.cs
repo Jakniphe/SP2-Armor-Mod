@@ -431,6 +431,8 @@ namespace ArmorFragments
         private static Vector3 desired = Vector3.forward;
         private static bool haveDesired;
         private static float aimDistance = 1000f;
+        private static readonly float[] sightDistances = new float[3];   // the last three raw aim distances through the sight (median)
+        private static int sightDistanceAt;
         private static float errorDegrees;
         private static bool atLimit;
 
@@ -1428,6 +1430,7 @@ namespace ArmorFragments
 
             bool cursorMode = ArmorFragmentsPlugin.TurretFreeCursor.Value && !sight && pointer != null;
             if (!cursorMode) aimKnown = false;
+            if (!sight) sightDistanceAt = 0;   // the median of the sight's aim distances starts afresh with each visit
 
             // The mouse turns the camera through the game's own mouse look (it also hides and locks the cursor); Alt gives the cursor back.
             // Through the sight the game's mouse look is off: this code turns the aim with the mouse and looks after the cursor itself.
@@ -1457,6 +1460,10 @@ namespace ArmorFragments
                     Cursor.visible = alt;
                 }
             }
+
+            // The game reads the wheel only while its mouse look is on or the pointer is inside its view: with the free cursor the mouse look is
+            // off and the cursor is locked, so the wheel would do nothing. Zoom the orbit camera here then, the way the game does.
+            if (!sight && !free && !returning && !controller.MouseLook) WheelZoom(controller);
 
             // Right button: gradual zoom (and a slower mouse while zoomed, so the aim stays fine).
             float baseFov = cm.CurrentCameraFieldOfView;
@@ -1512,7 +1519,10 @@ namespace ArmorFragments
                     desired = (Quaternion.AngleAxis(delta.x * degrees, view.up) * Quaternion.AngleAxis(-delta.y * degrees, view.right) * desired).normalized;
                 }
                 haveDesired = true;
-                aimDistance = Mathf.Max(5f, (AimPoint(muzzle, desired) - muzzle).magnitude);
+                float rawDistance = Mathf.Max(5f, (AimPoint(muzzle, desired) - muzzle).magnitude);
+                sightDistances[sightDistanceAt++ % 3] = rawDistance;
+                if (sightDistanceAt < 3) { sightDistances[0] = sightDistances[1] = sightDistances[2] = rawDistance; sightDistanceAt = 3; }
+                aimDistance = Mathf.Max(Mathf.Min(sightDistances[0], sightDistances[1]), Mathf.Min(Mathf.Max(sightDistances[0], sightDistances[1]), sightDistances[2]));
             }
             else if (!decoupled)
             {
@@ -1632,6 +1642,34 @@ namespace ArmorFragments
             return Quaternion.Euler(aimAngles.x, aimAngles.y, 0f) * Vector3.forward;
         }
 
+        // The game's own wheel zoom (InteractiveCameraController.Update): the Camera Zoom input times 0.5, or the raw wheel when the wheel always
+        // zooms. Only when the game will not do it itself (its pointer-inside-view test fails), so it never zooms twice.
+        private static void WheelZoom(InteractiveCameraController viewer)
+        {
+            try
+            {
+                Assets.Scripts.Game game = Assets.Scripts.Game.Instance;
+                if (game == null || !game.UserInterface.AllowKeyboardInputs || game.UIInfo.IsInteracting) return;
+                FlightSceneScript flight = FlightSceneScript.Instance;
+                if (flight == null || flight.FlightUI == null || flight.FlightUI.IsPointerInsideGameView) return;
+                GameInputs inputs = GameInputs.Instance;
+                if (inputs == null) return;
+                float axis = inputs.CameraLookZoom.GetAxisIfEnabled() * 0.5f;
+                if (axis == 0f && inputs.MouseWheelAlwaysZooms) axis = UnityEngine.Input.mouseScrollDelta.y;
+                if (axis != 0f) viewer.Zoom(axis);
+            }
+            catch (Exception e)
+            {
+                if (!wheelZoomWarned)
+                {
+                    wheelZoomWarned = true;
+                    ArmorFragmentsPlugin.Log.LogWarning("Turret aim: the wheel zoom of the orbit camera could not be read: " + e.Message);
+                }
+            }
+        }
+
+        private static bool wheelZoomWarned;
+
         // The mouse is slowed when it pushes the ring toward the edge of the screen (from 70% of the way out, to nothing at 90%).
         private static float EdgeSlowdown(float offset, float move, float half)
         {
@@ -1652,7 +1690,9 @@ namespace ArmorFragments
                 if (!Physics.Raycast(origin, direction, out hit, Far - travelled, mask, QueryTriggerInteraction.Ignore))
                     break;
                 PartScript part = hit.collider.GetComponentInParent<PartScript>();
-                if (part == null || part.Aircraft != craft) return hit.point;
+                // A shell in flight is not scenery: the one that has just left the muzzle must not become "what the camera sees".
+                bool shell = part == null && hit.collider.GetComponentInParent<CannonProjectileScript>() != null;
+                if (!shell && (part == null || part.Aircraft != craft)) return hit.point;
                 origin = hit.point + direction * 0.05f;
                 travelled += hit.distance + 0.05f;
             }
