@@ -32,7 +32,8 @@ namespace ArmorFragments
                 if (camera.HasValue && idMap.TryGetValue(camera.Value, out mapped) && mapped != camera.Value) { camera = mapped; linksChanged = true; }
                 List<int> fixedIds = MapIds(pointer.Fixed, idMap, ref linksChanged);
                 List<int> byKey = MapIds(pointer.FixedByKey, idMap, ref linksChanged);
-                if (linksChanged) SetName(part, TagCodec.WithPointerLinks(part.Name, camera, fixedIds, byKey));
+                List<int> rotators = MapIds(pointer.Rotators, idMap, ref linksChanged);
+                if (linksChanged) SetName(part, TagCodec.WithPointerLinks(part.Name, camera, fixedIds, byKey, rotators));
             }
 
             CannonTag cannon = TagCodec.Parse(part.Name).Cannon;
@@ -70,13 +71,15 @@ namespace ArmorFragments
             {
                 if (part == null) continue;
                 PointerTag pointer = TagCodec.Parse(part.Name).Pointer;
-                if (pointer != null && (pointer.Camera == removedId || pointer.Fixed.Contains(removedId) || pointer.FixedByKey.Contains(removedId)))
+                if (pointer != null && (pointer.Camera == removedId || pointer.Fixed.Contains(removedId) || pointer.FixedByKey.Contains(removedId) || pointer.Rotators.Contains(removedId)))
                 {
                     List<int> fixedIds = new List<int>(pointer.Fixed);
                     fixedIds.Remove(removedId);
                     List<int> byKey = new List<int>(pointer.FixedByKey);
                     byKey.Remove(removedId);
-                    SetName(part, TagCodec.WithPointerLinks(part.Name, pointer.Camera == removedId ? null : pointer.Camera, fixedIds, byKey));
+                    List<int> rotators = new List<int>(pointer.Rotators);
+                    rotators.Remove(removedId);
+                    SetName(part, TagCodec.WithPointerLinks(part.Name, pointer.Camera == removedId ? null : pointer.Camera, fixedIds, byKey, rotators));
                 }
 
                 CannonTag cannon = TagCodec.Parse(part.Name).Cannon;

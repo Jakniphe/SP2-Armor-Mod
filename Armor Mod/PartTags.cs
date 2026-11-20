@@ -89,8 +89,10 @@ namespace ArmorFragments
     // at the same point; they are equals). The screen shows where each one really points.
     internal sealed class PointerTag
     {
-        public int Group = 1;   // g: the turret group's number (turrets with the same number are one group)
+        public int Group = 1;   // g: the turret group's number (turrets with the same number are one group); 0 = in no group yet
         public string Name;     // n: the group's name (letters, digits, _ - . ; null = the one its number gives, see GroupNames)
+        public string TurretName; // t: this turret's own name (same characters as n; null = its number among the turrets, see TurretNames)
+        public List<int> Rotators = new List<int>(); // r: ids of the rotators that turn this turret (none = the mod works out which ones move it)
         public int? Camera;     // c: id of the camera part used as this turret's optical sight (none = no sight)
         public bool ByKey;      // f: fires with the fire key instead of the mouse button
 
@@ -224,8 +226,10 @@ namespace ArmorFragments
                     float camera, group, byKey;
                     tags.Pointer = new PointerTag
                     {
-                        Group = values.TryGetValue("g", out group) && group >= 1f ? Mathf.RoundToInt(group) : 1,
+                        Group = values.TryGetValue("g", out group) && group >= 0f ? Mathf.RoundToInt(group) : 1,
                         Name = GroupNames.Clean(ReadText(block.Groups[2].Value, "n")),
+                        TurretName = GroupNames.Clean(ReadText(block.Groups[2].Value, "t")),
+                        Rotators = ReadIds(ReadText(block.Groups[2].Value, "r")),
                         Camera = values.TryGetValue("c", out camera) && camera >= 0f ? Mathf.RoundToInt(camera) : (int?)null,
                         ByKey = values.TryGetValue("f", out byKey) && byKey > 0f,
                         Fixed = ReadIds(ReadText(block.Groups[2].Value, "x")),
@@ -292,8 +296,10 @@ namespace ArmorFragments
             if (tags.Turret != null)
                 Append(name, "[TUR]");
             if (tags.Pointer != null)
-                Append(name, "[PTR g=" + Mathf.Max(1, tags.Pointer.Group).ToString(CultureInfo.InvariantCulture) +
+                Append(name, "[PTR g=" + Mathf.Max(0, tags.Pointer.Group).ToString(CultureInfo.InvariantCulture) +
                        (GroupNames.Clean(tags.Pointer.Name) != null ? " n=" + GroupNames.Clean(tags.Pointer.Name) : "") +
+                       (GroupNames.Clean(tags.Pointer.TurretName) != null ? " t=" + GroupNames.Clean(tags.Pointer.TurretName) : "") +
+                       IdsPair(tags.Pointer.Rotators, "r") +
                        (tags.Pointer.Camera.HasValue ? " c=" + tags.Pointer.Camera.Value.ToString(CultureInfo.InvariantCulture) : "") +
                        (tags.Pointer.ByKey ? " f=1" : "") + IdsPair(tags.Pointer.Fixed, "x") + IdsPair(tags.Pointer.FixedByKey, "k") + "]");
 
@@ -316,16 +322,25 @@ namespace ArmorFragments
         // by key); the rest is kept. (An older a= or s= is dropped.)
         public static string WithPointerLinks(string name, int? camera, IList<int> fixedIds, IList<int> fixedByKey)
         {
+            return WithPointerLinks(name, camera, fixedIds, fixedByKey, null);
+        }
+
+        // The same, and r= (the rotators of the turret) too; null keeps the rotators as they are.
+        public static string WithPointerLinks(string name, int? camera, IList<int> fixedIds, IList<int> fixedByKey, IList<int> rotators)
+        {
             string text = name ?? "";
             Match block = PointerBlock.Match(text);
             if (!block.Success) return text;
-            string pairs = PointerIdPair.Replace(block.Groups[1].Value, "") +
-                           (camera.HasValue ? " c=" + camera.Value.ToString(CultureInfo.InvariantCulture) : "") + IdsPair(fixedIds, "x") + IdsPair(fixedByKey, "k");
+            string kept = rotators == null ? block.Groups[1].Value : PointerRotatorPair.Replace(block.Groups[1].Value, "");
+            string pairs = PointerIdPair.Replace(kept, "") +
+                           (camera.HasValue ? " c=" + camera.Value.ToString(CultureInfo.InvariantCulture) : "") + IdsPair(fixedIds, "x") + IdsPair(fixedByKey, "k") +
+                           (rotators == null ? "" : IdsPair(rotators, "r"));
             return text.Substring(0, block.Index) + "[PTR" + pairs + "]" + text.Substring(block.Index + block.Length);
         }
 
         private static readonly Regex PointerBlock = new Regex(@"\[PTR((?:\s+[a-z]+=[^\s\]]+)*)\s*\]");
         private static readonly Regex PointerIdPair = new Regex(@"\s+(?:c|x|k|a|s)=[^\s\]]+");
+        private static readonly Regex PointerRotatorPair = new Regex(@"\s+r=[^\s\]]+");
 
         private static readonly Regex CannonBlock = new Regex(@"\[CAN((?:\s+[a-z]+=[^\s\]]+)*)\s*\]");
         private static readonly Regex RacksPair = new Regex(@"\s+r=[^\s\]]+");

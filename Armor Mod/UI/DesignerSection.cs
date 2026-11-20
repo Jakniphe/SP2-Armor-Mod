@@ -305,7 +305,7 @@ namespace ArmorFragments.UI
             bool canAim = Has<JointRotatorData>() || tags.Aim != null;
             // The mouse aim turns rotators marked as turret and points the cannons marked as pointer (TurretAim.cs). A part of another kind already
             // marked keeps its toggle, so the mark can be taken off.
-            bool canTurret = Has<JointRotatorData>() || tags.Turret != null;
+            bool canTurret = tags.Turret != null;
             bool canPointer = canCannon || tags.Pointer != null;
             // A hole cutter that cuts into armor can armor its holes' walls (a cutter already marked keeps its toggle,
             // so the mark can be taken off); one that cuts no armor shows nothing.
@@ -566,8 +566,10 @@ namespace ArmorFragments.UI
 
             if (canTurret)
             {
-                builder.Toggle("Turret",
-                    "For a turret ring or gun elevation: in mouse aim (see the panel's Tools) this rotator turns by itself so that the pointer cannons point where the circle is on the screen.",
+                // Old mark: rotators are now linked to a turret from the turret's own section ("Add rotator"); a rotator that still has the
+                // old [TUR] mark keeps working and can be cleared here.
+                builder.Toggle("Turret rotator (old mark)",
+                    "This rotator carries the old turret mark. Rotators are now linked from the turret (the cannon): select the cannon and use Add rotator. Turn this off to clear the old mark.",
                     tags.Turret != null,
                     on => Switch(tags, () => tags.Turret = on ? new TurretTag() : null));
             }
@@ -582,37 +584,89 @@ namespace ArmorFragments.UI
 
         private static void PointerRows(PanelBuilder builder, PartTags tags, bool canCannon)
         {
+            PartScript turretPart = part;
+
+            // A cannon is a cannon until it is made a turret; only a turret can be in a turret group.
             if (tags.Pointer == null)
             {
+                PartData owner = FixedOwner(turretPart.Part.Id);
+                if (owner != null)
+                {
+                    builder.Text("Turret", "Auxiliary cannon of turret " + TurretLabel(owner));
+                    return;
+                }
                 builder.Buttons(new List<KeyValuePair<string, Action>>
                 {
-                    new KeyValuePair<string, Action>("Create turret group",
-                        () => Switch(tags, () => { int id = NextGroupId(); tags.Pointer = new PointerTag { Group = id, Name = GroupNames.NextFree(UsedGroupNames(), id) }; })),
+                    new KeyValuePair<string, Action>("Create turret",
+                        () => Switch(tags, () => tags.Pointer = new PointerTag { Group = 0, TurretName = GroupNames.NextTurretName(UsedTurretNames()) })),
                 });
                 return;
             }
 
-            // The group's turrets are equals: in mouse aim all of them are aimed at the same point at the same time, and each fires by the mouse
-            // button or by the fire key as set here. (Mark the rotators that turn them as Turret.)
-            PartScript turretPart = part;
-            int group = tags.Pointer.Group;
-            List<PartData> members = GroupMembers(group);
-            builder.Text("Turret group", GroupNames.Display(tags.Pointer.Name, group) + " (number " + group + ", " + members.Count + (members.Count == 1 ? " turret)" : " turrets)"));
-            builder.TextInput("Group name", "Rename the turret group (all its turrets). New groups are named after the military phonetic alphabet; leave it empty to get the name of the group's number.",
-                              GroupNames.Display(tags.Pointer.Name, group), GroupNames.MaxLength, typed => RenameGroup(group, typed));
-            for (int i = 0; i < members.Count; i++)
-                builder.Text("Turret " + (i + 1), SightLabel(members[i]) + " (id " + members[i].Id + ")" + (members[i] == turretPart.Part ? " - this one" : ""));
-            builder.Buttons(new List<KeyValuePair<string, Action>>
+            if (!canCannon)
             {
-                new KeyValuePair<string, Action>("Add turret to group", () => PickTurret(turretPart, true)),
-                new KeyValuePair<string, Action>("Remove turret from group", () => PickTurret(turretPart, false)),
-            });
+                builder.Buttons(new List<KeyValuePair<string, Action>>
+                {
+                    new KeyValuePair<string, Action>("Remove turret mark", () => Switch(tags, () => tags.Pointer = null)),
+                });
+                return;
+            }
+
+            // The turret: its name (a number by default), its group, its rotators, its sight, its auxiliary cannons and whether it fires by key.
+            builder.Text("Turret", TurretLabel(turretPart.Part));
+            builder.TextInput("Turret name", "Rename this turret. New turrets are named with the next free number; leave it empty to show the part's id.",
+                              tags.Pointer.TurretName ?? "", GroupNames.MaxLength, typed => RenameTurret(turretPart, typed));
+
+            // The group: a turret may be in none; a group's turrets are aimed together, at the same point.
+            int group = tags.Pointer.Group;
+            if (group < 1)
+            {
+                builder.Text("Turret group", "None");
+                List<KeyValuePair<string, Action>> groupButtons = new List<KeyValuePair<string, Action>>();
+                groupButtons.Add(new KeyValuePair<string, Action>("Create group",
+                    () => Switch(tags, () => { int id = NextGroupId(); tags.Pointer.Group = id; tags.Pointer.Name = GroupNames.NextFree(UsedGroupNames(), id); })));
+                foreach (int other in ExistingGroups())
+                {
+                    int joined = other;
+                    groupButtons.Add(new KeyValuePair<string, Action>("Join " + GroupNames.Display(GroupNameOf(joined), joined),
+                        () => Switch(tags, () => { tags.Pointer.Group = joined; tags.Pointer.Name = GroupNameOf(joined); })));
+                }
+                builder.Buttons(groupButtons);
+            }
+            else
+            {
+                List<PartData> members = GroupMembers(group);
+                builder.Text("Turret group", GroupNames.Display(tags.Pointer.Name, group) + " (number " + group + ", " + members.Count + (members.Count == 1 ? " turret)" : " turrets)"));
+                builder.TextInput("Group name", "Rename the turret group (all its turrets). New groups are named after the military phonetic alphabet; leave it empty to get the name of the group's number.",
+                                  GroupNames.Display(tags.Pointer.Name, group), GroupNames.MaxLength, typed => RenameGroup(group, typed));
+                for (int i = 0; i < members.Count; i++)
+                    builder.Text("Turret in group " + (i + 1), TurretLabel(members[i]) + " (id " + members[i].Id + ")" + (members[i] == turretPart.Part ? " - this one" : ""));
+                builder.Buttons(new List<KeyValuePair<string, Action>>
+                {
+                    new KeyValuePair<string, Action>("Add turret to group", () => PickTurret(turretPart, true)),
+                    new KeyValuePair<string, Action>("Remove turret from group", () => PickTurret(turretPart, false)),
+                    new KeyValuePair<string, Action>("Leave group", () => Switch(tags, () => { tags.Pointer.Group = 0; tags.Pointer.Name = null; })),
+                });
+            }
+
             builder.Toggle("Fire by key",
-                "In mouse aim this turret's cannon fires with the fire key (Space by default) instead of the mouse button. Only the cannons of the active group fire; the game's own weapon selection is ignored.",
+                "In mouse aim this turret's cannon fires with the fire key (Space by default) instead of the mouse button. Only the cannons of the controlled groups fire; the game's own weapon selection is ignored.",
                 tags.Pointer.ByKey,
                 on => Switch(tags, () => tags.Pointer.ByKey = on));
 
-            if (!canCannon) return;
+            // The rotators that turn this turret (a ring, an elevation hinge): the mod moves only these when it aims the turret. With none
+            // linked, it works out by itself which of the rotators with the old mark move the barrel.
+            List<PartData> rotators = PartsByIds(tags.Pointer.Rotators, IsRotatorPart);
+            if (rotators.Count == 0) builder.Text("Rotators", tags.Pointer.Rotators.Count > 0 ? "Missing (ids not found)" : "None linked");
+            foreach (PartData rotator in rotators)
+                builder.Text("Rotator", SightLabel(rotator) + " (id " + rotator.Id + ")");
+            List<KeyValuePair<string, Action>> rotatorButtons = new List<KeyValuePair<string, Action>>
+            {
+                new KeyValuePair<string, Action>("Add rotator", () => PickRotator(turretPart, true)),
+            };
+            if (tags.Pointer.Rotators.Count > 0)
+                rotatorButtons.Add(new KeyValuePair<string, Action>("Remove rotator", () => PickRotator(turretPart, false)));
+            builder.Buttons(rotatorButtons);
 
             // The optical sight: a camera part, picked with the game's part picker like an ammo rack. In mouse aim, the sight key switches to it.
             PartData sight = SightCameraOf(tags.Pointer);
@@ -627,15 +681,15 @@ namespace ArmorFragments.UI
                 sightButtons.Add(new KeyValuePair<string, Action>("Clear sight camera", () => PickSight(turretPart, true)));
             builder.Buttons(sightButtons);
 
-            // Fixed cannons: cannons that sit on this turret and move with it (they are not aimed by themselves), each firing by the mouse button
-            // or the key.
-            List<PartData> fixedCannons = PartsByIds(tags.Pointer.Fixed);
-            if (fixedCannons.Count == 0) builder.Text("Fixed cannons", "None");
+            // Auxiliary (fixed) cannons: cannons that sit on this turret and move with it (they are not aimed by themselves), each firing by
+            // the mouse button or the key.
+            List<PartData> fixedCannons = PartsByIds(tags.Pointer.Fixed, IsCannonPart);
+            if (fixedCannons.Count == 0) builder.Text("Auxiliary cannons", "None");
             foreach (PartData fixedCannon in fixedCannons)
             {
                 int fixedId = fixedCannon.Id;
-                builder.Toggle("Fire by key: " + SightLabel(fixedCannon) + " (fixed)",
-                    "In mouse aim this fixed cannon fires with the fire key (Space by default) instead of the mouse button.",
+                builder.Toggle("Fire by key: " + SightLabel(fixedCannon) + " (auxiliary)",
+                    "In mouse aim this auxiliary cannon fires with the fire key (Space by default) instead of the mouse button.",
                     tags.Pointer.FixedByKey.Contains(fixedId),
                     on => Switch(tags, () =>
                     {
@@ -645,11 +699,125 @@ namespace ArmorFragments.UI
             }
             List<KeyValuePair<string, Action>> fixedButtons = new List<KeyValuePair<string, Action>>
             {
-                new KeyValuePair<string, Action>("Add fixed cannon", () => PickFixed(turretPart, true)),
+                new KeyValuePair<string, Action>("Add auxiliary cannon", () => PickFixed(turretPart, true)),
             };
             if (tags.Pointer.Fixed.Count > 0)
-                fixedButtons.Add(new KeyValuePair<string, Action>("Remove fixed cannon", () => PickFixed(turretPart, false)));
+                fixedButtons.Add(new KeyValuePair<string, Action>("Remove auxiliary cannon", () => PickFixed(turretPart, false)));
             builder.Buttons(fixedButtons);
+
+            builder.Buttons(new List<KeyValuePair<string, Action>>
+            {
+                new KeyValuePair<string, Action>("Remove turret", () => Switch(tags, () => tags.Pointer = null)),
+            });
+        }
+
+        // The label of a turret: its name, or its part id when it has none.
+        private static string TurretLabel(PartData data)
+        {
+            PointerTag pointer = TagCodec.Parse(data.Name).Pointer;
+            string name = pointer != null ? GroupNames.Clean(pointer.TurretName) : null;
+            return name != null ? name.Replace('_', ' ') : "id " + data.Id;
+        }
+
+        private static List<string> UsedTurretNames()
+        {
+            List<string> used = new List<string>();
+            foreach (PartData candidate in AllParts())
+            {
+                PointerTag pointer = TagCodec.Parse(candidate.Name).Pointer;
+                if (pointer != null && pointer.TurretName != null) used.Add(pointer.TurretName);
+            }
+            return used;
+        }
+
+        private static void RenameTurret(PartScript turretPart, string typed)
+        {
+            if (turretPart == null || turretPart.Part == null) return;
+            PartTags fresh = TagCodec.ParseCopy(turretPart.Part.Name);
+            if (fresh.Pointer == null) return;
+            fresh.Pointer.TurretName = GroupNames.Clean(typed);
+            ApplyTags(turretPart.Part, fresh);
+        }
+
+        // The turret this cannon is an auxiliary cannon of (null if none).
+        private static PartData FixedOwner(int id)
+        {
+            foreach (PartData candidate in AllParts())
+            {
+                PointerTag pointer = TagCodec.Parse(candidate.Name).Pointer;
+                if (pointer != null && pointer.Fixed.Contains(id)) return candidate;
+            }
+            return null;
+        }
+
+        private static List<int> ExistingGroups()
+        {
+            List<int> groups = new List<int>();
+            foreach (PartData candidate in AllParts())
+            {
+                PointerTag pointer = TagCodec.Parse(candidate.Name).Pointer;
+                if (pointer != null && pointer.Group >= 1 && !groups.Contains(pointer.Group)) groups.Add(pointer.Group);
+            }
+            groups.Sort();
+            return groups;
+        }
+
+        private static string GroupNameOf(int group)
+        {
+            foreach (PartData member in GroupMembers(group))
+            {
+                PointerTag pointer = TagCodec.Parse(member.Name).Pointer;
+                if (pointer != null && pointer.Name != null) return pointer.Name;
+            }
+            return null;
+        }
+
+        private static bool IsRotatorPart(PartData candidate)
+        {
+            if (candidate == null) return false;
+            foreach (PartModifierData modifier in candidate.Modifiers)
+                if (modifier is JointRotatorData) return true;
+            return false;
+        }
+
+        // Adds a rotator to this turret (or takes one away), picked with the game's part picker.
+        private static void PickRotator(PartScript turretPart, bool add)
+        {
+            Assets.Scripts.Design.Designer designer = Assets.Scripts.Design.Designer.Instance;
+            if (designer == null || turretPart == null || turretPart.Part == null) return;
+            PointerTag current = TagCodec.Parse(turretPart.Part.Name).Pointer;
+            if (current == null) return;
+            List<int> already = new List<int>(current.Rotators);
+
+            Func<PartData, bool> filter = add
+                ? (Func<PartData, bool>)(candidate => IsRotatorPart(candidate) && !already.Contains(candidate.Id))
+                : candidate => already.Contains(candidate.Id);
+            bool any = false;
+            foreach (PartData candidate in AllParts())
+                if (filter(candidate)) { any = true; break; }
+            if (!any)
+            {
+                designer.ShowMessage(add ? "No rotator to add." : "No rotator linked to this turret.", 7f);
+                return;
+            }
+
+            designer.ShowMessage(add ? "Click a rotator (ring, hinge): it turns this turret." : "Click the rotator to unlink from this turret.", 7f);
+            designer.Tools.SelectChoosePartTool(filter, false, -1, "No rotators", picked =>
+            {
+                try
+                {
+                    if (picked == null || turretPart == null || turretPart.Part == null) return;
+                    PartTags fresh = TagCodec.ParseCopy(turretPart.Part.Name);
+                    if (fresh.Pointer == null) return;
+                    if (add) { if (!fresh.Pointer.Rotators.Contains(picked.Id)) fresh.Pointer.Rotators.Add(picked.Id); }
+                    else fresh.Pointer.Rotators.Remove(picked.Id);
+                    ApplyTags(turretPart.Part, fresh);
+                }
+                catch (Exception e)
+                {
+                    ArmorFragmentsPlugin.Log.LogError("Couldn't change the turret's rotators: " + e);
+                }
+            }, false);
         }
 
         private static IEnumerable<PartData> AllParts()
@@ -678,7 +846,7 @@ namespace ArmorFragments.UI
             foreach (PartData candidate in AllParts())
             {
                 PointerTag pointer = TagCodec.Parse(candidate.Name).Pointer;
-                if (pointer != null && !byGroup.ContainsKey(pointer.Group)) byGroup[pointer.Group] = GroupNames.Display(pointer.Name, pointer.Group);
+                if (pointer != null && pointer.Group >= 1 && !byGroup.ContainsKey(pointer.Group)) byGroup[pointer.Group] = GroupNames.Display(pointer.Name, pointer.Group);
             }
             return new List<string>(byGroup.Values);
         }
@@ -719,12 +887,12 @@ namespace ArmorFragments.UI
             return false;
         }
 
-        private static List<PartData> PartsByIds(IList<int> ids)
+        private static List<PartData> PartsByIds(IList<int> ids, Func<PartData, bool> kind)
         {
             List<PartData> found = new List<PartData>();
             foreach (int id in ids)
                 foreach (PartData candidate in AllParts())
-                    if (candidate.Id == id && IsCannonPart(candidate)) { found.Add(candidate); break; }
+                    if (candidate.Id == id && kind(candidate)) { found.Add(candidate); break; }
             return found;
         }
 
@@ -742,40 +910,40 @@ namespace ArmorFragments.UI
             }
         }
 
-        // Adds a cannon to this turret's group (or takes one out of it), picked with the game's part picker.
+        // Adds a turret to this turret's group (or takes one out of it), picked with the game's part picker. Only turrets can join a group.
         private static void PickTurret(PartScript turretPart, bool add)
         {
             Assets.Scripts.Design.Designer designer = Assets.Scripts.Design.Designer.Instance;
             if (designer == null || turretPart == null || turretPart.Part == null) return;
             PointerTag current = TagCodec.Parse(turretPart.Part.Name).Pointer;
-            if (current == null) return;
+            if (current == null || current.Group < 1) return;
             int group = current.Group;
 
-            Func<PartData, bool> filter = add
-                ? (Func<PartData, bool>)(candidate => IsCannonPart(candidate) && candidate != turretPart.Part &&
-                                                      TagCodec.Parse(candidate.Name).Pointer == null && !IsFixedAnywhere(candidate.Id))
-                : candidate =>
-                {
-                    PointerTag other = TagCodec.Parse(candidate.Name).Pointer;
-                    return other != null && other.Group == group;
-                };
+            Func<PartData, bool> filter = candidate =>
+            {
+                PointerTag other = TagCodec.Parse(candidate.Name).Pointer;
+                if (other == null || candidate == turretPart.Part) return false;
+                return add ? other.Group < 1 : other.Group == group;
+            };
             bool any = false;
             foreach (PartData candidate in AllParts())
                 if (filter(candidate)) { any = true; break; }
             if (!any)
             {
-                designer.ShowMessage(add ? "No other cannon to add (cannons already in a group or fixed to a turret can't be added)." : "No turret to remove.", 7f);
+                designer.ShowMessage(add ? "No turret to add (only turrets that are in no group can be added; make a cannon a turret first)." : "No other turret in this group.", 7f);
                 return;
             }
 
-            designer.ShowMessage(add ? "Click a cannon: it becomes a turret of this group." : "Click the turret to take out of this group (this one too).", 7f);
-            designer.Tools.SelectChoosePartTool(filter, false, -1, "No cannons", picked =>
+            designer.ShowMessage(add ? "Click a turret: it joins this group." : "Click the turret to take out of this group.", 7f);
+            designer.Tools.SelectChoosePartTool(filter, false, -1, "No turrets", picked =>
             {
                 try
                 {
                     if (picked == null) return;
                     PartTags fresh = TagCodec.ParseCopy(picked.Name);
-                    fresh.Pointer = add ? new PointerTag { Group = group, Name = current.Name } : null;
+                    if (fresh.Pointer == null) return;
+                    fresh.Pointer.Group = add ? group : 0;
+                    fresh.Pointer.Name = add ? current.Name : null;
                     ApplyTags(picked, fresh);
                 }
                 catch (Exception e)
@@ -803,11 +971,11 @@ namespace ArmorFragments.UI
                 if (filter(candidate)) { any = true; break; }
             if (!any)
             {
-                designer.ShowMessage(add ? "No cannon to fix to this turret (cannons already in a group or fixed to a turret can't be added)." : "No fixed cannon to remove.", 7f);
+                designer.ShowMessage(add ? "No cannon to add (cannons that are turrets or already auxiliary can't be added)." : "No auxiliary cannon to remove.", 7f);
                 return;
             }
 
-            designer.ShowMessage(add ? "Click a cannon: it is fixed to this turret and fires with it." : "Click the fixed cannon to take off this turret.", 7f);
+            designer.ShowMessage(add ? "Click a cannon: it becomes an auxiliary cannon of this turret and fires with it." : "Click the auxiliary cannon to take off this turret.", 7f);
             designer.Tools.SelectChoosePartTool(filter, false, -1, "No cannons", picked =>
             {
                 try

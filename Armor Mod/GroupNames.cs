@@ -47,6 +47,19 @@ namespace ArmorFragments
             return clean.Length == 0 ? null : clean.ToString();
         }
 
+        // The name a new turret gets: the smallest whole number (1, 2, 3...) that no turret uses yet.
+        public static string NextTurretName(ICollection<string> used)
+        {
+            for (int number = 1; ; number++)
+            {
+                string candidate = number.ToString(System.Globalization.CultureInfo.InvariantCulture);
+                bool taken = false;
+                foreach (string name in used)
+                    if (name == candidate) { taken = true; break; }
+                if (!taken) return candidate;
+            }
+        }
+
         // The first name of the alphabet that no group uses yet (compared as shown, ignoring case); the number's own name when all are taken.
         public static string NextFree(ICollection<string> usedDisplayNames, int number)
         {

@@ -49,6 +49,7 @@ namespace ArmorFragments
             public string Name;
             public float Range;          // degrees either way (a rotator that wraps has no limit)
             public bool Wraps;
+            public bool Marked;          // has the old [TUR] mark (a rotator that only some turret links is not a candidate for the turrets that link nothing)
             public bool Done;            // calibrated (or given up on)
             public bool Usable;          // moves at least one of the guns
             public float[] Signs;        // per gun: +1 / -1 the gun's barrel turns this way about Axis when the angle grows, 0 = does not move it
@@ -87,6 +88,8 @@ namespace ArmorFragments
         {
             public CannonScript Cannon;
             public int GroupId;
+            public string TurretName;  // the turret's own name (null = none)
+            public HashSet<JointRotatorScript> Linked;   // the rotators the designer linked to this turret ([PTR r=]); null = none linked, the mod works out which ones move it
             public bool FiresByKey;    // fires with the fire key instead of the mouse button
             public float NextFire;     // Time.time of the next shot
             public CameraVantageScript Sight;
@@ -801,14 +804,15 @@ namespace ArmorFragments
                             Name = string.IsNullOrEmpty(tags.Label) ? data.PartType.Name : tags.Label,
                             Range = script.JointRotator.Range,
                             Wraps = script.JointRotator.ShortestAngle,
+                            Marked = true,
                         });
                 }
-                if (tags.Pointer != null)
+                if (tags.Pointer != null && tags.Pointer.Group >= 1)   // a turret that is in no group is never aimed
                 {
                     CannonScript cannon = part.GetModifier<CannonScript>();
                     if (cannon != null)
                     {
-                        guns.Add(new Gun { Cannon = cannon, GroupId = Mathf.Max(1, tags.Pointer.Group), FiresByKey = tags.Pointer.ByKey });
+                        guns.Add(new Gun { Cannon = cannon, GroupId = Mathf.Max(1, tags.Pointer.Group), FiresByKey = tags.Pointer.ByKey, TurretName = tags.Pointer.TurretName });
                         if (!groupNames.ContainsKey(Mathf.Max(1, tags.Pointer.Group)))
                             groupNames[Mathf.Max(1, tags.Pointer.Group)] = GroupNames.Display(tags.Pointer.Name, Mathf.Max(1, tags.Pointer.Group));
                         pointerTags.Add(tags.Pointer);
@@ -826,6 +830,23 @@ namespace ArmorFragments
                 PartData cameraPart;
                 if (tag.Camera.HasValue && byId.TryGetValue(tag.Camera.Value, out cameraPart) && cameraPart.PartScript != null)
                     gun.Sight = cameraPart.PartScript.GetModifier<CameraVantageScript>();
+                foreach (int id in tag.Rotators)
+                {
+                    PartData rotatorPart;
+                    if (!byId.TryGetValue(id, out rotatorPart) || rotatorPart.PartScript == null) continue;
+                    JointRotatorScript rotator = rotatorPart.PartScript.GetModifier<JointRotatorScript>();
+                    if (rotator == null || rotator.JointRotator == null) continue;
+                    if (gun.Linked == null) gun.Linked = new HashSet<JointRotatorScript>();
+                    gun.Linked.Add(rotator);
+                    if (!turrets.Exists(t => t.Script == rotator))
+                        turrets.Add(new Turret
+                        {
+                            Script = rotator,
+                            Name = string.IsNullOrEmpty(TagCodec.Parse(rotatorPart.Name).Label) ? rotatorPart.PartType.Name : TagCodec.Parse(rotatorPart.Name).Label,
+                            Range = rotator.JointRotator.Range,
+                            Wraps = rotator.JointRotator.ShortestAngle,
+                        });
+                }
                 foreach (int id in tag.Fixed)
                 {
                     PartData fixedPart;
@@ -2915,6 +2936,8 @@ namespace ArmorFragments
                     foreach (Turret turret in turrets)
                     {
                         if (!turret.Usable || turret.Signs[g] == 0f || taken.Contains(turret)) continue;
+                        // A turret with rotators linked in the designer is turned by those only; one with none uses the rotators with the old mark.
+                        if (gun.Linked != null ? !gun.Linked.Contains(turret.Script) : !turret.Marked) continue;
                         gun.Drivers.Add(turret);
                         taken.Add(turret);
                     }
@@ -2924,8 +2947,9 @@ namespace ArmorFragments
                     ArmorFragmentsPlugin.Log.LogInfo("Turret aim: turret " + (g + 1) + " ('" + label + "', group " + groupId + ") is turned by " + gun.Drivers.Count +
                                                      " rotator(s), the barrel follows " + (gun.Lag * 1000f).ToString("F0") + " ms late");
                     if (gun.Drivers.Count == 0)
-                        ArmorFragmentsPlugin.Log.LogWarning("Turret aim: turret " + (g + 1) + " ('" + label + "') is not turned by any rotator marked Turret that an earlier turret of its group " +
-                                                            "doesn't already use: it only follows that turret");
+                        ArmorFragmentsPlugin.Log.LogWarning("Turret aim: turret " + (g + 1) + " ('" + label + "') is not turned by any " +
+                                                            (gun.Linked != null ? "of its linked rotators (or an earlier turret of its group already uses them)" : "rotator marked Turret that an earlier turret of its group doesn't already use") +
+                                                            ": it only follows that turret");
                     else any = true;
                 }
             }
