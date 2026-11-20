@@ -335,6 +335,14 @@ namespace ArmorFragments.UI
                 "How many turrets of the group can work at full gain on one hull; with more, each one's gain is this number divided by the number of turrets (14 turrets: a seventh).", 0.1f, "");
             FloatSetting(ArmorFragmentsPlugin.TurretErrorFilter, "Gap smoothing (many turrets)",
                 "When several turrets share a hull, the gap each is closing is smoothed over this many seconds, so a rocking hull is not chased (which rocked it more). 0 = off. A single turret is never smoothed.", 0.05f, " s");
+            ToggleSetting(ArmorFragmentsPlugin.TurretFreeCursor, "Free cursor (experimental)",
+                "In the orbit view the ring is moved by the mouse over the screen and the camera follows softly once it is some way off the middle (no hard edge). Off = the ring stays at the middle and the mouse turns the camera.");
+            FloatSetting(ArmorFragmentsPlugin.TurretFreeCursorZone, "Free cursor: zone",
+                "How far from the middle the ring can go before the camera starts to follow, in percent of half the view's height (the camera starts a little inside it and follows fully a little outside it).", 1f, " %");
+            FloatSetting(ArmorFragmentsPlugin.TurretFreeCursorFollow, "Free cursor: camera follow time",
+                "How quickly the camera closes the distance to the ring once it is outside the zone. Smaller is tighter.", 0.05f, " s");
+            FloatSetting(ArmorFragmentsPlugin.TurretFreeCursorSensitivity, "Free cursor: sensitivity",
+                "Degrees the ring moves per count of the mouse (less when zoomed in).", 0.005f, " deg");
             ToggleSetting(ArmorFragmentsPlugin.TurretAutoReach, "Automatic aim: prefer targets the turrets can reach",
                 "A group on automatic aim picks the target that the most of its turrets can point at within their arcs, not just the nearest one. The group bar shows how many can reach it.");
             ToggleSetting(ArmorFragmentsPlugin.TurretDirect, "Direct control (experimental)",

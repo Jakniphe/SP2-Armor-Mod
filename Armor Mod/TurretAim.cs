@@ -438,6 +438,8 @@ namespace ArmorFragments
         private static InteractiveCameraController controller;
         private static CameraController previousController;
         private static bool decoupled, returning;
+        private static Vector2 aimAngles;              // FreeCursor: where the ring points, as (pitch, yaw) in degrees, the orbit camera's own convention (pitch down is +, yaw right is +)
+        private static bool aimKnown, ownsOrbitCursor;   // aimAngles is set from the camera; this code (not the game) looks after the cursor in the orbit view
         private static Vector2 savedRotation;
         private static float returnVelocityX, returnVelocityY, fovVelocity;
         private static bool fireMouse, fireKey;   // the two fire inputs, as read this frame
@@ -708,7 +710,7 @@ namespace ArmorFragments
         {
             // Through the sight always; and in the orbit view while the camera comes back to the aim after C is let go (the game's mouse look is
             // off then, so that the mouse does not fight the camera's return, and its controller would show the cursor every frame).
-            return Active && ((sight && asked == sightController) || (!sight && returning && asked == controller));
+            return Active && ((sight && asked == sightController) || (!sight && ownsOrbitCursor && asked == controller));
         }
 
         private static void EnterSight(CameraManagerScript cm)
@@ -745,7 +747,7 @@ namespace ArmorFragments
                 desired = sightTurret.Cannon.transform.forward;
                 haveDesired = true;
             }
-            decoupled = returning = false;
+            decoupled = returning = false; aimKnown = false;
             fovVelocity = 0f;
             ArmorFragmentsPlugin.Log.LogInfo("Turret aim: looking through the sight camera");
         }
@@ -760,7 +762,7 @@ namespace ArmorFragments
                 sightController.MouseLook = false;
                 rotationRef(sightController) = Vector2.zero;
             }
-            decoupled = returning = false;
+            decoupled = returning = false; aimKnown = false;
             sight = false;
             sightController = null;
             sightGun = null;
@@ -842,7 +844,7 @@ namespace ArmorFragments
                 lastStep = -1f;
                 stepFailed = false;
                 haveDesired = false;
-                decoupled = returning = false;
+                decoupled = returning = false; aimKnown = false;
                 fireMouse = fireKey = false;
                 fovVelocity = 0f;
                 atLimit = false;
@@ -1423,10 +1425,14 @@ namespace ArmorFragments
                 }
             }
 
+            bool cursorMode = ArmorFragmentsPlugin.TurretFreeCursor.Value && !sight && pointer != null;
+            if (!cursorMode) aimKnown = false;
+
             // The mouse turns the camera through the game's own mouse look (it also hides and locks the cursor); Alt gives the cursor back.
             // Through the sight the game's mouse look is off: this code turns the aim with the mouse and looks after the cursor itself.
             if (sight)
             {
+                ownsOrbitCursor = false;
                 Cursor.lockState = alt ? CursorLockMode.None : CursorLockMode.Locked;
                 Cursor.visible = alt;
                 // Held C: the game's own mouse look turns the view about the sight camera (to look round the inside of the tank) while the turret
@@ -1436,11 +1442,15 @@ namespace ArmorFragments
             }
             else
             {
-                bool wantLook = !alt && !returning;
+                // FreeCursor: the mouse moves the ring and this code turns the camera (softly) after it, so the game's mouse look is off, except
+                // while C holds the view free (then it orbits as usual and the ring keeps where it is in the world).
+                bool wantLook = cursorMode ? decoupled && !returning && !alt : !alt && !returning;
+                ownsOrbitCursor = returning || (cursorMode && !decoupled);
                 if (controller.MouseLook != wantLook) controller.MouseLook = wantLook;
-                // While the camera comes back (C let go) the game's mouse look is off and the cursor stays where the mod keeps it: hidden and
-                // locked, like with the mouse look on (the operating system's cursor showed until the camera had come back, as if Alt were held).
-                if (returning && !paused)
+                // While the game's mouse look is off here (the camera coming back after C, or the free cursor) the cursor stays where the mod keeps
+                // it: hidden and locked, like with the mouse look on (the operating system's cursor showed until the camera had come back, as if
+                // Alt were held).
+                if (ownsOrbitCursor && !paused)
                 {
                     Cursor.lockState = alt ? CursorLockMode.None : CursorLockMode.Locked;
                     Cursor.visible = alt;
@@ -1505,7 +1515,7 @@ namespace ArmorFragments
             }
             else if (!decoupled)
             {
-                Vector3 from = cam.transform.position, forward = cam.transform.forward;
+                Vector3 from = cam.transform.position, forward = cursorMode ? FreeCursorDirection(cam, mouse, free) : cam.transform.forward;
                 Vector3 point = AimPoint(from, forward);
                 Vector3 to = point - muzzle;
                 float distance = to.magnitude;
@@ -1549,6 +1559,71 @@ namespace ArmorFragments
             // RELEASE-STRIP-BEGIN
             RecordFrame(cam);
             // RELEASE-STRIP-END
+        }
+
+        private static float Smooth01(float t)
+        {
+            t = Mathf.Clamp01(t);
+            return t * t * (3f - 2f * t);
+        }
+
+        // FreeCursor, in the orbit view. The ring is an aim direction of its own ('aimAngles', pitch and yaw in the same degrees the orbit camera uses
+        // for where it is being sent, '_deltaRotation'); the mouse moves it (as the game's mouse look moves the camera) and the camera follows it
+        // softly: it does nothing while the ring is inside the zone, starts to follow a little inside the zone's edge (at 60% of it), follows
+        // fully a little outside it (at 140%), by a smooth step in between, so there is no wall; and as the camera turns, the ring drifts back toward the middle
+        // of the screen by itself, because the ring stays where it is in the world. Near the very edge of the screen the mouse is slowed outward, so
+        // the ring does not leave the view. Returns the world direction of the ring's ray from the camera.
+        private static Vector3 FreeCursorDirection(Camera cam, Mouse mouse, bool free)
+        {
+            Vector2 sent = rotationRef(controller);   // where the camera is being sent (it follows this smoothly)
+            if (!aimKnown)
+            {
+                aimAngles = sent;
+                aimKnown = true;
+            }
+            float dt = Mathf.Clamp(Time.unscaledDeltaTime, 0f, 0.05f);
+            float halfHeight = Mathf.Max(cam.fieldOfView * 0.5f, 1f);
+            float halfWidth = Mathf.Atan(Mathf.Tan(halfHeight * Mathf.Deg2Rad) * Mathf.Max(cam.aspect, 0.5f)) * Mathf.Rad2Deg;
+
+            Vector2 off = new Vector2(aimAngles.x - sent.x, Mathf.DeltaAngle(sent.y, aimAngles.y));   // ring minus camera: x down +, y right +
+            if (mouse != null && !free)
+            {
+                // Where the ring is on the screen is measured from where the camera really looks now (it lags behind where it is being sent).
+                Vector3 look = cam.transform.forward;
+                Vector2 cameraNow = new Vector2(-Mathf.Asin(Mathf.Clamp(look.y, -1f, 1f)) * Mathf.Rad2Deg, Mathf.Atan2(look.x, look.z) * Mathf.Rad2Deg);
+                float across = Mathf.Cos(cameraNow.x * Mathf.Deg2Rad);
+                Vector2 seen = new Vector2(aimAngles.x - cameraNow.x, Mathf.DeltaAngle(cameraNow.y, aimAngles.y) * across);
+
+                Vector2 delta = mouse.delta.ReadValue();
+                float degrees = ArmorFragmentsPlugin.TurretFreeCursorSensitivity.Value * Mathf.Clamp(sensitivityRef(controller), 0.08f, 1f);
+                Vector2 move = new Vector2(-delta.y * degrees, delta.x * degrees);   // the same signs as the game's mouse look
+                move.x *= EdgeSlowdown(seen.x, move.x, halfHeight);
+                move.y *= EdgeSlowdown(seen.y, move.y * across, halfWidth);
+                aimAngles = new Vector2(Mathf.Clamp(aimAngles.x + move.x, -89f, 89f), aimAngles.y + move.y);
+
+                // The ring never leaves the screen, whatever the mouse did in one frame (this is the screen's edge, not the zone).
+                seen = new Vector2(aimAngles.x - cameraNow.x, Mathf.DeltaAngle(cameraNow.y, aimAngles.y) * across);
+                float limitX = 0.95f * halfHeight, limitY = 0.95f * halfWidth;
+                if (Mathf.Abs(seen.x) > limitX) aimAngles.x = Mathf.Clamp(cameraNow.x + Mathf.Sign(seen.x) * limitX, -89f, 89f);
+                if (Mathf.Abs(seen.y) > limitY) aimAngles.y = cameraNow.y + Mathf.Sign(seen.y) * limitY / Mathf.Max(across, 0.2f);
+                off = new Vector2(aimAngles.x - sent.x, Mathf.DeltaAngle(sent.y, aimAngles.y));
+            }
+
+            // The camera follows. The distance is measured to where the camera is being sent (not to where it is now, which lags behind), so what is
+            // already on its way is not asked for twice.
+            float zone = Mathf.Max(ArmorFragmentsPlugin.TurretFreeCursorZone.Value * 0.01f * halfHeight, 0.2f);
+            float away = new Vector2(off.x, off.y * Mathf.Cos(sent.x * Mathf.Deg2Rad)).magnitude;
+            float pull = Smooth01((away - 0.6f * zone) / (0.8f * zone));
+            float step = pull * (1f - Mathf.Exp(-dt / Mathf.Max(ArmorFragmentsPlugin.TurretFreeCursorFollow.Value, 0.03f)));
+            rotationRef(controller) = new Vector2(Mathf.Clamp(sent.x + off.x * step, -89f, 89f), sent.y + off.y * step);
+            return Quaternion.Euler(aimAngles.x, aimAngles.y, 0f) * Vector3.forward;
+        }
+
+        // The mouse is slowed when it pushes the ring toward the edge of the screen (from 70% of the way out, to nothing at 90%).
+        private static float EdgeSlowdown(float offset, float move, float half)
+        {
+            if (offset * move <= 0f) return 1f;
+            return 1f - Smooth01((Mathf.Abs(offset) / half - 0.7f) / 0.2f);
         }
 
         // What the camera sees along a ray, ignoring this vehicle (the camera sits outside it, so the first hits are usually its own parts).

@@ -174,7 +174,8 @@ namespace ArmorFragments
         internal static ConfigEntry<float> TurretDerivative;
         internal static ConfigEntry<bool> TurretFireOnTarget, TurretLineOfFire, TurretShareHull;
         internal static ConfigEntry<float> TurretShareStrength, TurretErrorFilter;
-        internal static ConfigEntry<bool> TurretDirect, TurretAutoReach;
+        internal static ConfigEntry<bool> TurretDirect, TurretAutoReach, TurretFreeCursor;
+        internal static ConfigEntry<float> TurretFreeCursorZone, TurretFreeCursorFollow, TurretFreeCursorSensitivity;
         internal static ConfigEntry<float> TurretDirectRamp, TurretDirectDeadband, TurretDirectGain, TurretDirectBrake;
         internal static ConfigEntry<bool> TurretGroupsHudEnabled;
         internal static ConfigEntry<bool> TurretTestSingle;
@@ -375,6 +376,18 @@ namespace ArmorFragments
                 new ConfigDescription("When several turrets share a hull, the gap each one is closing is smoothed over this many seconds, so a hull that rocks (2 times a second) is not chased " +
                     "by the turrets, which would rock it more. In the model it lets the gain be 4 times higher for the same steadiness. 0 = off. A single turret is never smoothed.",
                     new AcceptableValueRange<float>(0f, 1.5f)));
+            TurretFreeCursor = Config.Bind("TurretAim", "FreeCursor", false,
+                "EXPERIMENTAL. In the orbit view the ring is a cursor the mouse moves over the screen, instead of being fixed at the middle: the turrets aim where the ring is. The camera does not follow " +
+                "at once: it starts turning once the ring is some way off the middle (FreeCursorZonePercent) and follows more and more as the ring goes further, so there is no hard edge, and the ring " +
+                "drifts back toward the middle as the camera catches up. The sight view, the free look (C) and Alt work as before. Off = the ring stays at the middle and the mouse turns the camera.");
+            TurretFreeCursorZone = Config.Bind("TurretAim", "FreeCursorZonePercent", 30f,
+                new ConfigDescription("With FreeCursor: how far from the middle of the screen the ring can be before the camera starts to follow, as a percent of half the view's height. " +
+                    "The camera begins to follow a little inside this (at 60% of it) and follows fully a little outside it (at 140%).", new AcceptableValueRange<float>(5f, 90f)));
+            TurretFreeCursorFollow = Config.Bind("TurretAim", "FreeCursorFollowSeconds", 0.25f,
+                new ConfigDescription("With FreeCursor: how quickly the camera closes the distance to the ring once it is outside the zone (the time it takes to cover most of it). Smaller is tighter.",
+                    new AcceptableValueRange<float>(0.05f, 1.5f)));
+            TurretFreeCursorSensitivity = Config.Bind("TurretAim", "FreeCursorSensitivity", 0.06f,
+                new ConfigDescription("With FreeCursor: degrees the ring moves per count of the mouse (less when zoomed in). The sight's own setting is SightSensitivity.", new AcceptableValueRange<float>(0.01f, 0.5f)));
             TurretAutoReach = Config.Bind("TurretAim", "AutoPreferReachable", true,
                 "Automatic aim: a group prefers the target that the most of its turrets can point at with their rotators (their arcs, as read from each rotator's input), over simply the nearest one. " +
                 "A recording of a ship with 14 turrets on one target: 7 could not turn far enough, because the target was behind them. Turrets that cannot reach still turn as far as they can; they just " +
