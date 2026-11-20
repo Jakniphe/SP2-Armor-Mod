@@ -175,7 +175,7 @@ namespace ArmorFragments
         internal static ConfigEntry<bool> TurretFireOnTarget, TurretLineOfFire, TurretShareHull;
         internal static ConfigEntry<float> TurretShareStrength, TurretErrorFilter;
         internal static ConfigEntry<bool> TurretDirect, TurretAutoReach, TurretFreeCursor;
-        internal static ConfigEntry<float> TurretFreeCursorZone, TurretFreeCursorFollow, TurretFreeCursorSensitivity;
+        internal static ConfigEntry<float> TurretFreeCursorZone, TurretFreeCursorFollow, TurretFreeCursorSensitivity, TurretFreeCursorRecenter;
         internal static ConfigEntry<float> TurretDirectRamp, TurretDirectDeadband, TurretDirectGain, TurretDirectBrake;
         internal static ConfigEntry<bool> TurretGroupsHudEnabled;
         internal static ConfigEntry<bool> TurretTestSingle;
@@ -376,8 +376,8 @@ namespace ArmorFragments
                 new ConfigDescription("When several turrets share a hull, the gap each one is closing is smoothed over this many seconds, so a hull that rocks (2 times a second) is not chased " +
                     "by the turrets, which would rock it more. In the model it lets the gain be 4 times higher for the same steadiness. 0 = off. A single turret is never smoothed.",
                     new AcceptableValueRange<float>(0f, 1.5f)));
-            TurretFreeCursor = Config.Bind("TurretAim", "FreeCursor", false,
-                "EXPERIMENTAL. In the orbit view the ring is a cursor the mouse moves over the screen, instead of being fixed at the middle: the turrets aim where the ring is. The camera does not follow " +
+            TurretFreeCursor = Config.Bind("TurretAim", "FreeCursorEnabled", true,
+                "In the orbit view the ring is a cursor the mouse moves over the screen, instead of being fixed at the middle: the turrets aim where the ring is. The camera does not follow " +
                 "at once: it starts turning once the ring is some way off the middle (FreeCursorZonePercent) and follows more and more as the ring goes further, so there is no hard edge, and the ring " +
                 "drifts back toward the middle as the camera catches up. The sight view, the free look (C) and Alt work as before. Off = the ring stays at the middle and the mouse turns the camera.");
             TurretFreeCursorZone = Config.Bind("TurretAim", "FreeCursorZonePercent", 30f,
@@ -386,14 +386,17 @@ namespace ArmorFragments
             TurretFreeCursorFollow = Config.Bind("TurretAim", "FreeCursorFollowSeconds", 0.25f,
                 new ConfigDescription("With FreeCursor: how quickly the camera closes the distance to the ring once it is outside the zone (the time it takes to cover most of it). Smaller is tighter.",
                     new AcceptableValueRange<float>(0.05f, 1.5f)));
+            TurretFreeCursorRecenter = Config.Bind("TurretAim", "FreeCursorRecenterSeconds", 3f,
+                new ConfigDescription("With FreeCursor: when the mouse has been still for about half a second, the camera slowly turns until the ring is back at the middle of the screen " +
+                    "(the aim does not change, only the view). This is the time it takes to cover most of the distance; 0 = the ring stays where it is.", new AcceptableValueRange<float>(0f, 20f)));
             TurretFreeCursorSensitivity = Config.Bind("TurretAim", "FreeCursorSensitivity", 0.06f,
                 new ConfigDescription("With FreeCursor: degrees the ring moves per count of the mouse (less when zoomed in). The sight's own setting is SightSensitivity.", new AcceptableValueRange<float>(0.01f, 0.5f)));
             TurretAutoReach = Config.Bind("TurretAim", "AutoPreferReachable", true,
                 "Automatic aim: a group prefers the target that the most of its turrets can point at with their rotators (their arcs, as read from each rotator's input), over simply the nearest one. " +
                 "A recording of a ship with 14 turrets on one target: 7 could not turn far enough, because the target was behind them. Turrets that cannot reach still turn as far as they can; they just " +
                 "do not decide what the group shoots at. Off = the nearest target the shell can reach, as before.");
-            TurretDirect = Config.Bind("TurretAim", "DirectControl", false,
-                "EXPERIMENTAL. Aim without the gain: each rotator is moved along a speed profile worked out from what is read from it (its own top speed, the angle it still has to turn to " +
+            TurretDirect = Config.Bind("TurretAim", "DirectControl", true,
+                "Aim without the gain: each rotator is moved along a speed profile worked out from what is read from it (its own top speed, the angle it still has to turn to " +
                 "bring the gun onto the aim, measured from where the barrel will settle), instead of closing a fraction of the gap every physics step. It speeds up over DirectRampSeconds, " +
                 "runs at the rotator's own top speed and slows down so as to arrive exactly. The hull stabilizer, the shared-hull gain division and the gap smoothing are not used. Off = the " +
                 "gain-based control, as before.");

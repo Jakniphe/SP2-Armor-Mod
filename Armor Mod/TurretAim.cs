@@ -439,7 +439,8 @@ namespace ArmorFragments
         private static CameraController previousController;
         private static bool decoupled, returning;
         private static Vector2 aimAngles;              // FreeCursor: where the ring points, as (pitch, yaw) in degrees, the orbit camera's own convention (pitch down is +, yaw right is +)
-        private static bool aimKnown, ownsOrbitCursor;   // aimAngles is set from the camera; this code (not the game) looks after the cursor in the orbit view
+        private static bool aimKnown, ownsOrbitCursor;
+        private static float lastCursorMove;   // Time.unscaledTime of the last mouse movement that moved the ring (the camera recenters on it when the mouse rests)   // aimAngles is set from the camera; this code (not the game) looks after the cursor in the orbit view
         private static Vector2 savedRotation;
         private static float returnVelocityX, returnVelocityY, fovVelocity;
         private static bool fireMouse, fireKey;   // the two fire inputs, as read this frame
@@ -1580,6 +1581,7 @@ namespace ArmorFragments
             {
                 aimAngles = sent;
                 aimKnown = true;
+                lastCursorMove = Time.unscaledTime;
             }
             float dt = Mathf.Clamp(Time.unscaledDeltaTime, 0f, 0.05f);
             float halfHeight = Mathf.Max(cam.fieldOfView * 0.5f, 1f);
@@ -1595,6 +1597,7 @@ namespace ArmorFragments
                 Vector2 seen = new Vector2(aimAngles.x - cameraNow.x, Mathf.DeltaAngle(cameraNow.y, aimAngles.y) * across);
 
                 Vector2 delta = mouse.delta.ReadValue();
+                if (delta.sqrMagnitude > 0.25f) lastCursorMove = Time.unscaledTime;
                 float degrees = ArmorFragmentsPlugin.TurretFreeCursorSensitivity.Value * Mathf.Clamp(sensitivityRef(controller), 0.08f, 1f);
                 Vector2 move = new Vector2(-delta.y * degrees, delta.x * degrees);   // the same signs as the game's mouse look
                 move.x *= EdgeSlowdown(seen.x, move.x, halfHeight);
@@ -1615,6 +1618,16 @@ namespace ArmorFragments
             float away = new Vector2(off.x, off.y * Mathf.Cos(sent.x * Mathf.Deg2Rad)).magnitude;
             float pull = Smooth01((away - 0.6f * zone) / (0.8f * zone));
             float step = pull * (1f - Mathf.Exp(-dt / Mathf.Max(ArmorFragmentsPlugin.TurretFreeCursorFollow.Value, 0.03f)));
+            // The mouse at rest (for half a second, then fading in over 0.7 s): the camera slowly takes the ring back to the middle, whatever the zone
+            // says. The aim does not change (the ring stays where it is in the world); only the view creeps. Not with Alt held or the game paused.
+            float recenter = ArmorFragmentsPlugin.TurretFreeCursorRecenter.Value;
+            if (recenter > 0.01f && !free)
+            {
+                float resting = Smooth01((Time.unscaledTime - lastCursorMove - 0.5f) / 0.7f);
+                step += (1f - pull) * resting * (1f - Mathf.Exp(-dt / recenter));
+            }
+            else if (free) lastCursorMove = Time.unscaledTime;
+            step = Mathf.Min(step, 1f);
             rotationRef(controller) = new Vector2(Mathf.Clamp(sent.x + off.x * step, -89f, 89f), sent.y + off.y * step);
             return Quaternion.Euler(aimAngles.x, aimAngles.y, 0f) * Vector3.forward;
         }
