@@ -706,7 +706,9 @@ namespace ArmorFragments
         // The game asks its camera controller to look after the cursor every frame; in the sight this code does.
         internal static bool OwnsCursor(InteractiveCameraController asked)
         {
-            return Active && sight && asked == sightController;
+            // Through the sight always; and in the orbit view while the camera comes back to the aim after C is let go (the game's mouse look is
+            // off then, so that the mouse does not fight the camera's return, and its controller would show the cursor every frame).
+            return Active && ((sight && asked == sightController) || (!sight && returning && asked == controller));
         }
 
         private static void EnterSight(CameraManagerScript cm)
@@ -1436,6 +1438,13 @@ namespace ArmorFragments
             {
                 bool wantLook = !alt && !returning;
                 if (controller.MouseLook != wantLook) controller.MouseLook = wantLook;
+                // While the camera comes back (C let go) the game's mouse look is off and the cursor stays where the mod keeps it: hidden and
+                // locked, like with the mouse look on (the operating system's cursor showed until the camera had come back, as if Alt were held).
+                if (returning && !paused)
+                {
+                    Cursor.lockState = alt ? CursorLockMode.None : CursorLockMode.Locked;
+                    Cursor.visible = alt;
+                }
             }
 
             // Right button: gradual zoom (and a slower mouse while zoomed, so the aim stays fine).
