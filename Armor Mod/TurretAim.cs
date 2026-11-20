@@ -47,8 +47,10 @@ namespace ArmorFragments
         {
             public JointRotatorScript Script;
             public string Name;
-            public float Range;          // degrees either way (a rotator that wraps has no limit)
+            public float Range;          // degrees either way (the larger of Low and High; a rotator that wraps has no limit)
+            public float Low, High;      // the angles (the game's _angle) the rotator can be asked for: what its input controller allows, not just its Range
             public bool Wraps;
+            public string LimitSource = "";   // for the log
             public bool Marked;          // has the old [TUR] mark (a rotator that only some turret links is not a candidate for the turrets that link nothing)
             public bool Done;            // calibrated (or given up on)
             public bool Usable;          // moves at least one of the guns
@@ -57,6 +59,71 @@ namespace ArmorFragments
             public float[] Lags;         // per gun: how long (s) the barrel takes to follow the angle (measured; 0 = not known)
             public float GapFilter;      // the smoothed gap this rotator is closing (radians), while several turrets share the hull
             public bool GapFilterKnown;
+
+            // The game turns a rotator to (what its input controller says, times Range): _targetAngle = Value * Range, and Value is the input axis scaled
+            // by the controller's min and max. A player who feeds it a Funky Trees expression (x/90 with Range 90: the angle x itself) can ask for far more
+            // than +-Range, and the rotator follows (nothing in the game clamps _targetAngle). So the limits come from the controller:
+            //  - a plain axis: -1..1 through min and max (with the invert);
+            //  - clamp(expression, lo, hi): lo..hi the same way;
+            //  - any other expression: unknown, so no limit (the game's own setup is what the player wants).
+            // Returns where the limits came from, for the log.
+            public Turret WithLimits(PartScript part, JointRotatorScript script)
+            {
+                Turret turret = this;
+                float range = script.JointRotator.Range;
+                turret.Low = -range;
+                turret.High = range;
+                turret.Wraps = script.JointRotator.ShortestAngle;
+                turret.LimitSource = turret.Wraps ? "shortest-angle rotator" : "the rotator's own range";
+                try
+                {
+                    InputControllerScript controller = part != null ? part.GetModifier<InputControllerScript>() : null;
+                    InputControllerData input = controller != null ? controller.InputController : null;
+                    if (input != null && !turret.Wraps)
+                    {
+                        string expression = (input.Input ?? "").Trim();
+                        float lo = -1f, hi = 1f;
+                        bool known = false, unlimited = false;
+                        if (expression.Length == 0 || string.Equals(expression, "Disabled", StringComparison.OrdinalIgnoreCase)) { }
+                        else if (Array.Exists(PlainAxes, name => string.Equals(name, expression, StringComparison.OrdinalIgnoreCase))) known = true;
+                        else
+                        {
+                            System.Text.RegularExpressions.Match match = ClampCall.Match(expression);
+                            float a, b;
+                            if (match.Success &&
+                                float.TryParse(match.Groups[1].Value, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out a) &&
+                                float.TryParse(match.Groups[2].Value, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out b))
+                            {
+                                lo = Mathf.Min(a, b);
+                                hi = Mathf.Max(a, b);
+                                known = true;
+                            }
+                            else unlimited = true;
+                        }
+                        if (known)
+                        {
+                            if (input.Invert && input.InvertType == InvertType.Axis) { float swap = lo; lo = -hi; hi = -swap; }
+                            float v1 = ControllerValue(input, lo), v2 = ControllerValue(input, hi);
+                            float low = Mathf.Min(v1, v2), high = Mathf.Max(v1, v2);
+                            if (lo <= 0f && hi >= 0f) { low = Mathf.Min(low, 0f); high = Mathf.Max(high, 0f); }
+                            turret.Low = low * range;
+                            turret.High = high * range;
+                            turret.LimitSource = "from its input '" + expression + "'";
+                        }
+                        else if (unlimited)
+                        {
+                            turret.Wraps = true;   // no limit: the barrel's own geometry decides which way is shorter
+                            turret.LimitSource = "its input '" + expression + "' is an expression with no clamp: not limited";
+                        }
+                    }
+                }
+                catch (Exception e)
+                {
+                    ArmorFragmentsPlugin.Log.LogWarning("Turret aim: couldn't read the input controller of '" + turret.Name + "' (" + e.Message + "); using its range");
+                }
+                turret.Range = Mathf.Max(Mathf.Abs(turret.Low), Mathf.Abs(turret.High));
+                return turret;
+            }
             public bool Solo;            // the batch test could not place it: it is turned alone
             public HashSet<int> Expect;  // the guns it should move, from the way the bodies are joined (null = can't tell)
             public readonly List<float> HistoryTime = new List<float>();    // the angle the rotator had, step by step (the last second)
@@ -776,6 +843,20 @@ namespace ArmorFragments
             }
         }
 
+        // The inputs of the game that are plain axes from -1 to 1 (the others are Funky Trees expressions).
+        private static readonly string[] PlainAxes = { "Trim", "VTOL", "Throttle", "Brake", "Roll", "Aileron", "Pitch", "Yaw", "Flaps" };
+        private static readonly System.Text.RegularExpressions.Regex ClampCall = new System.Text.RegularExpressions.Regex(
+            @"^\s*clamp\s*\(.*,\s*([-+]?(?:\d+\.?\d*|\.\d+))\s*,\s*([-+]?(?:\d+\.?\d*|\.\d+))\s*\)\s*$",
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.Singleline | System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+
+        // What the input controller makes of an axis value (the game's InputControllerScript.UpdateValue, without the activation).
+        private static float ControllerValue(InputControllerData input, float axis)
+        {
+            float value = axis < 0f ? -axis * input.MinValue : axis * input.MaxValue;
+            if (input.Invert && input.InvertType == InvertType.Output) value = -value;
+            return value;
+        }
+
         private static void Collect(AircraftScript aircraft)
         {
             turrets.Clear();
@@ -802,10 +883,8 @@ namespace ArmorFragments
                         {
                             Script = script,
                             Name = string.IsNullOrEmpty(tags.Label) ? data.PartType.Name : tags.Label,
-                            Range = script.JointRotator.Range,
-                            Wraps = script.JointRotator.ShortestAngle,
                             Marked = true,
-                        });
+                        }.WithLimits(part, script));
                 }
                 if (tags.Pointer != null && tags.Pointer.Group >= 1)   // a turret that is in no group is never aimed
                 {
@@ -843,9 +922,7 @@ namespace ArmorFragments
                         {
                             Script = rotator,
                             Name = string.IsNullOrEmpty(TagCodec.Parse(rotatorPart.Name).Label) ? rotatorPart.PartType.Name : TagCodec.Parse(rotatorPart.Name).Label,
-                            Range = rotator.JointRotator.Range,
-                            Wraps = rotator.JointRotator.ShortestAngle,
-                        });
+                        }.WithLimits(rotatorPart.PartScript, rotator));
                 }
                 foreach (int id in tag.Fixed)
                 {
@@ -2273,7 +2350,7 @@ namespace ArmorFragments
                 float target = current + turret.Signs[index] * (step + (float)hull[i] * dt * share + (float)feed[i] * dt) * Mathf.Rad2Deg;
                 if (!turret.Wraps)
                 {
-                    float clamped = Mathf.Clamp(target, -turret.Range, turret.Range);
+                    float clamped = Mathf.Clamp(target, turret.Low, turret.High);
                     if (Mathf.Abs(clamped - target) > 0.001f && Mathf.Abs(current - clamped) < 0.1f && Mathf.Abs((float)theta[i]) * Mathf.Rad2Deg > 0.3f)
                     {
                         limit = true;
@@ -2861,7 +2938,7 @@ namespace ArmorFragments
                     turret.Usable = true;
                     for (int g = 0; g < guns.Count; g++) { turret.Signs[g] = signs[g]; turret.Scales[g] = scales[g]; turret.Lags[g] = lags[g]; }
                     ArmorFragmentsPlugin.Log.LogInfo("Turret aim: rotator '" + turret.Name + "' for " + jog.Delta.ToString("F0") + " deg turns: " + effects +
-                        "; range " + (turret.Wraps ? "all the way round" : turret.Range.ToString("F0") + " deg"));
+                        "; range " + (turret.Wraps ? "all the way round" : turret.Low.ToString("F0") + " to " + turret.High.ToString("F0") + " deg") + " (" + turret.LimitSource + ")");
                 }
                 else
                 {
