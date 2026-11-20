@@ -174,6 +174,7 @@ namespace ArmorFragments
             public CameraVantageScript Sight;
             public readonly List<FixedCannon> FixedCannons = new List<FixedCannon>();
             public readonly List<Turret> Drivers = new List<Turret>();   // the rotators that turn this turret and no earlier turret of its group
+            public readonly List<Turret> Chain = new List<Turret>();     // the rotators between this gun and the hull, the one nearest the gun first (found by FindHull)
             public Rigidbody Hull;
             public Vector3 PreviousBarrel;
             public bool BarrelKnown;
@@ -239,6 +240,7 @@ namespace ArmorFragments
             public float SolvedAt;              // Time.fixedTime of the last solution
             public bool Solved;                 // Desired is a solution for the current target (Omega can be worked out from the next one)
             public float TargetDistance, FlightTime;
+            public int Reach, Live;             // how many of the group's turrets can point at the target within their rotators' arcs, out of how many are alive
             public float NextScan, NextSolve, RetargetAt, Gate;
             public int FireStart;
             public List<Shooter> Shooters;      // the group's cannons (built the first time they are needed)
@@ -1065,7 +1067,8 @@ namespace ArmorFragments
             if (!calibrated) return "calibrating";
             AutoState state;
             if (!autoStates.TryGetValue(id, out state) || state.Target == null || !state.Has) return "searching";
-            return (state.Target.Air ? "air " : "ground ") + RangeText(state.TargetDistance);
+            return (state.Target.Air ? "air " : "ground ") + RangeText(state.TargetDistance) +
+                   (ArmorFragmentsPlugin.TurretAutoReach.Value && state.Live > 1 ? "  " + state.Reach + "/" + state.Live : "");
         }
 
         private static float nextBlockedCheck;
@@ -2182,32 +2185,121 @@ namespace ArmorFragments
             }
         }
 
+        private const float ReachToleranceDegrees = 3f;
+
+        // How many of the group's live turrets can bring their barrel onto the aim of this solution with their rotators, within their arcs.
+        private static int ReachCount(int id, Gun autoLead, Vector3 muzzle, AimSolution solution)
+        {
+            Vector3 aimPoint = muzzle + solution.Direction * solution.Range;
+            int count = 0;
+            for (int g = 0; g < guns.Count; g++)
+            {
+                Gun gun = guns[g];
+                if (gun.GroupId != id || !Live(gun)) continue;
+                Vector3 want = gun == autoLead ? solution.Direction : (aimPoint - gun.Cannon.TipPosition).normalized;
+                if (CanReach(gun, g, want)) count++;
+            }
+            return count;
+        }
+
+        // Can this turret's rotators, each within its own arc, bring the barrel onto 'want'? The rotators are worked through from the one farthest
+        // from the gun (the ring) to the one nearest it (the elevation), a few times round: each turns the barrel about its own axis as far as is
+        // needed to bring it nearest the wanted direction, or as far as its arc lets it, and the axes of the rotators nearer the gun turn with it.
+        private static bool CanReach(Gun gun, int index, Vector3 want)
+        {
+            Vector3 barrel = gun.Cannon.transform.forward;
+            List<Turret> chain = new List<Turret>();
+            foreach (Turret turret in gun.Chain) if (gun.Drivers.Contains(turret)) chain.Add(turret);
+            foreach (Turret turret in gun.Drivers) if (!chain.Contains(turret)) chain.Add(turret);
+            if (chain.Count == 0) return Vector3.Angle(barrel, want) <= ReachToleranceDegrees;
+            int n = chain.Count;
+            Vector3[] axes = new Vector3[n];
+            float[] angle = new float[n];
+            for (int i = 0; i < n; i++)
+            {
+                axes[i] = AxisOf(chain[i].Script);
+                angle[i] = angleRef(chain[i].Script);
+            }
+            for (int pass = 0; pass < 4; pass++)
+            {
+                for (int i = n - 1; i >= 0; i--)
+                {
+                    Turret turret = chain[i];
+                    float sign = turret.Signs[index];
+                    if (sign == 0f) continue;
+                    float scale = turret.Scales[index] > 0.05f ? Mathf.Clamp(turret.Scales[index], 0.3f, 3f) : 1f;
+                    Vector3 projectedBarrel = Vector3.ProjectOnPlane(barrel, axes[i]);
+                    Vector3 projectedWant = Vector3.ProjectOnPlane(want, axes[i]);
+                    if (projectedBarrel.sqrMagnitude < 1e-6f || projectedWant.sqrMagnitude < 1e-6f) continue;
+                    float needed = Vector3.SignedAngle(projectedBarrel, projectedWant, axes[i]);   // degrees the barrel must turn about this axis
+                    float wanted = angle[i] + sign * needed / scale;
+                    float next = turret.Wraps ? wanted : Mathf.Clamp(wanted, turret.Low, turret.High);
+                    float turned = sign * scale * (next - angle[i]);
+                    if (Mathf.Abs(turned) < 1e-4f) continue;
+                    Quaternion rotation = Quaternion.AngleAxis(turned, axes[i]);
+                    barrel = rotation * barrel;
+                    for (int j = 0; j < i; j++) axes[j] = rotation * axes[j];
+                    angle[i] = next;
+                }
+            }
+            return Vector3.Angle(barrel, want) <= ReachToleranceDegrees;
+        }
+
         private static void ChooseTarget(int id, AutoState state, Gun autoLead, Vector3 muzzle, bool lead, bool drop, float now)
         {
             AutoAim.Scan(craft, muzzle, AutoModeOf(id), scanBuffer);
             ShellModel shell = AutoAim.ShellOf(autoLead.Cannon, craft.Velocity);
 
+            bool byReach = ArmorFragmentsPlugin.TurretAutoReach.Value;
+            int live = 0;
+            if (byReach) foreach (Gun gun in guns) if (gun.GroupId == id && Live(gun)) live++;
+
             AutoTarget keep = null;
+            int keepReach = 0;
             if (state.Target != null)
                 foreach (AutoTarget candidate in scanBuffer)
                     if (candidate.Source == state.Target.Source) { keep = candidate; break; }
-            if (keep != null && !AutoAim.Solve(shell, keep.Position, keep.Velocity, lead, drop).Ok) keep = null;
-
-            AutoTarget best = null;
-            int tried = 0;
-            foreach (AutoTarget candidate in scanBuffer)
+            if (keep != null)
             {
-                if (++tried > 6) break;   // the nearest few: the rest are further and the shell may not reach them either
-                if (AutoAim.Solve(shell, candidate.Position, candidate.Velocity, lead, drop).Ok) { best = candidate; break; }
+                AimSolution keepSolution = AutoAim.Solve(shell, keep.Position, keep.Velocity, lead, drop);
+                if (!keepSolution.Ok) keep = null;
+                else if (byReach) keepReach = ReachCount(id, autoLead, muzzle, keepSolution);
             }
 
-            AutoTarget chosen = keep != null && (best == null || best == keep || best.Distance >= keep.Distance * 0.6f || now < state.RetargetAt) ? keep : best;
+            // The nearest few that the shell can reach; with PreferReachable, the one that most of the group's turrets can turn onto (the nearest of
+            // those that tie). A recording of 14 turrets on one ship: the group went for the nearest target, 7 of the turrets could not turn far enough
+            // to point at it (it was behind them), and the others were left to do all the shooting.
+            AutoTarget best = null;
+            int bestReach = -1;
+            int tried = 0, solved = 0;
+            foreach (AutoTarget candidate in scanBuffer)
+            {
+                if (++tried > 12) break;
+                AimSolution solution = AutoAim.Solve(shell, candidate.Position, candidate.Velocity, lead, drop);
+                if (!solution.Ok) continue;
+                if (!byReach) { best = candidate; bestReach = 0; break; }
+                int reach = ReachCount(id, autoLead, muzzle, solution);
+                if (reach > bestReach) { best = candidate; bestReach = reach; }
+                if (++solved >= 6 || reach >= live) break;   // enough looked at, or one that all of them can reach
+            }
+
+            // Keep the target unless another one is clearly better: more turrets can reach it (and by a margin, so two targets that are about equal
+            // do not trade places), or as many can and it is much nearer. Never within 3 s of the last change.
+            bool switchTarget = best != null && best != keep && now >= state.RetargetAt && (keep == null ||
+                                (byReach && bestReach > keepReach && (keepReach == 0 || bestReach >= keepReach * 1.3f)) ||
+                                (bestReach == keepReach && best.Distance < keep.Distance * 0.6f) ||
+                                (!byReach && best.Distance < keep.Distance * 0.6f));
+            AutoTarget chosen = keep != null && !switchTarget ? keep : best;
+            int chosenReach = chosen == keep ? keepReach : bestReach;
+            state.Live = live;
+            state.Reach = byReach ? Mathf.Max(chosenReach, 0) : live;
             if (chosen != null && (state.Target == null || chosen.Source != state.Target.Source))
             {
                 state.RetargetAt = now + 3f;
                 state.Solved = false;   // a new target: the aim's rate of turning starts again
                 ArmorFragmentsPlugin.Log.LogInfo("Turret aim: group " + NameOf(id) + " now aims at '" + chosen.Name + "' (" + (chosen.Air ? "air" : "ground") + ", " +
-                                                 chosen.Distance.ToString("F0") + " m, " + chosen.Velocity.magnitude.ToString("F0") + " m/s)");
+                                                 chosen.Distance.ToString("F0") + " m, " + chosen.Velocity.magnitude.ToString("F0") + " m/s)" +
+                                                 (byReach ? "; " + Mathf.Max(chosenReach, 0) + " of " + live + " turrets can turn onto it" : ""));
             }
             else if (chosen == null && state.Target != null)
                 ArmorFragmentsPlugin.Log.LogInfo("Turret aim: group " + NameOf(id) + " has no target now");
@@ -2265,7 +2357,7 @@ namespace ArmorFragments
         // degree of the angle) with the calibrated sign. The speed is the one that arrives exactly with the acceleration the ramp allows
         // (v = sqrt(2 a d)), never above the rotator's own top speed, never more than what ends the gap in one step, plus the rate the aim itself
         // turns at (a target), and it changes by at most a * dt a step, so there is no jolt (the game's own rotator stops dead at its target).
-        private static float DirectVelocity(Turret turret, int index, float gap, float feed, float dt)
+        private static float DirectVelocity(Turret turret, int index, float gap, float feed, float dt, float gainScale)
         {
             float scale = turret.Scales[index] > 0.05f ? Mathf.Clamp(turret.Scales[index], 0.3f, 3f) : 1f;
             float top = 10f;
@@ -2283,7 +2375,10 @@ namespace ArmorFragments
                 // small gap: a springy joint whose barrel rings at 3-5 Hz showed a gap of a degree every few hundredths of a second, and the
                 // rotator was sent at its top speed back and forth (a recording: the elevation swinging at 4.5 Hz; a model reproduces it, and
                 // with this zone the swing is gone for joints from 2.5 to 4.5 Hz and a damping from 0.08 to 0.17).
-                float gain = Mathf.Max(ArmorFragmentsPlugin.TurretDirectGain.Value, 0.1f);
+                // The gain near the aim is the configured one divided like the gain-based control's (by the turrets on the hull, and cut by the swing
+                // detectors), never below 0.3 a second (or the configured value, if that is lower).
+                float configured = Mathf.Max(ArmorFragmentsPlugin.TurretDirectGain.Value, 0.1f);
+                float gain = Mathf.Max(configured * Mathf.Clamp01(gainScale), Mathf.Min(configured, 0.3f));
                 float linearDistance = accel / (gain * gain);
                 float speed = distance <= linearDistance ? gain * distance : Mathf.Sqrt(2f * accel * (distance - 0.5f * linearDistance));
                 closing = Mathf.Sign(remaining) * Mathf.Min(Mathf.Min(top, speed), distance / Mathf.Max(dt, 1e-4f));
@@ -2377,7 +2472,8 @@ namespace ArmorFragments
             // seconds); in a model fitted to it, braking by the gun's speed kept it stable over every coupling and delay tried and took the
             // overshoot of a 20 degree move from 18 degrees to none, where lowering the gain did not help.
             float brake = ArmorFragmentsPlugin.TurretDerivative.Value;
-            double[] speed = brake > 0f && gun.BarrelKnown ? Solve(axes, gun.FastSpin) : new double[use.Count];
+            bool directBraking = ArmorFragmentsPlugin.TurretDirect.Value && gun.Share >= 2 && ArmorFragmentsPlugin.TurretDirectBrake.Value > 0f;
+            double[] speed = (brake > 0f || directBraking) && gun.BarrelKnown ? Solve(axes, gun.FastSpin) : new double[use.Count];
 
             // Following a moving aim (a target): the rotators turn at the rate the wanted direction turns, and the braking is of the barrel's speed
             // RELATIVE to it (a barrel that keeps up with the target is not being braked for it).
@@ -2408,7 +2504,9 @@ namespace ArmorFragments
             // turrets cannot follow that and chasing it rocks the hull more (a model of 14 turrets: a gain of 2 a second rocks it for ever, and with
             // the gap smoothed over 0.4 s the same gain is steady, for hull delays from 50 to 80 ms). One turret is never smoothed.
             bool direct = ArmorFragmentsPlugin.TurretDirect.Value;
-            float smoothing = ArmorFragmentsPlugin.TurretErrorFilter.Value * Mathf.Clamp01((gun.Share - 1) / 3f);
+            // (In direct control the protections are full from two turrets on: a model of N turrets on a hull was stable for N = 2 to 20 and delays of 30 to
+            // 120 ms with the full braking and smoothing, and N = 2 and 3 were not with the partial ones the gain-based control uses.)
+            float smoothing = ArmorFragmentsPlugin.TurretErrorFilter.Value * (direct ? (gun.Share >= 2 ? 1f : 0f) : Mathf.Clamp01((gun.Share - 1) / 3f));
             float smoothingStep = smoothing > 0.001f ? 1f - Mathf.Exp(-dt / smoothing) : 1f;
             for (int i = 0; i < use.Count; i++)
             {
@@ -2451,7 +2549,12 @@ namespace ArmorFragments
                 if (gun.Share <= 2 && Mathf.Abs(gap) > SmallestGapDegrees * Mathf.Deg2Rad && Mathf.Sign(step) == Mathf.Sign(gap) && Mathf.Abs(step) < MicroStepDegrees * Mathf.Deg2Rad)
                     step = Mathf.Sign(gap) * Mathf.Min(Mathf.Abs(gap), MicroStepDegrees * Mathf.Deg2Rad);
                 float target = current + turret.Signs[index] * (step + (float)hull[i] * dt * share + (float)feed[i] * dt) * Mathf.Rad2Deg;
-                if (direct) target = current + DirectVelocity(turret, index, (float)theta[i], (float)feed[i], dt) * dt;
+                if (direct)
+                {
+                    float directGap = gapUsed;
+                    if (directBraking) directGap -= ArmorFragmentsPlugin.TurretDirectBrake.Value * ((float)speed[i] - (float)feed[i]);
+                    target = current + DirectVelocity(turret, index, directGap, (float)feed[i], dt, share * hullShake * gun.GainScale) * dt;
+                }
                 if (!turret.Wraps)
                 {
                     float clamped = Mathf.Clamp(target, turret.Low, turret.High);
@@ -2520,7 +2623,7 @@ namespace ArmorFragments
             text.AppendLine("Turrets at full gain per hull (SharedHullFullGain): " + ArmorFragmentsPlugin.TurretShareStrength.Value);
             text.AppendLine("Gap smoothing (ErrorFilterSeconds): " + ArmorFragmentsPlugin.TurretErrorFilter.Value);
             text.AppendLine("Direct control (DirectControl): " + ArmorFragmentsPlugin.TurretDirect.Value + ", ramp " + ArmorFragmentsPlugin.TurretDirectRamp.Value + " s, dead band " +
-                            ArmorFragmentsPlugin.TurretDirectDeadband.Value + " deg, gain " + ArmorFragmentsPlugin.TurretDirectGain.Value + " /s");
+                            ArmorFragmentsPlugin.TurretDirectDeadband.Value + " deg, gain " + ArmorFragmentsPlugin.TurretDirectGain.Value + " /s, braking " + ArmorFragmentsPlugin.TurretDirectBrake.Value + " s (several turrets)");
             text.AppendLine("Turret start stagger (MoveStaggerSeconds): " + ArmorFragmentsPlugin.TurretMoveStagger.Value);
             text.AppendLine("Fire only on target (FireOnlyOnTarget): " + ArmorFragmentsPlugin.TurretFireOnTarget.Value + ", tolerance " + ArmorFragmentsPlugin.TurretFireTolerance.Value + " deg");
             text.AppendLine("Salvo ripple (FireStaggerSeconds): " + ArmorFragmentsPlugin.TurretFireStagger.Value);
@@ -3158,6 +3261,7 @@ namespace ArmorFragments
             {
                 Gun gun = guns[g];
                 gun.Hull = null;
+                gun.Chain.Clear();
                 Rigidbody current = gun.Cannon != null ? BodyOf(gun.Cannon.PartScript) : null;
                 if (current == null) continue;
                 List<Turret> left = turrets.FindAll(t => t.Usable && t.Script != null && jointRef(t.Script) != null);
@@ -3174,6 +3278,7 @@ namespace ArmorFragments
                     }
                     if (found == null || parent == null) break;
                     left.Remove(found);
+                    gun.Chain.Add(found);
                     current = parent;
                 }
                 gun.Hull = current;

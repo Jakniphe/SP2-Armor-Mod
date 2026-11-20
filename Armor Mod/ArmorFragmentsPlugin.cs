@@ -174,8 +174,8 @@ namespace ArmorFragments
         internal static ConfigEntry<float> TurretDerivative;
         internal static ConfigEntry<bool> TurretFireOnTarget, TurretLineOfFire, TurretShareHull;
         internal static ConfigEntry<float> TurretShareStrength, TurretErrorFilter;
-        internal static ConfigEntry<bool> TurretDirect;
-        internal static ConfigEntry<float> TurretDirectRamp, TurretDirectDeadband, TurretDirectGain;
+        internal static ConfigEntry<bool> TurretDirect, TurretAutoReach;
+        internal static ConfigEntry<float> TurretDirectRamp, TurretDirectDeadband, TurretDirectGain, TurretDirectBrake;
         internal static ConfigEntry<bool> TurretGroupsHudEnabled;
         internal static ConfigEntry<bool> TurretTestSingle;
         internal static ConfigEntry<float> TurretFireTolerance, TurretFireStagger, TurretMoveStagger;
@@ -375,6 +375,10 @@ namespace ArmorFragments
                 new ConfigDescription("When several turrets share a hull, the gap each one is closing is smoothed over this many seconds, so a hull that rocks (2 times a second) is not chased " +
                     "by the turrets, which would rock it more. In the model it lets the gain be 4 times higher for the same steadiness. 0 = off. A single turret is never smoothed.",
                     new AcceptableValueRange<float>(0f, 1.5f)));
+            TurretAutoReach = Config.Bind("TurretAim", "AutoPreferReachable", true,
+                "Automatic aim: a group prefers the target that the most of its turrets can point at with their rotators (their arcs, as read from each rotator's input), over simply the nearest one. " +
+                "A recording of a ship with 14 turrets on one target: 7 could not turn far enough, because the target was behind them. Turrets that cannot reach still turn as far as they can; they just " +
+                "do not decide what the group shoots at. Off = the nearest target the shell can reach, as before.");
             TurretDirect = Config.Bind("TurretAim", "DirectControl", false,
                 "EXPERIMENTAL. Aim without the gain: each rotator is moved along a speed profile worked out from what is read from it (its own top speed, the angle it still has to turn to " +
                 "bring the gun onto the aim, measured from where the barrel will settle), instead of closing a fraction of the gap every physics step. It speeds up over DirectRampSeconds, " +
@@ -388,6 +392,12 @@ namespace ArmorFragments
                     "Farther away it follows the speed profile (speeds up, runs at top speed, slows to arrive). Without this zone the speed went to the top for a gap of a degree and a springy joint " +
                     "(its barrel ringing at 3 to 5 Hz) made the rotator swing back and forth: a recording showed the elevation swinging at 4.5 Hz. Lower is calmer and slower to settle.",
                     new AcceptableValueRange<float>(0.5f, 12f)));
+            TurretDirectBrake = Config.Bind("TurretAim", "DirectBrakingSeconds", 0.15f,
+                new ConfigDescription("With DirectControl and two or more turrets of the groups being aimed on one hull: the gap each rotator closes is reduced by the gun's own speed times this many " +
+                    "seconds (the same braking BrakingSeconds gives the gain-based control), and the gap is smoothed over ErrorFilterSeconds, and the gain near the aim is divided by the number of " +
+                    "turrets as SharedHullFullGain says. A model of turrets on one hull (the hull rocks at 2 Hz and the rotators push it) was unstable for any gain without the braking, and a " +
+                    "recording of 6 turrets under the direct control swung at 2 Hz with a growing amplitude. A lone turret uses none of the three. 0 = no braking.",
+                    new AcceptableValueRange<float>(0f, 0.5f)));
             TurretDirectDeadband = Config.Bind("TurretAim", "DirectDeadbandDegrees", 0.05f,
                 new ConfigDescription("With DirectControl: a rotator whose angle still to go is smaller than this rests (the settled gap is noisy by about a tenth of a degree).",
                     new AcceptableValueRange<float>(0f, 1f)));
