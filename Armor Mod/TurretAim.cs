@@ -51,6 +51,7 @@ namespace ArmorFragments
             public float Low, High;      // the angles (the game's _angle) the rotator can be asked for: what its input controller allows, not just its Range
             public bool Wraps;
             public string LimitSource = "";   // for the log
+            public float DirectV;        // DirectControl: the speed (degrees a second, in the rotator's angle) the rotator is commanded to turn at
             public bool Marked;          // has the old [TUR] mark (a rotator that only some turret links is not a candidate for the turrets that link nothing)
             public bool Done;            // calibrated (or given up on)
             public bool Usable;          // moves at least one of the guns
@@ -444,6 +445,7 @@ namespace ArmorFragments
 
         private static AccessTools.FieldRef<JointRotatorScript, ConfigurableJoint> jointRef;
         private static AccessTools.FieldRef<JointRotatorScript, float> angleRef, targetRef;
+        private static AccessTools.FieldRef<JointRotatorScript, float> speedRef;   // the rotator's top speed (degrees a second); null = not readable
         private static AccessTools.FieldRef<JointRotatorScript, bool> freeSpinRef, floppyRef;
         private static AccessTools.FieldRef<JointRotatorScript, Vector3> perpendicularRef, connectedPerpendicularRef;
         private static bool guardRefsOk;
@@ -469,6 +471,8 @@ namespace ArmorFragments
                 targetRef = AccessTools.FieldRefAccess<JointRotatorScript, float>("_targetAngle");
                 freeSpinRef = AccessTools.FieldRefAccess<JointRotatorScript, bool>("_freeSpin");
                 floppyRef = AccessTools.FieldRefAccess<JointRotatorScript, bool>("_floppyJoint");
+                try { speedRef = AccessTools.FieldRefAccess<JointRotatorScript, float>("_speed"); }
+                catch (Exception) { speedRef = null; }   // only DirectControl needs it (it falls back to the data's speed)
                 try
                 {
                     // For the obstacle guard (where the part really is). If the game changes these, only the guard is lost.
@@ -1830,6 +1834,7 @@ namespace ArmorFragments
                     return target;
                 }
                 angleRef(script) = turret.PhysAngle;   // nothing pushes: the joint is asked to stay where the part is
+                turret.DirectV = 0f;
                 turret.PreviousCommand = turret.PhysAngle;
                 return KeepOutOf(turret, target);
             }
@@ -1859,6 +1864,7 @@ namespace ArmorFragments
             turret.BlockedAt = now;
             turret.StallSince = -1f;
             angleRef(script) = turret.PhysAngle;
+            turret.DirectV = 0f;
             turret.PreviousCommand = turret.PhysAngle;
             if (now - turret.LastLogged > 2f)
             {
@@ -1906,7 +1912,7 @@ namespace ArmorFragments
         private static void HoldAll()
         {
             foreach (Turret turret in turrets)
-                if (turret.Script != null) commands[turret.Script] = angleRef(turret.Script);
+                if (turret.Script != null) { commands[turret.Script] = angleRef(turret.Script); turret.DirectV = 0f; }
         }
 
         // What angle a rotator had at a time (the last second is kept): the angle it was asked for a moment ago is the part of the barrel's
@@ -2042,7 +2048,7 @@ namespace ArmorFragments
             }
 
             foreach (Turret turret in turrets)
-                if (!driven.Contains(turret) && turret.Script != null) commands[turret.Script] = angleRef(turret.Script);
+                if (!driven.Contains(turret) && turret.Script != null) { commands[turret.Script] = angleRef(turret.Script); turret.DirectV = 0f; }
             atLimit = limit;
         }
 
@@ -2254,6 +2260,29 @@ namespace ArmorFragments
             }
         }
 
+        // DirectControl: the speed (degrees a second of the rotator's angle) this step. 'gap' is the rotation (rad, about this rotator's axis) that
+        // takes the barrel, as it will settle, onto the aim, so the angle still to go is that over the measured scale (degrees the barrel turns for a
+        // degree of the angle) with the calibrated sign. The speed is the one that arrives exactly with the acceleration the ramp allows
+        // (v = sqrt(2 a d)), never above the rotator's own top speed, never more than what ends the gap in one step, plus the rate the aim itself
+        // turns at (a target), and it changes by at most a * dt a step, so there is no jolt (the game's own rotator stops dead at its target).
+        private static float DirectVelocity(Turret turret, int index, float gap, float feed, float dt)
+        {
+            float scale = turret.Scales[index] > 0.05f ? Mathf.Clamp(turret.Scales[index], 0.3f, 3f) : 1f;
+            float top = 10f;
+            try { top = speedRef != null ? speedRef(turret.Script) : top; } catch (Exception) { }
+            if (!(top > 0.5f)) top = 10f;
+            float accel = top / Mathf.Max(ArmorFragmentsPlugin.TurretDirectRamp.Value, 0.02f);
+            float remaining = turret.Signs[index] * gap * Mathf.Rad2Deg / scale;
+            float feedDegrees = turret.Signs[index] * feed * Mathf.Rad2Deg;
+            float distance = Mathf.Abs(remaining);
+            float closing = 0f;
+            if (distance > ArmorFragmentsPlugin.TurretDirectDeadband.Value)
+                closing = Mathf.Sign(remaining) * Mathf.Min(Mathf.Min(top, Mathf.Sqrt(2f * accel * distance)), distance / Mathf.Max(dt, 1e-4f));
+            float wanted = Mathf.Clamp(feedDegrees + closing, -top, top);
+            turret.DirectV = Mathf.MoveTowards(turret.DirectV, wanted, accel * dt);
+            return turret.DirectV;
+        }
+
         // 'feedRate': how fast 'want' turns in the world (rad/s); the rotators are told to turn at that rate besides closing the gap (zero for the
         // cursor). 'catchUp': a big gap closes faster than the gentle gain a shared hull needs (see below).
         private static void StepGun(int index, Gun gun, bool isLead, Vector3 want, float dt, HashSet<Turret> driven, ref bool limit, Vector3 feedRate, bool catchUp)
@@ -2368,6 +2397,7 @@ namespace ArmorFragments
             // With several turrets on one hull, the gap each closes is smoothed: the hull rocks at about 2 Hz (as the barrel's gap does with it), the
             // turrets cannot follow that and chasing it rocks the hull more (a model of 14 turrets: a gain of 2 a second rocks it for ever, and with
             // the gap smoothed over 0.4 s the same gain is steady, for hull delays from 50 to 80 ms). One turret is never smoothed.
+            bool direct = ArmorFragmentsPlugin.TurretDirect.Value;
             float smoothing = ArmorFragmentsPlugin.TurretErrorFilter.Value * Mathf.Clamp01((gun.Share - 1) / 3f);
             float smoothingStep = smoothing > 0.001f ? 1f - Mathf.Exp(-dt / smoothing) : 1f;
             for (int i = 0; i < use.Count; i++)
@@ -2411,6 +2441,7 @@ namespace ArmorFragments
                 if (gun.Share <= 2 && Mathf.Abs(gap) > SmallestGapDegrees * Mathf.Deg2Rad && Mathf.Sign(step) == Mathf.Sign(gap) && Mathf.Abs(step) < MicroStepDegrees * Mathf.Deg2Rad)
                     step = Mathf.Sign(gap) * Mathf.Min(Mathf.Abs(gap), MicroStepDegrees * Mathf.Deg2Rad);
                 float target = current + turret.Signs[index] * (step + (float)hull[i] * dt * share + (float)feed[i] * dt) * Mathf.Rad2Deg;
+                if (direct) target = current + DirectVelocity(turret, index, (float)theta[i], (float)feed[i], dt) * dt;
                 if (!turret.Wraps)
                 {
                     float clamped = Mathf.Clamp(target, turret.Low, turret.High);
@@ -2420,6 +2451,7 @@ namespace ArmorFragments
                         pinned = true;
                     }
                     target = clamped;
+                    if (direct) turret.DirectV = (target - current) / Mathf.Max(dt, 1e-4f);   // the end of its travel: the speed it really has now
                 }
                 // A rotator that has met an obstacle and is asked to go further into it is held (see GuardRotator): that turret can't reach, so it
                 // is not counted in the hull share either.
@@ -2477,6 +2509,8 @@ namespace ArmorFragments
             text.AppendLine("Slow turrets sharing a hull (SlowSharedHull): " + ArmorFragmentsPlugin.TurretShareHull.Value);
             text.AppendLine("Turrets at full gain per hull (SharedHullFullGain): " + ArmorFragmentsPlugin.TurretShareStrength.Value);
             text.AppendLine("Gap smoothing (ErrorFilterSeconds): " + ArmorFragmentsPlugin.TurretErrorFilter.Value);
+            text.AppendLine("Direct control (DirectControl): " + ArmorFragmentsPlugin.TurretDirect.Value + ", ramp " + ArmorFragmentsPlugin.TurretDirectRamp.Value + " s, dead band " +
+                            ArmorFragmentsPlugin.TurretDirectDeadband.Value + " deg");
             text.AppendLine("Turret start stagger (MoveStaggerSeconds): " + ArmorFragmentsPlugin.TurretMoveStagger.Value);
             text.AppendLine("Fire only on target (FireOnlyOnTarget): " + ArmorFragmentsPlugin.TurretFireOnTarget.Value + ", tolerance " + ArmorFragmentsPlugin.TurretFireTolerance.Value + " deg");
             text.AppendLine("Salvo ripple (FireStaggerSeconds): " + ArmorFragmentsPlugin.TurretFireStagger.Value);

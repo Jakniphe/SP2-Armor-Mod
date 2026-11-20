@@ -174,6 +174,8 @@ namespace ArmorFragments
         internal static ConfigEntry<float> TurretDerivative;
         internal static ConfigEntry<bool> TurretFireOnTarget, TurretLineOfFire, TurretShareHull;
         internal static ConfigEntry<float> TurretShareStrength, TurretErrorFilter;
+        internal static ConfigEntry<bool> TurretDirect;
+        internal static ConfigEntry<float> TurretDirectRamp, TurretDirectDeadband;
         internal static ConfigEntry<bool> TurretGroupsHudEnabled;
         internal static ConfigEntry<bool> TurretTestSingle;
         internal static ConfigEntry<float> TurretFireTolerance, TurretFireStagger, TurretMoveStagger;
@@ -373,6 +375,17 @@ namespace ArmorFragments
                 new ConfigDescription("When several turrets share a hull, the gap each one is closing is smoothed over this many seconds, so a hull that rocks (2 times a second) is not chased " +
                     "by the turrets, which would rock it more. In the model it lets the gain be 4 times higher for the same steadiness. 0 = off. A single turret is never smoothed.",
                     new AcceptableValueRange<float>(0f, 1.5f)));
+            TurretDirect = Config.Bind("TurretAim", "DirectControl", false,
+                "EXPERIMENTAL. Aim without the gain: each rotator is moved along a speed profile worked out from what is read from it (its own top speed, the angle it still has to turn to " +
+                "bring the gun onto the aim, measured from where the barrel will settle), instead of closing a fraction of the gap every physics step. It speeds up over DirectRampSeconds, " +
+                "runs at the rotator's own top speed and slows down so as to arrive exactly. The hull stabilizer, the shared-hull gain division and the gap smoothing are not used. Off = the " +
+                "gain-based control, as before.");
+            TurretDirectRamp = Config.Bind("TurretAim", "DirectRampSeconds", 0.3f,
+                new ConfigDescription("With DirectControl: how long a rotator takes to go from rest to its top speed (and back). Shorter is faster to arrive and harder on the hull; with many " +
+                    "turrets on one hull a longer ramp is gentler.", new AcceptableValueRange<float>(0.05f, 2f)));
+            TurretDirectDeadband = Config.Bind("TurretAim", "DirectDeadbandDegrees", 0.05f,
+                new ConfigDescription("With DirectControl: a rotator whose angle still to go is smaller than this rests (the settled gap is noisy by about a tenth of a degree).",
+                    new AcceptableValueRange<float>(0f, 1f)));
             TurretFireOnTarget = Config.Bind("TurretAim", "FireOnlyOnTarget", true,
                 "In mouse aim, a turret fires only when its gun points within FireToleranceDegrees of where it should (the cursor). Turrets still turning, or stopped at their limit, hold fire while the others shoot.");
             TurretFireTolerance = Config.Bind("TurretAim", "FireToleranceDegrees", 2f,

@@ -335,6 +335,13 @@ namespace ArmorFragments.UI
                 "How many turrets of the group can work at full gain on one hull; with more, each one's gain is this number divided by the number of turrets (14 turrets: a seventh).", 0.1f, "");
             FloatSetting(ArmorFragmentsPlugin.TurretErrorFilter, "Gap smoothing (many turrets)",
                 "When several turrets share a hull, the gap each is closing is smoothed over this many seconds, so a rocking hull is not chased (which rocked it more). 0 = off. A single turret is never smoothed.", 0.05f, " s");
+            ToggleSetting(ArmorFragmentsPlugin.TurretDirect, "Direct control (experimental)",
+                "Aims by moving each rotator along a speed profile from the rotator's own top speed and the angle still to go, instead of closing a fraction of the gap each step. The hull stabilizer, " +
+                "the shared-hull gain division and the gap smoothing are not used. Compare it with the recording button. Off = the gain-based control.");
+            FloatSetting(ArmorFragmentsPlugin.TurretDirectRamp, "Direct control: ramp",
+                "Time a rotator takes to go from rest to its top speed, and back to rest. A longer ramp is gentler on a shared hull.", 0.05f, " s");
+            FloatSetting(ArmorFragmentsPlugin.TurretDirectDeadband, "Direct control: dead band",
+                "A rotator whose angle still to go is smaller than this rests.", 0.01f, " deg");
             ToggleSetting(ArmorFragmentsPlugin.TurretFireOnTarget, "Fire only turrets on target",
                 "A turret fires only when its gun points within the tolerance of the cursor. Turrets still turning, or stopped at their limit, hold fire while the others shoot.");
             FloatSetting(ArmorFragmentsPlugin.TurretFireTolerance, "On-target tolerance",
