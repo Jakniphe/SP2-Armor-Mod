@@ -329,6 +329,23 @@ namespace ArmorFragments.UI
                 new KeyValuePair<string, Action>("<  Previous turret", () => TurretAim.TestStep(-1)),
                 new KeyValuePair<string, Action>("Next turret  >", () => TurretAim.TestStep(1)),
             });
+            // Five saved sets of the control's gains (direct control, response, braking, damping, shared hull...): pick one to load it, Save to
+            // write the numbers in use into the picked one.
+            builder.Text("Control profiles", "Pick a profile to load its gains (direct control and its ramp, gain, braking and dead band; response, braking, damping; shared hull; gap smoothing; start stagger). " +
+                "Change the sliders below as you like and press Save to keep them in the picked profile.");
+            Live("Control profile", () => TurretProfiles.Status);
+            builder.Buttons(new List<KeyValuePair<string, Action>>
+            {
+                new KeyValuePair<string, Action>("Profile 1", () => LoadProfile(1)),
+                new KeyValuePair<string, Action>("Profile 2", () => LoadProfile(2)),
+                new KeyValuePair<string, Action>("Profile 3", () => LoadProfile(3)),
+                new KeyValuePair<string, Action>("Profile 4", () => LoadProfile(4)),
+                new KeyValuePair<string, Action>("Profile 5", () => LoadProfile(5)),
+            });
+            builder.Buttons(new List<KeyValuePair<string, Action>>
+            {
+                new KeyValuePair<string, Action>("Save gains to the picked profile", TurretProfiles.Save),
+            });
             ToggleSetting(ArmorFragmentsPlugin.TurretShareHull, "Slow turrets sharing a hull",
                 "Each turret's gain is divided by the number of turrets of the group on the same hull body: many turrets pushing one hull together made it rock. Off for turrets on a heavy hull that does not move.");
             FloatSetting(ArmorFragmentsPlugin.TurretShareStrength, "Turrets at full gain per hull",
@@ -662,6 +679,13 @@ namespace ArmorFragments.UI
             NetSync.SaveConfig();
 
             // Rebuilding destroys the button being clicked, so wait for Update.
+            rebuildRequested = true;
+        }
+
+        private void LoadProfile(int number)
+        {
+            TurretProfiles.Select(number);
+            // The sliders show the old numbers; rebuilding destroys the button being clicked, so wait for Update.
             rebuildRequested = true;
         }
 
