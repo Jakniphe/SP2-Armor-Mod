@@ -175,7 +175,7 @@ namespace ArmorFragments
         internal static ConfigEntry<bool> TurretFireOnTarget, TurretLineOfFire, TurretShareHull;
         internal static ConfigEntry<float> TurretShareStrength, TurretErrorFilter;
         internal static ConfigEntry<bool> TurretDirect;
-        internal static ConfigEntry<float> TurretDirectRamp, TurretDirectDeadband;
+        internal static ConfigEntry<float> TurretDirectRamp, TurretDirectDeadband, TurretDirectGain;
         internal static ConfigEntry<bool> TurretGroupsHudEnabled;
         internal static ConfigEntry<bool> TurretTestSingle;
         internal static ConfigEntry<float> TurretFireTolerance, TurretFireStagger, TurretMoveStagger;
@@ -383,6 +383,11 @@ namespace ArmorFragments
             TurretDirectRamp = Config.Bind("TurretAim", "DirectRampSeconds", 0.3f,
                 new ConfigDescription("With DirectControl: how long a rotator takes to go from rest to its top speed (and back). Shorter is faster to arrive and harder on the hull; with many " +
                     "turrets on one hull a longer ramp is gentler.", new AcceptableValueRange<float>(0.05f, 2f)));
+            TurretDirectGain = Config.Bind("TurretAim", "DirectGain", 3f,
+                new ConfigDescription("With DirectControl: near the aim a rotator's speed is this many times the angle it still has to turn (per second): 3 means 3 degrees a second for a degree to go. " +
+                    "Farther away it follows the speed profile (speeds up, runs at top speed, slows to arrive). Without this zone the speed went to the top for a gap of a degree and a springy joint " +
+                    "(its barrel ringing at 3 to 5 Hz) made the rotator swing back and forth: a recording showed the elevation swinging at 4.5 Hz. Lower is calmer and slower to settle.",
+                    new AcceptableValueRange<float>(0.5f, 12f)));
             TurretDirectDeadband = Config.Bind("TurretAim", "DirectDeadbandDegrees", 0.05f,
                 new ConfigDescription("With DirectControl: a rotator whose angle still to go is smaller than this rests (the settled gap is noisy by about a tenth of a degree).",
                     new AcceptableValueRange<float>(0f, 1f)));

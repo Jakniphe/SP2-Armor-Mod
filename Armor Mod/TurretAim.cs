@@ -2277,7 +2277,17 @@ namespace ArmorFragments
             float distance = Mathf.Abs(remaining);
             float closing = 0f;
             if (distance > ArmorFragmentsPlugin.TurretDirectDeadband.Value)
-                closing = Mathf.Sign(remaining) * Mathf.Min(Mathf.Min(top, Mathf.Sqrt(2f * accel * distance)), distance / Mathf.Max(dt, 1e-4f));
+            {
+                // Near the aim the speed is a gain times the angle to go (a linear zone up to accel / gain^2); beyond it, the speed that arrives
+                // exactly with the allowed acceleration, joined to the linear part without a step. A pure square root has an unlimited gain at a
+                // small gap: a springy joint whose barrel rings at 3-5 Hz showed a gap of a degree every few hundredths of a second, and the
+                // rotator was sent at its top speed back and forth (a recording: the elevation swinging at 4.5 Hz; a model reproduces it, and
+                // with this zone the swing is gone for joints from 2.5 to 4.5 Hz and a damping from 0.08 to 0.17).
+                float gain = Mathf.Max(ArmorFragmentsPlugin.TurretDirectGain.Value, 0.1f);
+                float linearDistance = accel / (gain * gain);
+                float speed = distance <= linearDistance ? gain * distance : Mathf.Sqrt(2f * accel * (distance - 0.5f * linearDistance));
+                closing = Mathf.Sign(remaining) * Mathf.Min(Mathf.Min(top, speed), distance / Mathf.Max(dt, 1e-4f));
+            }
             float wanted = Mathf.Clamp(feedDegrees + closing, -top, top);
             turret.DirectV = Mathf.MoveTowards(turret.DirectV, wanted, accel * dt);
             return turret.DirectV;
@@ -2510,7 +2520,7 @@ namespace ArmorFragments
             text.AppendLine("Turrets at full gain per hull (SharedHullFullGain): " + ArmorFragmentsPlugin.TurretShareStrength.Value);
             text.AppendLine("Gap smoothing (ErrorFilterSeconds): " + ArmorFragmentsPlugin.TurretErrorFilter.Value);
             text.AppendLine("Direct control (DirectControl): " + ArmorFragmentsPlugin.TurretDirect.Value + ", ramp " + ArmorFragmentsPlugin.TurretDirectRamp.Value + " s, dead band " +
-                            ArmorFragmentsPlugin.TurretDirectDeadband.Value + " deg");
+                            ArmorFragmentsPlugin.TurretDirectDeadband.Value + " deg, gain " + ArmorFragmentsPlugin.TurretDirectGain.Value + " /s");
             text.AppendLine("Turret start stagger (MoveStaggerSeconds): " + ArmorFragmentsPlugin.TurretMoveStagger.Value);
             text.AppendLine("Fire only on target (FireOnlyOnTarget): " + ArmorFragmentsPlugin.TurretFireOnTarget.Value + ", tolerance " + ArmorFragmentsPlugin.TurretFireTolerance.Value + " deg");
             text.AppendLine("Salvo ripple (FireStaggerSeconds): " + ArmorFragmentsPlugin.TurretFireStagger.Value);

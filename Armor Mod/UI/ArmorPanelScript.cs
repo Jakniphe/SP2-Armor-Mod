@@ -340,6 +340,8 @@ namespace ArmorFragments.UI
                 "the shared-hull gain division and the gap smoothing are not used. Compare it with the recording button. Off = the gain-based control.");
             FloatSetting(ArmorFragmentsPlugin.TurretDirectRamp, "Direct control: ramp",
                 "Time a rotator takes to go from rest to its top speed, and back to rest. A longer ramp is gentler on a shared hull.", 0.05f, " s");
+            FloatSetting(ArmorFragmentsPlugin.TurretDirectGain, "Direct control: gain near the aim",
+                "Near the aim a rotator turns at this many times the angle still to go, per second. Lower is calmer (a springy joint that rings stops being chased) and slower to settle.", 0.5f, " /s");
             FloatSetting(ArmorFragmentsPlugin.TurretDirectDeadband, "Direct control: dead band",
                 "A rotator whose angle still to go is smaller than this rests.", 0.01f, " deg");
             ToggleSetting(ArmorFragmentsPlugin.TurretFireOnTarget, "Fire only turrets on target",
