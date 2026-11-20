@@ -85,12 +85,18 @@ namespace ArmorFragments
                         float lo = -1f, hi = 1f;
                         bool known = false, unlimited = false;
                         if (expression.Length == 0 || string.Equals(expression, "Disabled", StringComparison.OrdinalIgnoreCase)) { }
-                        else if (Array.Exists(PlainAxes, name => string.Equals(name, expression, StringComparison.OrdinalIgnoreCase))) known = true;
+                        else if (Array.Exists(PlainAxes, name => string.Equals(name, expression.TrimStart('-'), StringComparison.OrdinalIgnoreCase))) known = true;
                         else
                         {
                             System.Text.RegularExpressions.Match match = ClampCall.Match(expression);
                             float a, b;
-                            if (match.Success &&
+                            if (SweepAxis(expression, out a, out b))
+                            {
+                                lo = a;
+                                hi = b;
+                                known = true;
+                            }
+                            else if (match.Success &&
                                 float.TryParse(match.Groups[1].Value, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out a) &&
                                 float.TryParse(match.Groups[2].Value, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out b))
                             {
@@ -109,6 +115,11 @@ namespace ArmorFragments
                             turret.Low = low * range;
                             turret.High = high * range;
                             turret.LimitSource = "from its input '" + expression + "'";
+                            if (turret.High - turret.Low > 360.5f)
+                            {
+                                turret.Wraps = true;   // it can be asked for more than a full turn: no limit
+                                turret.LimitSource = "its input '" + expression + "' reaches " + turret.Low.ToString("F0") + " to " + turret.High.ToString("F0") + " deg: not limited";
+                            }
                         }
                         else if (unlimited)
                         {
@@ -848,6 +859,58 @@ namespace ArmorFragments
         private static readonly System.Text.RegularExpressions.Regex ClampCall = new System.Text.RegularExpressions.Regex(
             @"^\s*clamp\s*\(.*,\s*([-+]?(?:\d+\.?\d*|\.\d+))\s*,\s*([-+]?(?:\d+\.?\d*|\.\d+))\s*\)\s*$",
             System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.Singleline | System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+
+        // A variable the sweep moves (the expression's own free variables, such as ang, all follow this one number).
+        public sealed class SweepVariable
+        {
+            public float V;
+            public float Get() { return V; }
+        }
+
+        // The range of values an input expression can give, found with the game's own expression evaluator: the expression is compiled in a
+        // fresh context where every name it uses that is not a function or constant is a variable, and evaluated for that variable from
+        // -360 to 360 (the angles a player's expression is written for; clamp(), ?: and the like show up as the arc they allow, x/90 as a
+        // value of +-4). False when it does not compile (then the other readings are tried).
+        [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
+        private static bool SweepAxis(string expression, out float lo, out float hi)
+        {
+            lo = 0f;
+            hi = 0f;
+            try
+            {
+                Jundroo.Common.Expressions.Context context = new Jundroo.Common.Expressions.Context(true, new object[0]);
+                SweepVariable holder = new SweepVariable();
+                System.Reflection.MethodInfo getter = typeof(SweepVariable).GetMethod("Get");
+                HashSet<string> names = new HashSet<string>();
+                foreach (System.Text.RegularExpressions.Match word in System.Text.RegularExpressions.Regex.Matches(expression, "[A-Za-z_][A-Za-z0-9_]*"))
+                {
+                    string name = word.Value;
+                    if (context.Functions.ContainsKey(name) || context.SpecialFunctions.ContainsKey(name) ||
+                        context.Constants.ContainsKey(name) || context.Properties.ContainsKey(name)) continue;
+                    names.Add(name);
+                }
+                foreach (string name in names) context.AddVariable(name, getter, holder);
+                Func<float> function = Jundroo.Common.Expressions.Parser.Process<float>(expression, context);
+                if (function == null) return false;
+                float low = float.MaxValue, high = float.MinValue;
+                for (int t = -360; t <= 360; t++)
+                {
+                    holder.V = t;
+                    float value = function();
+                    if (float.IsNaN(value) || float.IsInfinity(value)) continue;
+                    if (value < low) low = value;
+                    if (value > high) high = value;
+                }
+                if (low > high) return false;
+                lo = low;
+                hi = high;
+                return true;
+            }
+            catch (Exception)
+            {
+                return false;
+            }
+        }
 
         // What the input controller makes of an axis value (the game's InputControllerScript.UpdateValue, without the activation).
         private static float ControllerValue(InputControllerData input, float axis)
