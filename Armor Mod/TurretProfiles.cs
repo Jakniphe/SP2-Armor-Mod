@@ -21,6 +21,36 @@ namespace ArmorFragments
         private static bool loaded;
         private static int selected = 1;
         private static readonly Dictionary<string, string>[] Values = new Dictionary<string, string>[Count];
+        private static readonly string[] Names = new string[Count];   // null = the default name ("Profile N")
+
+        internal const int MaxNameLength = 16;
+
+        // What a profile is called on its button and in the status line.
+        internal static string NameOf(int number)
+        {
+            EnsureLoaded();
+            string name = Names[number - 1];
+            return string.IsNullOrEmpty(name) ? "Profile " + number : name;
+        }
+
+        // The name the player typed for a profile, as it is kept: no line breaks or control characters, trimmed, at most MaxNameLength long.
+        // Empty = back to the default name.
+        internal static void Rename(int number, string name)
+        {
+            if (number < 1 || number > Count) return;
+            lock (Lock)
+            {
+                EnsureLoaded();
+                StringBuilder clean = new StringBuilder();
+                foreach (char c in name ?? "")
+                    if (!char.IsControl(c)) clean.Append(c);
+                string text = clean.ToString().Trim();
+                if (text.Length > MaxNameLength) text = text.Substring(0, MaxNameLength).TrimEnd();
+                Names[number - 1] = text.Length == 0 || text == "Profile " + number ? null : text;
+                WriteFile();
+                ArmorFragmentsPlugin.Log.LogInfo("Turret profile " + number + " is now called '" + NameOf(number) + "'.");
+            }
+        }
 
         // The settings a profile holds: a short key (the file's) and the entry.
         private static IEnumerable<KeyValuePair<string, ConfigEntryBase>> Gains()
@@ -58,7 +88,7 @@ namespace ArmorFragments
                 {
                     EnsureLoaded();
                     bool same = Matches(selected);
-                    return "Profile " + selected + (same ? " (the settings are as saved)" : " (changed since it was saved: Save keeps the changes)");
+                    return "'" + NameOf(selected) + "' (profile " + selected + ")" + (same ? " (the settings are as saved)" : " (changed since it was saved: Save keeps the changes)");
                 }
                 catch (Exception e)
                 {
@@ -169,7 +199,9 @@ namespace ArmorFragments
                             int dot = key.IndexOf('.');
                             int number;
                             if (dot <= 0 || !int.TryParse(key.Substring(0, dot), out number) || number < 1 || number > Count) continue;
-                            Values[number - 1][key.Substring(dot + 1)] = value;
+                            string setting = key.Substring(dot + 1);
+                            if (setting == "name") { Names[number - 1] = value.Length == 0 ? null : value; read = true; continue; }
+                            Values[number - 1][setting] = value;
                             read = true;
                         }
                     }
@@ -199,8 +231,11 @@ namespace ArmorFragments
                 text.AppendLine("# Armor Fragments: saved gains of the turret control (profile number . setting = value). Edit with the game closed, or use the panel.");
                 text.AppendLine("selected=" + selected);
                 for (int i = 1; i <= Count; i++)
+                {
+                    if (!string.IsNullOrEmpty(Names[i - 1])) text.AppendLine(i + ".name=" + Names[i - 1]);
                     foreach (KeyValuePair<string, string> pair in Values[i - 1])
                         text.AppendLine(i + "." + pair.Key + "=" + pair.Value);
+                }
                 File.WriteAllText(FilePath, text.ToString(), Encoding.UTF8);
             }
             catch (Exception e)

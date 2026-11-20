@@ -336,12 +336,19 @@ namespace ArmorFragments.UI
             Live("Control profile", () => TurretProfiles.Status);
             builder.Buttons(new List<KeyValuePair<string, Action>>
             {
-                new KeyValuePair<string, Action>("Profile 1", () => LoadProfile(1)),
-                new KeyValuePair<string, Action>("Profile 2", () => LoadProfile(2)),
-                new KeyValuePair<string, Action>("Profile 3", () => LoadProfile(3)),
-                new KeyValuePair<string, Action>("Profile 4", () => LoadProfile(4)),
-                new KeyValuePair<string, Action>("Profile 5", () => LoadProfile(5)),
+                new KeyValuePair<string, Action>(TurretProfiles.NameOf(1), () => LoadProfile(1)),
+                new KeyValuePair<string, Action>(TurretProfiles.NameOf(2), () => LoadProfile(2)),
+                new KeyValuePair<string, Action>(TurretProfiles.NameOf(3), () => LoadProfile(3)),
+                new KeyValuePair<string, Action>(TurretProfiles.NameOf(4), () => LoadProfile(4)),
+                new KeyValuePair<string, Action>(TurretProfiles.NameOf(5), () => LoadProfile(5)),
             });
+            builder.TextInput("Profile name", "Rename the picked profile (shown on its button). Leave it empty to get \"Profile N\" back.",
+                TurretProfiles.NameOf(TurretProfiles.Selected), TurretProfiles.MaxNameLength, text =>
+                {
+                    TurretProfiles.Rename(TurretProfiles.Selected, text);
+                    // The buttons carry the names; rebuilding destroys the box being edited, so wait for Update.
+                    rebuildRequested = true;
+                });
             builder.Buttons(new List<KeyValuePair<string, Action>>
             {
                 new KeyValuePair<string, Action>("Save gains to the picked profile", TurretProfiles.Save),
