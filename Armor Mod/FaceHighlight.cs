@@ -150,8 +150,8 @@ namespace ArmorFragments
             {
                 if (overlayMesh.GetIndexCount(sub) == 0) continue;
                 if (sub % 2 == 1 && ArmorView.On) continue;   // the other faces show their thickness color instead
-                // Insides in the X-ray view only with the armor view on, which makes the parts within the craft hide
-                // what is behind them (ArmorView: unarmored parts drawn into the depth); otherwise they would cover them.
+                // Insides in the X-ray view only with the armor view on (its solid colors, nearest surface only, cover
+                // what is behind them); otherwise they would color over the see-through parts within the craft.
                 if (sub >= InsideSubmesh && xray && !ArmorView.On) continue;
                 Graphics.DrawMesh(overlayMesh, matrix, materials[sub], layer, null, sub, null,
                     ShadowCastingMode.Off, false);

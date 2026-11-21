@@ -36,8 +36,6 @@ namespace ArmorFragments
             public Transform LayerSource;   // the object whose layer the part is drawn on
             public string Signature;
             public float[] Mm;              // the armor's thickness under each vertex of Mesh
-            public Matrix4x4 LastMatrix;    // where it was when the X-ray mesh was last made
-            public bool LastShown;
         }
 
         // The thicknesses on the craft, thinnest first (whole millimeters), and their colors: ranked from the lightest
@@ -45,7 +43,6 @@ namespace ArmorFragments
         private static readonly List<float> Legend = new List<float>();
         private static readonly List<Color> LegendColors = new List<Color>();
         private const float Alpha = 1f;   // solid: the armor view shows the armor, not the paint under it
-        private const float XrayAlpha = 0.5f;   // in the game's X-ray view
         private static readonly Color[] Ramp =
         {
             new Color(0.62f, 0.96f, 0.45f),   // light green
@@ -228,8 +225,6 @@ namespace ArmorFragments
         {
             HashSet<PartScript> seen = new HashSet<PartScript>();
             bool changed = false;
-            bool xray = FaceHighlight.XRay;
-            Blockers.Clear();
             IEnumerable<PartData> parts = designer.Aircraft != null && designer.Aircraft.Aircraft != null && designer.Aircraft.Aircraft.Assembly != null
                 ? designer.Aircraft.Aircraft.Assembly.Parts
                 : null;
@@ -239,11 +234,7 @@ namespace ArmorFragments
                 {
                     PartScript part = data != null ? data.PartScript : null;
                     if (part == null) continue;
-                    if (data.Name == null || !data.Name.Contains("[ARM"))
-                    {
-                        if (xray) AddBlocker(part);
-                        continue;
-                    }
+                    if (data.Name == null || !data.Name.Contains("[ARM")) continue;
                     seen.Add(part);
 
                     List<KeyValuePair<Mesh, Transform>> sources = FaceHighlight.Sources(part);
@@ -281,68 +272,11 @@ namespace ArmorFragments
             if (changed) Recolor();
         }
 
-        // In the game's X-ray view the parts are drawn see-through and hide nothing: the unarmored ones are drawn
-        // again into the depth only (no color), just before the tints, so armor behind a part inside the craft is
-        // hidden by it instead of covering it. Armored parts are left out, so their own faces stay seen through.
-        private struct Blocker
-        {
-            public PartScript Part;
-            public Mesh Mesh;
-            public Transform Transform;
-        }
-
-        private static readonly List<Blocker> Blockers = new List<Blocker>();
-        private static Material depthMaterial;
-        private const float BlockerPushBack = 0.005f;   // share of the distance from the camera
         private static Material nearestMaterial;          // the tints' own depth, drawn before their colors
-
-        private static void AddBlocker(PartScript part)
-        {
-            foreach (MeshRenderer renderer in XRayView.GhostSources(part))
-            {
-                if (renderer == null) continue;
-                MeshFilter filter = renderer.GetComponent<MeshFilter>();
-                Mesh mesh = filter != null ? filter.sharedMesh : null;
-                if (mesh == null) continue;
-                Blockers.Add(new Blocker { Part = part, Mesh = mesh, Transform = renderer.transform });
-            }
-        }
-
-        private static void DrawBlockers()
-        {
-            if (Blockers.Count == 0) return;
-            if (depthMaterial == null)
-            {
-                depthMaterial = FaceHighlight.MakeDepthMaterial();
-                if (depthMaterial == null) return;
-            }
-            // Drawn a little farther from the designer's camera than they are (BlockerPushBack of the distance), so
-            // armor lying against a part (a rack on a wall, a plate on the hull) is never hidden by it, whatever the
-            // angle; armor really behind a part still is.
-            Matrix4x4 push = Matrix4x4.identity;
-            Designer designer = Designer.Instance;
-            Camera camera = designer != null && designer.CameraController != null ? designer.CameraController.Camera : null;
-            if (camera != null)
-            {
-                Vector3 eye = camera.transform.position;
-                push = Matrix4x4.Translate(eye) * Matrix4x4.Scale(Vector3.one * (1f + BlockerPushBack)) * Matrix4x4.Translate(-eye);
-            }
-            foreach (Blocker blocker in Blockers)
-            {
-                if (blocker.Part == null || blocker.Mesh == null || blocker.Transform == null) continue;
-                if (!blocker.Part.gameObject.activeInHierarchy) continue;
-                if (blocker.Part.PartMaterialScript != null && !blocker.Part.PartMaterialScript.Visible) continue;
-                Matrix4x4 matrix = push * blocker.Transform.localToWorldMatrix;
-                int layer = blocker.Transform.gameObject.layer;
-                for (int sub = 0; sub < blocker.Mesh.subMeshCount; sub++)
-                    Graphics.DrawMesh(blocker.Mesh, matrix, depthMaterial, layer, null, sub, null, ShadowCastingMode.Off, false);
-            }
-        }
 
         // The legend from every thickness on the craft, then each part's colors from it.
         private static void Recolor()
         {
-            xrayDirty = true;   // parts or colors changed: the X-ray mesh is made again
             SortedSet<float> values = new SortedSet<float>();
             foreach (Entry entry in Parts.Values)
             {
@@ -457,16 +391,6 @@ namespace ArmorFragments
                 material = FaceHighlight.MakeTintMaterial(Color.white);   // the colors are the mesh's own
                 if (material == null) return;
             }
-            // Solid, except in the game's X-ray view, where armor deeper in the craft shows through the faces in front.
-            bool xray = FaceHighlight.XRay;
-            Color tint = new Color(1f, 1f, 1f, xray ? XrayAlpha : 1f);
-            if (material.color != tint) material.color = tint;
-            if (xray)
-            {
-                DrawBlockers();
-                DrawXRay();
-                return;
-            }
             if (nearestMaterial == null) nearestMaterial = FaceHighlight.MakeDepthMaterial(FaceHighlight.RenderQueue - 50);
             foreach (KeyValuePair<PartScript, Entry> pair in Parts)
             {
@@ -495,183 +419,11 @@ namespace ArmorFragments
             return part.PartMaterialScript == null || part.PartMaterialScript.Visible;   // not hidden in the designer
         }
 
-        // ---- The X-ray view ------------------------------------------------------
-        // See-through colors only blend right drawn from the farthest to the nearest, and the game sorts whole parts,
-        // not triangles (so two parts' colors swapped as the camera turned). In the X-ray view every armored face of
-        // the craft (outsides and insides) is one mesh in world space, its triangles put in order from the farthest
-        // to the nearest whenever the camera or a part moves, and drawn in one go.
-        private static Mesh xrayMesh;
-        private static bool xrayDirty = true;
-        private static Vector3 xrayEye = new Vector3(float.NaN, 0f, 0f);
-        private static int xrayLayer;
-        private static readonly List<Vector3> XrayVertices = new List<Vector3>();
-        private static readonly List<Color> XrayColors = new List<Color>();
-        private static readonly List<int> XrayTriangles = new List<int>();   // three vertex indices per triangle
-        private static readonly List<Vector3> XrayCenters = new List<Vector3>();
-        private static float[] xrayKeys = new float[0];
-        private static int[] xrayOrder = new int[0];
-        private static int[] xrayIndices = new int[0];
-
-        private static void DrawXRay()
-        {
-            bool moved = xrayDirty;
-            foreach (KeyValuePair<PartScript, Entry> pair in Parts)
-            {
-                Entry entry = pair.Value;
-                bool shown = Shown(pair.Key, entry);
-                Matrix4x4 matrix = shown ? entry.Frame.localToWorldMatrix : Matrix4x4.zero;
-                if (shown != entry.LastShown || matrix != entry.LastMatrix)
-                {
-                    moved = true;
-                    entry.LastShown = shown;
-                    entry.LastMatrix = matrix;
-                }
-            }
-            if (moved) BuildXRay();
-            if (xrayMesh == null || XrayCenters.Count == 0) return;
-
-            Designer designer = Designer.Instance;
-            Camera camera = designer != null && designer.CameraController != null ? designer.CameraController.Camera : null;
-            Vector3 eye = camera != null ? camera.transform.position : Vector3.zero;
-            if (moved || eye != xrayEye)
-            {
-                xrayEye = eye;
-                SortXRay(eye);
-            }
-            Graphics.DrawMesh(xrayMesh, Matrix4x4.identity, material, xrayLayer, null, 0, null, ShadowCastingMode.Off, false);
-        }
-
-        private static void BuildXRay()
-        {
-            xrayDirty = false;
-            XrayVertices.Clear();
-            XrayColors.Clear();
-            XrayTriangles.Clear();
-            XrayCenters.Clear();
-            // The faces in world space, with their colors.
-            bool layerSet = false;
-            List<Vector3> corners = new List<Vector3>();
-            List<Color> cornerColors = new List<Color>();
-            foreach (KeyValuePair<PartScript, Entry> pair in Parts)
-            {
-                Entry entry = pair.Value;
-                if (!entry.LastShown) continue;
-                if (!layerSet)
-                {
-                    xrayLayer = entry.LayerSource != null ? entry.LayerSource.gameObject.layer : pair.Key.gameObject.layer;
-                    layerSet = true;
-                }
-                Vector3[] local = entry.Mesh.vertices;
-                Color[] colors = entry.Mesh.colors;
-                Matrix4x4 matrix = entry.LastMatrix;
-                for (int sub = 0; sub <= FaceHighlight.InsideSubmesh; sub += FaceHighlight.InsideSubmesh)
-                {
-                    if (sub >= entry.Mesh.subMeshCount) continue;
-                    int[] triangles = entry.Mesh.GetTriangles(sub);
-                    for (int t = 0; t + 2 < triangles.Length; t += 3)
-                    {
-                        for (int k = 0; k < 3; k++) corners.Add(matrix.MultiplyPoint3x4(local[triangles[t + k]]));
-                        cornerColors.Add(triangles[t] < colors.Length ? colors[triangles[t]] : Color.white);
-                    }
-                }
-            }
-
-            // Big triangles cut into pieces no longer than `edge`: sorted by their middles, two long triangles that
-            // cross each other would swap order as the camera turns; small pieces keep any mistake small. The size
-            // follows the craft's armored area, for about XrayTargetTriangles pieces in all.
-            float area = 0f;
-            for (int t = 0; t + 2 < corners.Count; t += 3)
-                area += Vector3.Cross(corners[t + 1] - corners[t], corners[t + 2] - corners[t]).magnitude * 0.5f;
-            float edge = Mathf.Max(XrayMinEdge, Mathf.Sqrt(area / XrayTargetTriangles) * 1.6f);
-            float edgeSq = edge * edge;
-            for (int t = 0; t + 2 < corners.Count; t += 3)
-                AddPieces(corners[t], corners[t + 1], corners[t + 2], cornerColors[t / 3], edgeSq, 0);
-
-            if (xrayMesh == null) xrayMesh = new Mesh { name = "ArmorViewXRay" };
-            xrayMesh.Clear();
-            xrayMesh.indexFormat = XrayVertices.Count > 65000 ? IndexFormat.UInt32 : IndexFormat.UInt16;
-            xrayMesh.SetVertices(XrayVertices);
-            xrayMesh.SetColors(XrayColors);
-            int count = XrayCenters.Count;
-            if (xrayKeys.Length < count) xrayKeys = new float[count];
-            if (xrayOrder.Length < count) xrayOrder = new int[count];
-            if (xrayIndices.Length != count * 3) xrayIndices = new int[count * 3];
-            xrayMesh.SetIndices(XrayTriangles, MeshTopology.Triangles, 0, false);
-            xrayMesh.RecalculateBounds();
-        }
-
-        private const float XrayTargetTriangles = 40000f;
-        private const float XrayMinEdge = 0.12f;   // meters
-
-        // Cuts the triangle across its longest side until no side is longer than the edge, keeping its winding.
-        private static void AddPieces(Vector3 a, Vector3 b, Vector3 c, Color color, float edgeSq, int depth)
-        {
-            float ab = (b - a).sqrMagnitude, bc = (c - b).sqrMagnitude, ca = (a - c).sqrMagnitude;
-            float longest = Mathf.Max(ab, Mathf.Max(bc, ca));
-            if (longest > edgeSq && depth < 16)
-            {
-                if (longest == ab)
-                {
-                    Vector3 m = (a + b) * 0.5f;
-                    AddPieces(a, m, c, color, edgeSq, depth + 1);
-                    AddPieces(m, b, c, color, edgeSq, depth + 1);
-                }
-                else if (longest == bc)
-                {
-                    Vector3 m = (b + c) * 0.5f;
-                    AddPieces(a, b, m, color, edgeSq, depth + 1);
-                    AddPieces(a, m, c, color, edgeSq, depth + 1);
-                }
-                else
-                {
-                    Vector3 m = (c + a) * 0.5f;
-                    AddPieces(a, b, m, color, edgeSq, depth + 1);
-                    AddPieces(m, b, c, color, edgeSq, depth + 1);
-                }
-                return;
-            }
-            int first = XrayVertices.Count;
-            XrayVertices.Add(a);
-            XrayVertices.Add(b);
-            XrayVertices.Add(c);
-            XrayColors.Add(color);
-            XrayColors.Add(color);
-            XrayColors.Add(color);
-            XrayTriangles.Add(first);
-            XrayTriangles.Add(first + 1);
-            XrayTriangles.Add(first + 2);
-            XrayCenters.Add((a + b + c) / 3f);
-        }
-
-        // Farthest first.
-        private static void SortXRay(Vector3 eye)
-        {
-            int count = XrayCenters.Count;
-            for (int i = 0; i < count; i++)
-            {
-                xrayKeys[i] = -(XrayCenters[i] - eye).sqrMagnitude;
-                xrayOrder[i] = i;
-            }
-            Array.Sort(xrayKeys, xrayOrder, 0, count);
-            for (int i = 0; i < count; i++)
-            {
-                int t = xrayOrder[i] * 3;
-                xrayIndices[i * 3] = XrayTriangles[t];
-                xrayIndices[i * 3 + 1] = XrayTriangles[t + 1];
-                xrayIndices[i * 3 + 2] = XrayTriangles[t + 2];
-            }
-            xrayMesh.SetIndices(xrayIndices, MeshTopology.Triangles, 0, false);
-        }
-
         private static void Clear()
         {
             foreach (Entry entry in Parts.Values)
                 if (entry.Mesh != null) Object.Destroy(entry.Mesh);
             Parts.Clear();
-            if (xrayMesh != null) Object.Destroy(xrayMesh);
-            xrayMesh = null;
-            xrayDirty = true;
-            Blockers.Clear();
             Legend.Clear();
             LegendColors.Clear();
         }
@@ -684,8 +436,6 @@ namespace ArmorFragments
             button = null;
             if (material != null) Object.Destroy(material);
             material = null;
-            if (depthMaterial != null) Object.Destroy(depthMaterial);
-            depthMaterial = null;
             if (nearestMaterial != null) Object.Destroy(nearestMaterial);
             nearestMaterial = null;
             if (shield != null)
