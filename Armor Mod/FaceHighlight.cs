@@ -283,7 +283,7 @@ namespace ArmorFragments
                     int[] triangles = mesh.triangles;
                     for (int t = 0; t + 2 < triangles.Length; t += 3)
                         AddTriangle(vertices, pickedTriangles, mm, armor.Thickness, frame, from.TransformPoint(points[triangles[t]]),
-                            from.TransformPoint(points[triangles[t + 1]]), from.TransformPoint(points[triangles[t + 2]]));
+                            from.TransformPoint(points[triangles[t + 1]]), from.TransformPoint(points[triangles[t + 2]]), true);
                 }
             }
             else
@@ -303,13 +303,21 @@ namespace ArmorFragments
                     if (normal.sqrMagnitude < 1e-14f) continue;
                     normal.Normalize();
 
+                    // A plate is met from both sides, so it is tinted on both: a solid block's face gets a copy facing
+                    // in, just under its surface; a hollow block's inner wall is the inside of the face it backs.
                     int face = ArmorFaces.Classify(shape, (a + b + c) / 3f, normal);
-                    if (face < 0) continue;   // an inner wall of a hollow block
+                    bool inner = face < 0;
+                    if (inner)
+                    {
+                        if (!shape.Hollow) continue;
+                        face = ArmorFaces.Classify(shape, (a + b + c) / 3f, -normal);
+                        if (face < 0) continue;
+                    }
                     List<int> target;
                     if (all) target = armor.Faces[face] > 0f ? pickedTriangles : null;
                     else if (face == picked) target = pickedTriangles;
                     else target = armor.Faces[face] > 0f ? armoredTriangles : null;
-                    if (target != null) AddTriangle(vertices, target, mm, armor.Faces[face], frame, a, b, c);
+                    if (target != null) AddTriangle(vertices, target, mm, armor.Faces[face], frame, a, b, c, !inner && !shape.Hollow);
                 }
 
                 // Armored walls of holes carved into it ([HOL] on the cutter): blue, or purple with every face picked.
@@ -318,7 +326,7 @@ namespace ArmorFragments
                 List<int> wallTarget = all ? pickedTriangles : armoredTriangles;
                 for (int t = 0; t + 2 < walls.Length; t += 3)
                     AddTriangle(vertices, wallTarget, mm, t / 3 < wallMm.Length ? wallMm[t / 3] : 0f, frame, partFrame.TransformPoint(walls[t]),
-                        partFrame.TransformPoint(walls[t + 1]), partFrame.TransformPoint(walls[t + 2]));
+                        partFrame.TransformPoint(walls[t + 1]), partFrame.TransformPoint(walls[t + 2]), true);
             }
             if (vertices.Count == 0 || frame == null) return null;
 
@@ -332,10 +340,12 @@ namespace ArmorFragments
             return overlay;
         }
 
-        // One triangle (world points), lifted off the surface along its normal, into `frame`'s space.
+        // One triangle (world points), lifted off the surface along its normal, into `frame`'s space. bothSides: also
+        // a copy facing the other way, just under the surface, seen from the other side (tints draw one side only).
         private static void AddTriangle(List<Vector3> vertices, List<int> target, List<float> mm, float thickness,
-                                        Transform frame, Vector3 a, Vector3 b, Vector3 c)
+                                        Transform frame, Vector3 a, Vector3 b, Vector3 c, bool bothSides = false)
         {
+            if (bothSides) AddTriangle(vertices, target, mm, thickness, frame, a, c, b);
             Vector3 normal = Vector3.Cross(b - a, c - a);
             if (normal.sqrMagnitude < 1e-14f) return;
             if (mm != null) { mm.Add(thickness); mm.Add(thickness); mm.Add(thickness); }
