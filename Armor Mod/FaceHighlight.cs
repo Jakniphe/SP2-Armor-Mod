@@ -183,6 +183,7 @@ namespace ArmorFragments
             foreach (MeshFilter filter in part.GetComponentsInChildren<MeshFilter>())
             {
                 if (filter == null || filter.sharedMesh == null) continue;
+                if (IsDecal(filter)) continue;
                 if (filter.GetComponentInParent<PartScript>() != part) continue;
                 if (filter.GetComponent<MeshRenderer>() == null || !filter.sharedMesh.isReadable) continue;
                 sources.Add(new KeyValuePair<Mesh, Transform>(filter.sharedMesh, filter.transform));
@@ -196,6 +197,15 @@ namespace ArmorFragments
                 sources.Add(new KeyValuePair<Mesh, Transform>(collider.sharedMesh, collider.transform));
             }
             return sources;
+        }
+
+        // A decal or text laid on a part: the game puts its object (a decal projector, or a text mesh) under the part it
+        // is on, so it is found among that part's children. It is not the part's surface.
+        internal static bool IsDecal(Component component)
+        {
+            if (component == null) return false;
+            if (component.GetComponent<TMPro.TMP_Text>() != null) return true;
+            return component.GetComponentInParent<Assets.Scripts.Craft.Decals.PartMeshDecalObject>() != null;
         }
 
         // The game's renderer of a fuselage block's hull (null for other parts).

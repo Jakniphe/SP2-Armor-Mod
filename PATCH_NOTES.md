@@ -116,6 +116,7 @@ Weight
 - The face tint shows only while its block is selected: clicking empty space clears it.
 - A thickness typed in the box or set with the slider is kept without pressing Enter: clicking a face button, another part or anywhere else takes it, with its undo step and the craft's new weight. A face button works on the first click right after typing or dragging.
 - The face tint follows the game's own hidden flag for the block, so it stays on when the game draws the block as part of a combined mesh, and it rebuilds its colors if they were lost. When it is not drawn for a selected per-face block, the log says why (`[TINT]`).
+- Text and decals laid on a part are not taken for its shape: ammo rack capacity, the flight X-ray views, the rack view and the armor view read only the part's own meshes.
 
 # Ammo racks
 
