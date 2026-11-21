@@ -300,6 +300,9 @@ namespace ArmorFragments
         {
             int index = Legend.BinarySearch(Mathf.Round(mm));
             Color color = index >= 0 ? LegendColors[index] : RampAt(0f);
+            // Vertex colors reach the shader as they are, while the legend's (GUI) colors are converted: in the game's
+            // linear color space the face gets the linear value, so both show the same color on screen.
+            if (QualitySettings.activeColorSpace == ColorSpace.Linear) color = color.linear;
             color.a = Alpha;
             return color;
         }
