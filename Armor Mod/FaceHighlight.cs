@@ -32,7 +32,7 @@ namespace ArmorFragments
         private static bool warned;
         private static PartScript overlayPart;          // the block the tint was built for
         private static Material pickedMaterial, armoredMaterial;
-        private static Material pickedSolidMaterial;   // the face being set over the armor view's colors
+        private static Material pickedSolidMaterial;   // the face being set over the armor view's colors (purple)
         private static float nextMaterialTry;
 
         public static void Tick()
@@ -62,7 +62,7 @@ namespace ArmorFragments
         private static void Refresh()
         {
             // With the armor view on, every armored part is colored by thickness, this one too: only the face being set
-            // is tinted over it (orange), and with "Per face" off (every face at once) nothing is.
+            // is tinted over it (purple), and with "Per face" off (every face at once) nothing is.
             PartScript part = ArmorView.On && UI.DesignerSection.SelectedFace == UI.DesignerSection.AllFaces
                 ? null : UI.DesignerSection.PerFacePart;
             if (part == null)
@@ -348,6 +348,8 @@ namespace ArmorFragments
         // game's see-through parts (its X-ray view), so the tint stays on them.
         internal static readonly Color PickedColor = new Color(1f, 0.55f, 0.1f, 0.55f);
         internal static readonly Color ArmoredColor = new Color(0.15f, 0.45f, 1f, 0.55f);
+        // The face being set over the armor view: purple, a color not on its thickness scale.
+        internal static readonly Color PickedOverViewColor = new Color(0.62f, 0.25f, 0.95f, 0.85f);
         internal const int RenderQueue = 3500;
 
         internal static Material MakeTintMaterial(Color color)
@@ -393,7 +395,7 @@ namespace ArmorFragments
             Shader shader = RayDrawer.GetShader();
             if (shader == null) return false;
             pickedMaterial = MakeMaterial(shader, PickedColor);
-            pickedSolidMaterial = MakeMaterial(shader, new Color(PickedColor.r, PickedColor.g, PickedColor.b, 0.85f));
+            pickedSolidMaterial = MakeMaterial(shader, PickedOverViewColor);
             pickedSolidMaterial.renderQueue = RenderQueue + 1;   // over the armor view's colors
             armoredMaterial = MakeMaterial(shader, ArmoredColor);
             return true;
