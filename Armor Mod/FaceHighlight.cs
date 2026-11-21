@@ -13,7 +13,7 @@ using Object = UnityEngine.Object;
 
 namespace ArmorFragments
 {
-    // Designer only: on the selected block with per-face armor, the face being edited is tinted orange and the
+    // Designer only: on the selected block with per-face armor, the face being edited is tinted purple and the
     // other armored faces blue (open faces are left as they are). The tint is the block's own mesh, triangle by
     // triangle, sorted into faces by ArmorFaces.Classify: the same faces the shells and fragments meet.
     // The tint is drawn each frame with Graphics.DrawMesh at the block's frame; it is not an object in the scene,
@@ -242,7 +242,7 @@ namespace ArmorFragments
             overlayPart = part;
         }
 
-        // The tint of an armored part, in the space of `frame`: submesh 0 the faces picked (orange), submesh 1 the
+        // The tint of an armored part, in the space of `frame`: submesh 0 the faces picked (purple), submesh 1 the
         // other armored faces (blue). picked = AllFaces: every armored face is picked (submesh 1 is empty).
         // A block armored per face: its armored faces and the armored walls of holes carved into it; open faces
         // are left out. A part armored as a whole: all of its surface. Null when nothing of it is armored.
@@ -302,7 +302,7 @@ namespace ArmorFragments
                     if (target != null) AddTriangle(vertices, target, mm, armor.Faces[face], frame, a, b, c);
                 }
 
-                // Armored walls of holes carved into it ([HOL] on the cutter): blue, or orange with every face picked.
+                // Armored walls of holes carved into it ([HOL] on the cutter): blue, or purple with every face picked.
                 float[] wallMm;
                 Vector3[] walls = ArmorSurface.WallsLocal(part, out wallMm);
                 List<int> wallTarget = all ? pickedTriangles : armoredTriangles;
@@ -344,12 +344,12 @@ namespace ArmorFragments
             return part != null && overlayPart == part && overlayMesh != null;
         }
 
-        // The colors: the face being edited (and the armor view) orange, other armored faces blue. Drawn after the
+        // The colors: the face being edited purple, other armored faces blue. Drawn after the
         // game's see-through parts (its X-ray view), so the tint stays on them.
-        internal static readonly Color PickedColor = new Color(1f, 0.55f, 0.1f, 0.55f);
+        internal static readonly Color PickedColor = new Color(0.40f, 0.10f, 0.70f, 0.75f);
         internal static readonly Color ArmoredColor = new Color(0.15f, 0.45f, 1f, 0.55f);
-        // The face being set over the armor view: purple, a color not on its thickness scale.
-        internal static readonly Color PickedOverViewColor = new Color(0.62f, 0.25f, 0.95f, 0.85f);
+        // The face being set over the armor view: the same purple (not on its thickness scale), more solid.
+        internal static readonly Color PickedOverViewColor = new Color(0.40f, 0.10f, 0.70f, 0.9f);
         internal const int RenderQueue = 3500;
 
         internal static Material MakeTintMaterial(Color color)

@@ -1507,7 +1507,7 @@ namespace ArmorFragments.UI
 
         // Armor thickness, as the game edits corners: by default one "Thickness" for every face at once. With
         // "Per face" on, two rows of face buttons (the one being edited blue, each with its thickness) and
-        // the thickness of the picked face. Edited faces are tinted orange on the block, other armored ones blue.
+        // the thickness of the picked face. Edited faces are tinted purple on the block, other armored ones blue.
         private static void FaceRows(PanelBuilder builder, PartTags tags)
         {
             float[] faces = tags.Armor.Faces;
@@ -1539,7 +1539,7 @@ namespace ArmorFragments.UI
             if (picked == AllFaces)
             {
                 Slider(builder, tags, "Thickness",
-                    "Thickness of every face of the block (orange on the block). 0 mm = open. Turn on \"Per face\" to set faces on their own.",
+                    "Thickness of every face of the block (purple on the block). 0 mm = open. Turn on \"Per face\" to set faces on their own.",
                     0f, 500f, 1f, faces[0], " mm", v =>
                     {
                         for (int i = 0; i < ArmorFaces.Count; i++) tags.Armor.Faces[i] = v;
@@ -1560,7 +1560,7 @@ namespace ArmorFragments.UI
             }
 
             Slider(builder, tags, ArmorFaces.Names[picked] + " face",
-                "Thickness of the picked face (orange on the block). 0 mm = open: shells and fragments pass it as empty space.",
+                "Thickness of the picked face (purple on the block). 0 mm = open: shells and fragments pass it as empty space.",
                 0f, 500f, 1f, faces[picked], " mm", v => tags.Armor.Faces[picked] = v, true);
         }
 
