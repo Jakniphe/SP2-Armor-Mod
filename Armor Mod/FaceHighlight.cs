@@ -30,8 +30,9 @@ namespace ArmorFragments
         private static string shownSignature;
         private static float nextRefresh;
         private static bool warned;
+        private static PartScript overlayPart;          // the block the tint was built for
         private static Material pickedMaterial, armoredMaterial;
-        private static bool materialsTried;
+        private static float nextMaterialTry;
 
         public static void Tick()
         {
@@ -59,20 +60,42 @@ namespace ArmorFragments
 
         private static void Refresh()
         {
-            PartScript part = UI.DesignerSection.PerFacePart;
-            if (part == null || !Materials())
+            // The armor view (on) colors every armored part by thickness, this one too: the edit tint gives way.
+            PartScript part = ArmorView.On ? null : UI.DesignerSection.PerFacePart;
+            if (part == null)
             {
                 Clear();
+                reported = null;   // nothing to show: not a failure
+                return;
+            }
+            if (!Materials())
+            {
+                Clear();
+                Report("its materials could not be made (no see-through shader)");
                 return;
             }
 
             List<KeyValuePair<Mesh, Transform>> filters = Sources(part);
-            string signature = Signature(part, filters);
-            if (signature == shownSignature && overlayMesh != null) return;
+            string signature = Signature(part, filters, UI.DesignerSection.SelectedFace);
+            if (signature == shownSignature && overlayMesh != null && overlayPart == part) return;
 
             Clear();
             Build(part, filters);
             shownSignature = signature;
+            if (overlayMesh == null) Report("the block has no armored face to tint");
+        }
+
+        // Writes to the log why the tint of the selected per-face block is not drawn, once each time the reason
+        // changes (null: it is drawn).
+        private static string reported;
+        private static void Report(string reason)
+        {
+            if (reason == reported) return;
+            if (reason != null)
+                ArmorFragmentsPlugin.Log.LogInfo("[TINT] Face tint not drawn: " + reason);
+            else if (reported != null)
+                ArmorFragmentsPlugin.Log.LogInfo("[TINT] Face tint drawn again");
+            reported = reason;
         }
 
         // Drawn at the frame's full matrix every frame, so the tint follows the block as it is moved or resized.
@@ -86,12 +109,30 @@ namespace ArmorFragments
             }
             // Only over the block as it is seen in the designer: not during a flight (the designer can stay loaded
             // behind it), and not while the block itself is hidden.
-            if (Assets.Scripts.Flight.FlightSceneScript.Instance != null) return;
-            if (overlayLayerSource != null)
+            // Whether the block is hidden is the game's own flag for the part (PartMaterialScript.Visible), not its
+            // hull renderer: the game also switches that renderer off when it draws the part as part of a combined
+            // mesh, or while it rebuilds the mesh, and the block is still on screen then.
+            if (Assets.Scripts.Flight.FlightSceneScript.Instance != null)
             {
-                Renderer shown = overlayLayerSource.GetComponent<Renderer>();
-                if (!overlayLayerSource.gameObject.activeInHierarchy || (shown != null && !shown.enabled)) return;
+                Report("a flight is loaded");
+                return;
             }
+            if (overlayPart == null || !overlayPart.gameObject.activeInHierarchy)
+            {
+                Report("the block is not in the scene");
+                return;
+            }
+            if (overlayPart.PartMaterialScript != null && !overlayPart.PartMaterialScript.Visible)
+            {
+                Report("the block is hidden in the designer");
+                return;
+            }
+            if (pickedMaterial == null || armoredMaterial == null)
+            {
+                Clear();
+                return;
+            }
+            Report(null);
             Matrix4x4 matrix = overlayFrame.localToWorldMatrix;
             // The layer the block is drawn on right now (the game moves a part being dragged, such as a fresh
             // duplicate, to another layer and back), so the tint is always drawn where the block is.
@@ -172,11 +213,11 @@ namespace ArmorFragments
             return null;
         }
 
-        // Changes when the block's name (its faces), the face being edited, or its shape changes.
-        private static string Signature(PartScript part, List<KeyValuePair<Mesh, Transform>> filters)
+        // Changes when the part's name (its armor), the face picked (`picked`), or its shape changes.
+        internal static string Signature(PartScript part, List<KeyValuePair<Mesh, Transform>> filters, int picked)
         {
             StringBuilder text = new StringBuilder();
-            text.Append(part.GetInstanceID()).Append('|').Append(part.Part.Name).Append('|').Append(UI.DesignerSection.SelectedFace);
+            text.Append(part.GetInstanceID()).Append('|').Append(part.Part.Name).Append('|').Append(picked);
             foreach (KeyValuePair<Mesh, Transform> filter in filters)
             {
                 Mesh mesh = filter.Key;
@@ -188,77 +229,127 @@ namespace ArmorFragments
 
         private static void Build(PartScript part, List<KeyValuePair<Mesh, Transform>> filters)
         {
-            ArmorTag armor = TagCodec.Parse(part.Part.Name).Armor;
-            if (armor == null || !armor.PerFace) return;
+            if (!ArmorFaces.IsPerFace(part)) return;
+            Transform frame;
+            overlayMesh = BuildMesh(part, filters, UI.DesignerSection.SelectedFace, out frame);
+            if (overlayMesh == null) return;
+            overlayFrame = frame;
+            overlayLayerSource = filters.Count > 0 && filters[0].Value != null ? filters[0].Value : part.transform;
+            overlayPart = part;
+        }
 
-            ArmorFaces.Shape shape = ArmorFaces.ShapeOf(part);
-            Transform frame = shape.Frame;
-            int picked = UI.DesignerSection.SelectedFace;   // AllFaces: every armored face is the one edited
-            bool all = picked == UI.DesignerSection.AllFaces;
+        // The tint of an armored part, in the space of `frame`: submesh 0 the faces picked (orange), submesh 1 the
+        // other armored faces (blue). picked = AllFaces: every armored face is picked (submesh 1 is empty).
+        // A block armored per face: its armored faces and the armored walls of holes carved into it; open faces
+        // are left out. A part armored as a whole: all of its surface. Null when nothing of it is armored.
+        // mm (if given) gets the thickness of the armor under each vertex, in the order of the mesh's vertices.
+        internal static Mesh BuildMesh(PartScript part, List<KeyValuePair<Mesh, Transform>> filters, int picked,
+                                       out Transform frame, List<float> mm = null)
+        {
+            frame = null;
+            if (part == null || part.Part == null) return null;
+            ArmorTag armor = TagCodec.Parse(part.Part.Name).Armor;
+            if (armor == null) return null;
 
             List<Vector3> vertices = new List<Vector3>();
             List<int> pickedTriangles = new List<int>();
             List<int> armoredTriangles = new List<int>();
+            bool all = picked == UI.DesignerSection.AllFaces;
 
-            // The block's outer surface (the walls of carved holes left out), in its local space.
-            Vector3[] local = ArmorSurface.OuterLocal(part);
-            Transform partFrame = part.transform;
-            for (int t = 0; t + 2 < local.Length; t += 3)
+            if (!armor.PerFace)
             {
-                Vector3 a = partFrame.TransformPoint(local[t]);
-                Vector3 b = partFrame.TransformPoint(local[t + 1]);
-                Vector3 c = partFrame.TransformPoint(local[t + 2]);
-                Vector3 normal = Vector3.Cross(b - a, c - a);
-                if (normal.sqrMagnitude < 1e-14f) continue;
-                normal.Normalize();
-
-                int face = ArmorFaces.Classify(shape, (a + b + c) / 3f, normal);
-                if (face < 0) continue;   // an inner wall of a hollow block
-                List<int> target;
-                if (all) target = armor.Faces[face] > 0f ? pickedTriangles : null;
-                else if (face == picked) target = pickedTriangles;
-                else target = armor.Faces[face] > 0f ? armoredTriangles : null;
-                if (target == null) continue;
-
-                Vector3 lift = normal * Lift;
-                target.Add(vertices.Count);
-                vertices.Add(frame.InverseTransformPoint(a + lift));
-                target.Add(vertices.Count);
-                vertices.Add(frame.InverseTransformPoint(b + lift));
-                target.Add(vertices.Count);
-                vertices.Add(frame.InverseTransformPoint(c + lift));
+                if (armor.Thickness <= 0f) return null;
+                frame = part.transform;
+                foreach (KeyValuePair<Mesh, Transform> source in filters)
+                {
+                    Mesh mesh = source.Key;
+                    Transform from = source.Value;
+                    if (mesh == null || from == null || !mesh.isReadable) continue;
+                    Vector3[] points = mesh.vertices;
+                    int[] triangles = mesh.triangles;
+                    for (int t = 0; t + 2 < triangles.Length; t += 3)
+                        AddTriangle(vertices, pickedTriangles, mm, armor.Thickness, frame, from.TransformPoint(points[triangles[t]]),
+                            from.TransformPoint(points[triangles[t + 1]]), from.TransformPoint(points[triangles[t + 2]]));
+                }
             }
-
-            // Armored walls of holes carved into it ([HOL] on the cutter): blue, or orange with every face edited.
-            float[] wallMm;
-            Vector3[] walls = ArmorSurface.WallsLocal(part, out wallMm);
-            List<int> wallTarget = all ? pickedTriangles : armoredTriangles;
-            for (int t = 0; t + 2 < walls.Length; t += 3)
+            else
             {
-                Vector3 a = partFrame.TransformPoint(walls[t]);
-                Vector3 b = partFrame.TransformPoint(walls[t + 1]);
-                Vector3 c = partFrame.TransformPoint(walls[t + 2]);
-                Vector3 normal = Vector3.Cross(b - a, c - a);
-                if (normal.sqrMagnitude < 1e-14f) continue;
-                Vector3 lift = normal.normalized * Lift;
-                wallTarget.Add(vertices.Count);
-                vertices.Add(frame.InverseTransformPoint(a + lift));
-                wallTarget.Add(vertices.Count);
-                vertices.Add(frame.InverseTransformPoint(b + lift));
-                wallTarget.Add(vertices.Count);
-                vertices.Add(frame.InverseTransformPoint(c + lift));
-            }
-            if (vertices.Count == 0) return;
+                ArmorFaces.Shape shape = ArmorFaces.ShapeOf(part);
+                frame = shape.Frame;
 
-            overlayMesh = new Mesh { name = OverlayName };
-            if (vertices.Count > 65000) overlayMesh.indexFormat = IndexFormat.UInt32;
-            overlayMesh.SetVertices(vertices);
-            overlayMesh.subMeshCount = 2;
-            overlayMesh.SetTriangles(pickedTriangles, 0);
-            overlayMesh.SetTriangles(armoredTriangles, 1);
-            overlayMesh.RecalculateBounds();
-            overlayFrame = frame;
-            overlayLayerSource = filters.Count > 0 && filters[0].Value != null ? filters[0].Value : part.transform;
+                // The block's outer surface (the walls of carved holes left out), in its local space.
+                Vector3[] local = ArmorSurface.OuterLocal(part);
+                Transform partFrame = part.transform;
+                for (int t = 0; t + 2 < local.Length; t += 3)
+                {
+                    Vector3 a = partFrame.TransformPoint(local[t]);
+                    Vector3 b = partFrame.TransformPoint(local[t + 1]);
+                    Vector3 c = partFrame.TransformPoint(local[t + 2]);
+                    Vector3 normal = Vector3.Cross(b - a, c - a);
+                    if (normal.sqrMagnitude < 1e-14f) continue;
+                    normal.Normalize();
+
+                    int face = ArmorFaces.Classify(shape, (a + b + c) / 3f, normal);
+                    if (face < 0) continue;   // an inner wall of a hollow block
+                    List<int> target;
+                    if (all) target = armor.Faces[face] > 0f ? pickedTriangles : null;
+                    else if (face == picked) target = pickedTriangles;
+                    else target = armor.Faces[face] > 0f ? armoredTriangles : null;
+                    if (target != null) AddTriangle(vertices, target, mm, armor.Faces[face], frame, a, b, c);
+                }
+
+                // Armored walls of holes carved into it ([HOL] on the cutter): blue, or orange with every face picked.
+                float[] wallMm;
+                Vector3[] walls = ArmorSurface.WallsLocal(part, out wallMm);
+                List<int> wallTarget = all ? pickedTriangles : armoredTriangles;
+                for (int t = 0; t + 2 < walls.Length; t += 3)
+                    AddTriangle(vertices, wallTarget, mm, t / 3 < wallMm.Length ? wallMm[t / 3] : 0f, frame, partFrame.TransformPoint(walls[t]),
+                        partFrame.TransformPoint(walls[t + 1]), partFrame.TransformPoint(walls[t + 2]));
+            }
+            if (vertices.Count == 0 || frame == null) return null;
+
+            Mesh overlay = new Mesh { name = OverlayName };
+            if (vertices.Count > 65000) overlay.indexFormat = IndexFormat.UInt32;
+            overlay.SetVertices(vertices);
+            overlay.subMeshCount = 2;
+            overlay.SetTriangles(pickedTriangles, 0);
+            overlay.SetTriangles(armoredTriangles, 1);
+            overlay.RecalculateBounds();
+            return overlay;
+        }
+
+        // One triangle (world points), lifted off the surface along its normal, into `frame`'s space.
+        private static void AddTriangle(List<Vector3> vertices, List<int> target, List<float> mm, float thickness,
+                                        Transform frame, Vector3 a, Vector3 b, Vector3 c)
+        {
+            Vector3 normal = Vector3.Cross(b - a, c - a);
+            if (normal.sqrMagnitude < 1e-14f) return;
+            if (mm != null) { mm.Add(thickness); mm.Add(thickness); mm.Add(thickness); }
+            Vector3 lift = normal.normalized * Lift;
+            target.Add(vertices.Count);
+            vertices.Add(frame.InverseTransformPoint(a + lift));
+            target.Add(vertices.Count);
+            vertices.Add(frame.InverseTransformPoint(b + lift));
+            target.Add(vertices.Count);
+            vertices.Add(frame.InverseTransformPoint(c + lift));
+        }
+
+        // Is the edit tint drawn over this part right now (the armor view then leaves it to it)?
+        internal static bool Showing(PartScript part)
+        {
+            return part != null && overlayPart == part && overlayMesh != null;
+        }
+
+        // The colors: the face being edited (and the armor view) orange, other armored faces blue. Drawn after the
+        // game's see-through parts (its X-ray view), so the tint stays on them.
+        internal static readonly Color PickedColor = new Color(1f, 0.55f, 0.1f, 0.55f);
+        internal static readonly Color ArmoredColor = new Color(0.15f, 0.45f, 1f, 0.55f);
+        internal const int RenderQueue = 3500;
+
+        internal static Material MakeTintMaterial(Color color)
+        {
+            Shader shader = RayDrawer.GetShader();
+            return shader != null ? MakeMaterial(shader, color) : null;
         }
 
         // The plugin is being unloaded: the tint's mesh and materials are freed (nothing of it is in the scene).
@@ -268,7 +359,7 @@ namespace ArmorFragments
             if (pickedMaterial != null) Object.Destroy(pickedMaterial);
             if (armoredMaterial != null) Object.Destroy(armoredMaterial);
             pickedMaterial = armoredMaterial = null;
-            materialsTried = false;
+            nextMaterialTry = 0f;
         }
 
         private static void Clear()
@@ -277,18 +368,25 @@ namespace ArmorFragments
             overlayMesh = null;
             overlayFrame = null;
             overlayLayerSource = null;
+            overlayPart = null;
             shownSignature = null;
         }
 
+        // Made once; made again if they were lost (Unity can free them when scenes change), with a short wait
+        // between tries so a missing shader is not looked for every frame.
         private static bool Materials()
         {
-            if (materialsTried) return pickedMaterial != null;
-            materialsTried = true;
+            if (pickedMaterial != null && armoredMaterial != null) return true;
+            if (Time.unscaledTime < nextMaterialTry) return false;
+            nextMaterialTry = Time.unscaledTime + 2f;
+            if (pickedMaterial != null) Object.Destroy(pickedMaterial);
+            if (armoredMaterial != null) Object.Destroy(armoredMaterial);
+            pickedMaterial = armoredMaterial = null;
 
             Shader shader = RayDrawer.GetShader();
             if (shader == null) return false;
-            pickedMaterial = MakeMaterial(shader, new Color(1f, 0.55f, 0.1f, 0.55f));
-            armoredMaterial = MakeMaterial(shader, new Color(0.15f, 0.45f, 1f, 0.55f));
+            pickedMaterial = MakeMaterial(shader, PickedColor);
+            armoredMaterial = MakeMaterial(shader, ArmoredColor);
             return true;
         }
 
@@ -297,7 +395,7 @@ namespace ArmorFragments
             Material material = new Material(shader);
             if (material.HasProperty("_BaseColor")) material.SetColor("_BaseColor", color);
             if (material.HasProperty("_Color")) material.SetColor("_Color", color);
-            material.renderQueue = 3000;
+            material.renderQueue = RenderQueue;
             return material;
         }
     }
