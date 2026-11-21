@@ -362,11 +362,30 @@ namespace ArmorFragments
         internal static readonly Color PickedOverViewColor = new Color(0.40f, 0.10f, 0.70f, 1f);
         internal const int RenderQueue = 3500;
 
+        // Drawn on the part's surface only where it is seen: the depth of what is in front is tested and the back of
+        // each triangle is left out (Unity's built-in Hidden/Internal-Colored, which takes those as settings and
+        // colors by the material and the vertices); without it, the rays' see-through shader.
         internal static Material MakeTintMaterial(Color color)
         {
-            Shader shader = RayDrawer.GetShader();
-            return shader != null ? MakeMaterial(shader, color) : null;
+            Shader shader = Shader.Find("Hidden/Internal-Colored");
+            if (shader == null)
+            {
+                if (!shaderWarned) ArmorFragmentsPlugin.Log.LogWarning("[TINT] Hidden/Internal-Colored not found: tints use the see-through shader");
+                shaderWarned = true;
+                Shader fallback = RayDrawer.GetShader();
+                return fallback != null ? MakeMaterial(fallback, color) : null;
+            }
+            Material material = new Material(shader);
+            material.SetColor("_Color", color);
+            material.SetInt("_SrcBlend", (int)BlendMode.SrcAlpha);
+            material.SetInt("_DstBlend", (int)BlendMode.OneMinusSrcAlpha);
+            material.SetInt("_Cull", (int)CullMode.Back);
+            material.SetInt("_ZWrite", 0);
+            material.SetInt("_ZTest", (int)CompareFunction.LessEqual);
+            material.renderQueue = RenderQueue;
+            return material;
         }
+        private static bool shaderWarned;
 
         // The plugin is being unloaded: the tint's mesh and materials are freed (nothing of it is in the scene).
         internal static void Shutdown()
@@ -402,12 +421,11 @@ namespace ArmorFragments
             if (armoredMaterial != null) Object.Destroy(armoredMaterial);
             pickedMaterial = armoredMaterial = pickedSolidMaterial = null;
 
-            Shader shader = RayDrawer.GetShader();
-            if (shader == null) return false;
-            pickedMaterial = MakeMaterial(shader, PickedColor);
-            pickedSolidMaterial = MakeMaterial(shader, PickedOverViewColor);
+            pickedMaterial = MakeTintMaterial(PickedColor);
+            pickedSolidMaterial = MakeTintMaterial(PickedOverViewColor);
+            armoredMaterial = MakeTintMaterial(ArmoredColor);
+            if (pickedMaterial == null || pickedSolidMaterial == null || armoredMaterial == null) return false;
             pickedSolidMaterial.renderQueue = RenderQueue + 1;   // over the armor view's colors
-            armoredMaterial = MakeMaterial(shader, ArmoredColor);
             return true;
         }
 

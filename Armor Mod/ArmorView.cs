@@ -43,6 +43,7 @@ namespace ArmorFragments
         private static readonly List<float> Legend = new List<float>();
         private static readonly List<Color> LegendColors = new List<Color>();
         private const float Alpha = 1f;   // solid: the armor view shows the armor, not the paint under it
+        private const float XrayAlpha = 0.5f;   // in the game's X-ray view
         private static readonly Color[] Ramp =
         {
             new Color(0.62f, 0.96f, 0.45f),   // light green
@@ -388,6 +389,11 @@ namespace ArmorFragments
                 material = FaceHighlight.MakeTintMaterial(Color.white);   // the colors are the mesh's own
                 if (material == null) return;
             }
+            // Solid, except in the game's X-ray view, where armor deeper in the craft shows through the faces in front.
+            Designer designer = Designer.Instance;
+            bool xray = designer != null && designer.ViewMode == DesignerViewMode.Ghost;
+            Color tint = new Color(1f, 1f, 1f, xray ? XrayAlpha : 1f);
+            if (material.color != tint) material.color = tint;
             foreach (KeyValuePair<PartScript, Entry> pair in Parts)
             {
                 PartScript part = pair.Key;
