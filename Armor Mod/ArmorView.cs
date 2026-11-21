@@ -36,6 +36,8 @@ namespace ArmorFragments
             public Transform LayerSource;   // the object whose layer the part is drawn on
             public string Signature;
             public float[] Mm;              // the armor's thickness under each vertex of Mesh
+            public Matrix4x4 LastMatrix;    // where it was when the X-ray mesh was last made
+            public bool LastShown;
         }
 
         // The thicknesses on the craft, thinnest first (whole millimeters), and their colors: ranked from the lightest
@@ -340,6 +342,7 @@ namespace ArmorFragments
         // The legend from every thickness on the craft, then each part's colors from it.
         private static void Recolor()
         {
+            xrayDirty = true;   // parts or colors changed: the X-ray mesh is made again
             SortedSet<float> values = new SortedSet<float>();
             foreach (Entry entry in Parts.Values)
             {
@@ -458,15 +461,18 @@ namespace ArmorFragments
             bool xray = FaceHighlight.XRay;
             Color tint = new Color(1f, 1f, 1f, xray ? XrayAlpha : 1f);
             if (material.color != tint) material.color = tint;
-            if (xray) DrawBlockers();
+            if (xray)
+            {
+                DrawBlockers();
+                DrawXRay();
+                return;
+            }
             if (nearestMaterial == null) nearestMaterial = FaceHighlight.MakeDepthMaterial(FaceHighlight.RenderQueue - 50);
             foreach (KeyValuePair<PartScript, Entry> pair in Parts)
             {
                 PartScript part = pair.Key;
                 Entry entry = pair.Value;
-                if (part == null || entry.Mesh == null || entry.Frame == null) continue;
-                if (!part.gameObject.activeInHierarchy) continue;
-                if (part.PartMaterialScript != null && !part.PartMaterialScript.Visible) continue;   // hidden in the designer
+                if (!Shown(part, entry)) continue;
                 int layer = entry.LayerSource != null ? entry.LayerSource.gameObject.layer : part.gameObject.layer;
                 Matrix4x4 matrix = entry.Frame.localToWorldMatrix;
                 // The outside and the inside of the armored faces. Their depth first (all of them, before any color):
@@ -482,11 +488,141 @@ namespace ArmorFragments
             }
         }
 
+        private static bool Shown(PartScript part, Entry entry)
+        {
+            if (part == null || entry.Mesh == null || entry.Frame == null) return false;
+            if (!part.gameObject.activeInHierarchy) return false;
+            return part.PartMaterialScript == null || part.PartMaterialScript.Visible;   // not hidden in the designer
+        }
+
+        // ---- The X-ray view ------------------------------------------------------
+        // See-through colors only blend right drawn from the farthest to the nearest, and the game sorts whole parts,
+        // not triangles (so two parts' colors swapped as the camera turned). In the X-ray view every armored face of
+        // the craft (outsides and insides) is one mesh in world space, its triangles put in order from the farthest
+        // to the nearest whenever the camera or a part moves, and drawn in one go.
+        private static Mesh xrayMesh;
+        private static bool xrayDirty = true;
+        private static Vector3 xrayEye = new Vector3(float.NaN, 0f, 0f);
+        private static int xrayLayer;
+        private static readonly List<Vector3> XrayVertices = new List<Vector3>();
+        private static readonly List<Color> XrayColors = new List<Color>();
+        private static readonly List<int> XrayTriangles = new List<int>();   // three vertex indices per triangle
+        private static readonly List<Vector3> XrayCenters = new List<Vector3>();
+        private static float[] xrayKeys = new float[0];
+        private static int[] xrayOrder = new int[0];
+        private static int[] xrayIndices = new int[0];
+
+        private static void DrawXRay()
+        {
+            bool moved = xrayDirty;
+            foreach (KeyValuePair<PartScript, Entry> pair in Parts)
+            {
+                Entry entry = pair.Value;
+                bool shown = Shown(pair.Key, entry);
+                Matrix4x4 matrix = shown ? entry.Frame.localToWorldMatrix : Matrix4x4.zero;
+                if (shown != entry.LastShown || matrix != entry.LastMatrix)
+                {
+                    moved = true;
+                    entry.LastShown = shown;
+                    entry.LastMatrix = matrix;
+                }
+            }
+            if (moved) BuildXRay();
+            if (xrayMesh == null || XrayCenters.Count == 0) return;
+
+            Designer designer = Designer.Instance;
+            Camera camera = designer != null && designer.CameraController != null ? designer.CameraController.Camera : null;
+            Vector3 eye = camera != null ? camera.transform.position : Vector3.zero;
+            if (moved || eye != xrayEye)
+            {
+                xrayEye = eye;
+                SortXRay(eye);
+            }
+            Graphics.DrawMesh(xrayMesh, Matrix4x4.identity, material, xrayLayer, null, 0, null, ShadowCastingMode.Off, false);
+        }
+
+        private static void BuildXRay()
+        {
+            xrayDirty = false;
+            XrayVertices.Clear();
+            XrayColors.Clear();
+            XrayTriangles.Clear();
+            XrayCenters.Clear();
+            bool layerSet = false;
+            foreach (KeyValuePair<PartScript, Entry> pair in Parts)
+            {
+                Entry entry = pair.Value;
+                if (!entry.LastShown) continue;
+                if (!layerSet)
+                {
+                    xrayLayer = entry.LayerSource != null ? entry.LayerSource.gameObject.layer : pair.Key.gameObject.layer;
+                    layerSet = true;
+                }
+                Vector3[] local = entry.Mesh.vertices;
+                Color[] colors = entry.Mesh.colors;
+                Matrix4x4 matrix = entry.LastMatrix;
+                int first = XrayVertices.Count;
+                for (int v = 0; v < local.Length; v++)
+                {
+                    XrayVertices.Add(matrix.MultiplyPoint3x4(local[v]));
+                    XrayColors.Add(v < colors.Length ? colors[v] : Color.white);
+                }
+                for (int sub = 0; sub <= FaceHighlight.InsideSubmesh; sub += FaceHighlight.InsideSubmesh)
+                {
+                    if (sub >= entry.Mesh.subMeshCount) continue;
+                    int[] triangles = entry.Mesh.GetTriangles(sub);
+                    for (int t = 0; t + 2 < triangles.Length; t += 3)
+                    {
+                        int a = first + triangles[t], b = first + triangles[t + 1], c = first + triangles[t + 2];
+                        XrayTriangles.Add(a);
+                        XrayTriangles.Add(b);
+                        XrayTriangles.Add(c);
+                        XrayCenters.Add((XrayVertices[a] + XrayVertices[b] + XrayVertices[c]) / 3f);
+                    }
+                }
+            }
+
+            if (xrayMesh == null) xrayMesh = new Mesh { name = "ArmorViewXRay" };
+            xrayMesh.Clear();
+            xrayMesh.indexFormat = XrayVertices.Count > 65000 ? IndexFormat.UInt32 : IndexFormat.UInt16;
+            xrayMesh.SetVertices(XrayVertices);
+            xrayMesh.SetColors(XrayColors);
+            int count = XrayCenters.Count;
+            if (xrayKeys.Length < count) xrayKeys = new float[count];
+            if (xrayOrder.Length < count) xrayOrder = new int[count];
+            if (xrayIndices.Length != count * 3) xrayIndices = new int[count * 3];
+            xrayMesh.SetIndices(XrayTriangles, MeshTopology.Triangles, 0, false);
+            xrayMesh.RecalculateBounds();
+        }
+
+        // Farthest first.
+        private static void SortXRay(Vector3 eye)
+        {
+            int count = XrayCenters.Count;
+            for (int i = 0; i < count; i++)
+            {
+                xrayKeys[i] = -(XrayCenters[i] - eye).sqrMagnitude;
+                xrayOrder[i] = i;
+            }
+            Array.Sort(xrayKeys, xrayOrder, 0, count);
+            for (int i = 0; i < count; i++)
+            {
+                int t = xrayOrder[i] * 3;
+                xrayIndices[i * 3] = XrayTriangles[t];
+                xrayIndices[i * 3 + 1] = XrayTriangles[t + 1];
+                xrayIndices[i * 3 + 2] = XrayTriangles[t + 2];
+            }
+            xrayMesh.SetIndices(xrayIndices, MeshTopology.Triangles, 0, false);
+        }
+
         private static void Clear()
         {
             foreach (Entry entry in Parts.Values)
                 if (entry.Mesh != null) Object.Destroy(entry.Mesh);
             Parts.Clear();
+            if (xrayMesh != null) Object.Destroy(xrayMesh);
+            xrayMesh = null;
+            xrayDirty = true;
             Blockers.Clear();
             Legend.Clear();
             LegendColors.Clear();
