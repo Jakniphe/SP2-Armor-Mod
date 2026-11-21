@@ -548,7 +548,10 @@ namespace ArmorFragments
             XrayColors.Clear();
             XrayTriangles.Clear();
             XrayCenters.Clear();
+            // The faces in world space, with their colors.
             bool layerSet = false;
+            List<Vector3> corners = new List<Vector3>();
+            List<Color> cornerColors = new List<Color>();
             foreach (KeyValuePair<PartScript, Entry> pair in Parts)
             {
                 Entry entry = pair.Value;
@@ -561,26 +564,28 @@ namespace ArmorFragments
                 Vector3[] local = entry.Mesh.vertices;
                 Color[] colors = entry.Mesh.colors;
                 Matrix4x4 matrix = entry.LastMatrix;
-                int first = XrayVertices.Count;
-                for (int v = 0; v < local.Length; v++)
-                {
-                    XrayVertices.Add(matrix.MultiplyPoint3x4(local[v]));
-                    XrayColors.Add(v < colors.Length ? colors[v] : Color.white);
-                }
                 for (int sub = 0; sub <= FaceHighlight.InsideSubmesh; sub += FaceHighlight.InsideSubmesh)
                 {
                     if (sub >= entry.Mesh.subMeshCount) continue;
                     int[] triangles = entry.Mesh.GetTriangles(sub);
                     for (int t = 0; t + 2 < triangles.Length; t += 3)
                     {
-                        int a = first + triangles[t], b = first + triangles[t + 1], c = first + triangles[t + 2];
-                        XrayTriangles.Add(a);
-                        XrayTriangles.Add(b);
-                        XrayTriangles.Add(c);
-                        XrayCenters.Add((XrayVertices[a] + XrayVertices[b] + XrayVertices[c]) / 3f);
+                        for (int k = 0; k < 3; k++) corners.Add(matrix.MultiplyPoint3x4(local[triangles[t + k]]));
+                        cornerColors.Add(triangles[t] < colors.Length ? colors[triangles[t]] : Color.white);
                     }
                 }
             }
+
+            // Big triangles cut into pieces no longer than `edge`: sorted by their middles, two long triangles that
+            // cross each other would swap order as the camera turns; small pieces keep any mistake small. The size
+            // follows the craft's armored area, for about XrayTargetTriangles pieces in all.
+            float area = 0f;
+            for (int t = 0; t + 2 < corners.Count; t += 3)
+                area += Vector3.Cross(corners[t + 1] - corners[t], corners[t + 2] - corners[t]).magnitude * 0.5f;
+            float edge = Mathf.Max(XrayMinEdge, Mathf.Sqrt(area / XrayTargetTriangles) * 1.6f);
+            float edgeSq = edge * edge;
+            for (int t = 0; t + 2 < corners.Count; t += 3)
+                AddPieces(corners[t], corners[t + 1], corners[t + 2], cornerColors[t / 3], edgeSq, 0);
 
             if (xrayMesh == null) xrayMesh = new Mesh { name = "ArmorViewXRay" };
             xrayMesh.Clear();
@@ -593,6 +598,49 @@ namespace ArmorFragments
             if (xrayIndices.Length != count * 3) xrayIndices = new int[count * 3];
             xrayMesh.SetIndices(XrayTriangles, MeshTopology.Triangles, 0, false);
             xrayMesh.RecalculateBounds();
+        }
+
+        private const float XrayTargetTriangles = 40000f;
+        private const float XrayMinEdge = 0.12f;   // meters
+
+        // Cuts the triangle across its longest side until no side is longer than the edge, keeping its winding.
+        private static void AddPieces(Vector3 a, Vector3 b, Vector3 c, Color color, float edgeSq, int depth)
+        {
+            float ab = (b - a).sqrMagnitude, bc = (c - b).sqrMagnitude, ca = (a - c).sqrMagnitude;
+            float longest = Mathf.Max(ab, Mathf.Max(bc, ca));
+            if (longest > edgeSq && depth < 16)
+            {
+                if (longest == ab)
+                {
+                    Vector3 m = (a + b) * 0.5f;
+                    AddPieces(a, m, c, color, edgeSq, depth + 1);
+                    AddPieces(m, b, c, color, edgeSq, depth + 1);
+                }
+                else if (longest == bc)
+                {
+                    Vector3 m = (b + c) * 0.5f;
+                    AddPieces(a, b, m, color, edgeSq, depth + 1);
+                    AddPieces(a, m, c, color, edgeSq, depth + 1);
+                }
+                else
+                {
+                    Vector3 m = (c + a) * 0.5f;
+                    AddPieces(a, b, m, color, edgeSq, depth + 1);
+                    AddPieces(m, b, c, color, edgeSq, depth + 1);
+                }
+                return;
+            }
+            int first = XrayVertices.Count;
+            XrayVertices.Add(a);
+            XrayVertices.Add(b);
+            XrayVertices.Add(c);
+            XrayColors.Add(color);
+            XrayColors.Add(color);
+            XrayColors.Add(color);
+            XrayTriangles.Add(first);
+            XrayTriangles.Add(first + 1);
+            XrayTriangles.Add(first + 2);
+            XrayCenters.Add((a + b + c) / 3f);
         }
 
         // Farthest first.
