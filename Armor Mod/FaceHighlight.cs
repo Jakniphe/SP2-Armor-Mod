@@ -147,7 +147,9 @@ namespace ArmorFragments
             {
                 if (overlayMesh.GetIndexCount(sub) == 0) continue;
                 if (sub % 2 == 1 && ArmorView.On) continue;   // the other faces show their thickness color instead
-                if (sub >= InsideSubmesh && xray) continue;   // insides: not in the X-ray view
+                // Insides in the X-ray view only with the armor view on, which makes the parts within the craft hide
+                // what is behind them (ArmorView: unarmored parts drawn into the depth); otherwise they would cover them.
+                if (sub >= InsideSubmesh && xray && !ArmorView.On) continue;
                 Graphics.DrawMesh(overlayMesh, matrix, materials[sub], layer, null, sub, null,
                     ShadowCastingMode.Off, false);
             }
@@ -413,6 +415,22 @@ namespace ArmorFragments
             return material;
         }
         private static bool shaderWarned;
+
+        // Writes only depth, no color: drawn just before the tints, a part with it hides the tints behind it.
+        internal static Material MakeDepthMaterial()
+        {
+            Shader shader = Shader.Find("Hidden/Internal-Colored");
+            if (shader == null) return null;
+            Material material = new Material(shader);
+            material.SetColor("_Color", Color.white);
+            material.SetInt("_SrcBlend", (int)BlendMode.Zero);
+            material.SetInt("_DstBlend", (int)BlendMode.One);
+            material.SetInt("_Cull", (int)CullMode.Back);
+            material.SetInt("_ZWrite", 1);
+            material.SetInt("_ZTest", (int)CompareFunction.LessEqual);
+            material.renderQueue = RenderQueue - 100;
+            return material;
+        }
 
         // The plugin is being unloaded: the tint's mesh and materials are freed (nothing of it is in the scene).
         internal static void Shutdown()

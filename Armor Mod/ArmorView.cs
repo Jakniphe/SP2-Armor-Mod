@@ -226,6 +226,8 @@ namespace ArmorFragments
         {
             HashSet<PartScript> seen = new HashSet<PartScript>();
             bool changed = false;
+            bool xray = FaceHighlight.XRay;
+            Blockers.Clear();
             IEnumerable<PartData> parts = designer.Aircraft != null && designer.Aircraft.Aircraft != null && designer.Aircraft.Aircraft.Assembly != null
                 ? designer.Aircraft.Aircraft.Assembly.Parts
                 : null;
@@ -234,7 +236,12 @@ namespace ArmorFragments
                 foreach (PartData data in parts)
                 {
                     PartScript part = data != null ? data.PartScript : null;
-                    if (part == null || data.Name == null || !data.Name.Contains("[ARM")) continue;
+                    if (part == null) continue;
+                    if (data.Name == null || !data.Name.Contains("[ARM"))
+                    {
+                        if (xray) AddBlocker(part);
+                        continue;
+                    }
                     seen.Add(part);
 
                     List<KeyValuePair<Mesh, Transform>> sources = FaceHighlight.Sources(part);
@@ -270,6 +277,51 @@ namespace ArmorFragments
                 changed = true;
             }
             if (changed) Recolor();
+        }
+
+        // In the game's X-ray view the parts are drawn see-through and hide nothing: the unarmored ones are drawn
+        // again into the depth only (no color), just before the tints, so armor behind a part inside the craft is
+        // hidden by it instead of covering it. Armored parts are left out, so their own faces stay seen through.
+        private struct Blocker
+        {
+            public PartScript Part;
+            public Mesh Mesh;
+            public Transform Transform;
+        }
+
+        private static readonly List<Blocker> Blockers = new List<Blocker>();
+        private static Material depthMaterial;
+
+        private static void AddBlocker(PartScript part)
+        {
+            foreach (MeshRenderer renderer in XRayView.GhostSources(part))
+            {
+                if (renderer == null) continue;
+                MeshFilter filter = renderer.GetComponent<MeshFilter>();
+                Mesh mesh = filter != null ? filter.sharedMesh : null;
+                if (mesh == null) continue;
+                Blockers.Add(new Blocker { Part = part, Mesh = mesh, Transform = renderer.transform });
+            }
+        }
+
+        private static void DrawBlockers()
+        {
+            if (Blockers.Count == 0) return;
+            if (depthMaterial == null)
+            {
+                depthMaterial = FaceHighlight.MakeDepthMaterial();
+                if (depthMaterial == null) return;
+            }
+            foreach (Blocker blocker in Blockers)
+            {
+                if (blocker.Part == null || blocker.Mesh == null || blocker.Transform == null) continue;
+                if (!blocker.Part.gameObject.activeInHierarchy) continue;
+                if (blocker.Part.PartMaterialScript != null && !blocker.Part.PartMaterialScript.Visible) continue;
+                Matrix4x4 matrix = blocker.Transform.localToWorldMatrix;
+                int layer = blocker.Transform.gameObject.layer;
+                for (int sub = 0; sub < blocker.Mesh.subMeshCount; sub++)
+                    Graphics.DrawMesh(blocker.Mesh, matrix, depthMaterial, layer, null, sub, null, ShadowCastingMode.Off, false);
+            }
         }
 
         // The legend from every thickness on the craft, then each part's colors from it.
@@ -393,6 +445,7 @@ namespace ArmorFragments
             bool xray = FaceHighlight.XRay;
             Color tint = new Color(1f, 1f, 1f, xray ? XrayAlpha : 1f);
             if (material.color != tint) material.color = tint;
+            if (xray) DrawBlockers();
             foreach (KeyValuePair<PartScript, Entry> pair in Parts)
             {
                 PartScript part = pair.Key;
@@ -402,11 +455,10 @@ namespace ArmorFragments
                 if (part.PartMaterialScript != null && !part.PartMaterialScript.Visible) continue;   // hidden in the designer
                 int layer = entry.LayerSource != null ? entry.LayerSource.gameObject.layer : part.gameObject.layer;
                 Matrix4x4 matrix = entry.Frame.localToWorldMatrix;
-                // The outside, and the inside unless in the X-ray view (nothing in front hides it there).
+                // The outside and the inside of the armored faces.
                 for (int sub = 0; sub <= FaceHighlight.InsideSubmesh; sub += FaceHighlight.InsideSubmesh)
                 {
                     if (sub >= entry.Mesh.subMeshCount || entry.Mesh.GetIndexCount(sub) == 0) continue;
-                    if (sub == FaceHighlight.InsideSubmesh && xray) continue;
                     Graphics.DrawMesh(entry.Mesh, matrix, material, layer, null, sub, null, ShadowCastingMode.Off, false);
                 }
             }
@@ -417,6 +469,7 @@ namespace ArmorFragments
             foreach (Entry entry in Parts.Values)
                 if (entry.Mesh != null) Object.Destroy(entry.Mesh);
             Parts.Clear();
+            Blockers.Clear();
             Legend.Clear();
             LegendColors.Clear();
         }
@@ -429,6 +482,8 @@ namespace ArmorFragments
             button = null;
             if (material != null) Object.Destroy(material);
             material = null;
+            if (depthMaterial != null) Object.Destroy(depthMaterial);
+            depthMaterial = null;
             if (shield != null)
             {
                 Object.Destroy(shield.texture);
