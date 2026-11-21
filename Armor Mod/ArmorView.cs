@@ -291,6 +291,7 @@ namespace ArmorFragments
 
         private static readonly List<Blocker> Blockers = new List<Blocker>();
         private static Material depthMaterial;
+        private const float BlockerPushBack = 0.005f;   // share of the distance from the camera
 
         private static void AddBlocker(PartScript part)
         {
@@ -312,12 +313,23 @@ namespace ArmorFragments
                 depthMaterial = FaceHighlight.MakeDepthMaterial();
                 if (depthMaterial == null) return;
             }
+            // Drawn a little farther from the designer's camera than they are (BlockerPushBack of the distance), so
+            // armor lying against a part (a rack on a wall, a plate on the hull) is never hidden by it, whatever the
+            // angle; armor really behind a part still is.
+            Matrix4x4 push = Matrix4x4.identity;
+            Designer designer = Designer.Instance;
+            Camera camera = designer != null && designer.CameraController != null ? designer.CameraController.Camera : null;
+            if (camera != null)
+            {
+                Vector3 eye = camera.transform.position;
+                push = Matrix4x4.Translate(eye) * Matrix4x4.Scale(Vector3.one * (1f + BlockerPushBack)) * Matrix4x4.Translate(-eye);
+            }
             foreach (Blocker blocker in Blockers)
             {
                 if (blocker.Part == null || blocker.Mesh == null || blocker.Transform == null) continue;
                 if (!blocker.Part.gameObject.activeInHierarchy) continue;
                 if (blocker.Part.PartMaterialScript != null && !blocker.Part.PartMaterialScript.Visible) continue;
-                Matrix4x4 matrix = blocker.Transform.localToWorldMatrix;
+                Matrix4x4 matrix = push * blocker.Transform.localToWorldMatrix;
                 int layer = blocker.Transform.gameObject.layer;
                 for (int sub = 0; sub < blocker.Mesh.subMeshCount; sub++)
                     Graphics.DrawMesh(blocker.Mesh, matrix, depthMaterial, layer, null, sub, null, ShadowCastingMode.Off, false);
