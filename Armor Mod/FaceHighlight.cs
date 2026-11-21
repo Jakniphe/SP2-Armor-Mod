@@ -23,6 +23,9 @@ namespace ArmorFragments
         private const string OverlayName = "ArmorFaceHighlight";
         private const float RefreshInterval = 0.2f;
         private const float Lift = 0.002f;   // meters off the surface, so the tint is not hidden in it
+        // The inside copy of a face goes a little deeper: where two plates meet back to back, the inside of one and
+        // the outside of the other would otherwise lie on the same spot, and the one on the camera's side wins.
+        private const float InsideLift = 0.003f;
 
         private static Mesh overlayMesh;
         private static Transform overlayFrame;
@@ -352,13 +355,14 @@ namespace ArmorFragments
         // given): also a copy facing the other way, just under the surface, seen from the other side (tints draw
         // one side only).
         private static void AddTriangle(List<Vector3> vertices, List<int> target, List<int> inside, List<float> mm,
-                                        float thickness, Transform frame, Vector3 a, Vector3 b, Vector3 c)
+                                        float thickness, Transform frame, Vector3 a, Vector3 b, Vector3 c,
+                                        float offset = Lift)
         {
-            if (inside != null) AddTriangle(vertices, inside, null, mm, thickness, frame, a, c, b);
+            if (inside != null) AddTriangle(vertices, inside, null, mm, thickness, frame, a, c, b, InsideLift);
             Vector3 normal = Vector3.Cross(b - a, c - a);
             if (normal.sqrMagnitude < 1e-14f) return;
             if (mm != null) { mm.Add(thickness); mm.Add(thickness); mm.Add(thickness); }
-            Vector3 lift = normal.normalized * Lift;
+            Vector3 lift = normal.normalized * offset;
             target.Add(vertices.Count);
             vertices.Add(frame.InverseTransformPoint(a + lift));
             target.Add(vertices.Count);
@@ -417,7 +421,7 @@ namespace ArmorFragments
         private static bool shaderWarned;
 
         // Writes only depth, no color: drawn just before the tints, a part with it hides the tints behind it.
-        internal static Material MakeDepthMaterial()
+        internal static Material MakeDepthMaterial(int renderQueue = RenderQueue - 100)
         {
             Shader shader = Shader.Find("Hidden/Internal-Colored");
             if (shader == null) return null;
@@ -428,7 +432,7 @@ namespace ArmorFragments
             material.SetInt("_Cull", (int)CullMode.Back);
             material.SetInt("_ZWrite", 1);
             material.SetInt("_ZTest", (int)CompareFunction.LessEqual);
-            material.renderQueue = RenderQueue - 100;
+            material.renderQueue = renderQueue;
             return material;
         }
 

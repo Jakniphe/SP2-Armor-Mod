@@ -292,6 +292,7 @@ namespace ArmorFragments
         private static readonly List<Blocker> Blockers = new List<Blocker>();
         private static Material depthMaterial;
         private const float BlockerPushBack = 0.005f;   // share of the distance from the camera
+        private static Material nearestMaterial;          // the tints' own depth, drawn before their colors
 
         private static void AddBlocker(PartScript part)
         {
@@ -458,6 +459,7 @@ namespace ArmorFragments
             Color tint = new Color(1f, 1f, 1f, xray ? XrayAlpha : 1f);
             if (material.color != tint) material.color = tint;
             if (xray) DrawBlockers();
+            if (nearestMaterial == null) nearestMaterial = FaceHighlight.MakeDepthMaterial(FaceHighlight.RenderQueue - 50);
             foreach (KeyValuePair<PartScript, Entry> pair in Parts)
             {
                 PartScript part = pair.Key;
@@ -467,10 +469,14 @@ namespace ArmorFragments
                 if (part.PartMaterialScript != null && !part.PartMaterialScript.Visible) continue;   // hidden in the designer
                 int layer = entry.LayerSource != null ? entry.LayerSource.gameObject.layer : part.gameObject.layer;
                 Matrix4x4 matrix = entry.Frame.localToWorldMatrix;
-                // The outside and the inside of the armored faces.
+                // The outside and the inside of the armored faces. Their depth first (all of them, before any color):
+                // only the tinted surface nearest the camera is then colored at each point, so what shows does not
+                // depend on the order the game draws the parts in (it changes with the camera).
                 for (int sub = 0; sub <= FaceHighlight.InsideSubmesh; sub += FaceHighlight.InsideSubmesh)
                 {
                     if (sub >= entry.Mesh.subMeshCount || entry.Mesh.GetIndexCount(sub) == 0) continue;
+                    if (nearestMaterial != null)
+                        Graphics.DrawMesh(entry.Mesh, matrix, nearestMaterial, layer, null, sub, null, ShadowCastingMode.Off, false);
                     Graphics.DrawMesh(entry.Mesh, matrix, material, layer, null, sub, null, ShadowCastingMode.Off, false);
                 }
             }
@@ -496,6 +502,8 @@ namespace ArmorFragments
             material = null;
             if (depthMaterial != null) Object.Destroy(depthMaterial);
             depthMaterial = null;
+            if (nearestMaterial != null) Object.Destroy(nearestMaterial);
+            nearestMaterial = null;
             if (shield != null)
             {
                 Object.Destroy(shield.texture);
