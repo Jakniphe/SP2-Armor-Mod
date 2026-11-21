@@ -140,11 +140,14 @@ namespace ArmorFragments
             // The layer the block is drawn on right now (the game moves a part being dragged, such as a fresh
             // duplicate, to another layer and back), so the tint is always drawn where the block is.
             int layer = overlayLayerSource != null ? overlayLayerSource.gameObject.layer : overlayFrame.gameObject.layer;
-            Material[] materials = { ArmorView.On ? pickedSolidMaterial : pickedMaterial, armoredMaterial };
-            for (int sub = 0; sub < materials.Length; sub++)
+            Material picked = ArmorView.On ? pickedSolidMaterial : pickedMaterial;
+            Material[] materials = { picked, armoredMaterial, picked, armoredMaterial };   // outside, then inside
+            bool xray = XRay;
+            for (int sub = 0; sub < materials.Length && sub < overlayMesh.subMeshCount; sub++)
             {
                 if (overlayMesh.GetIndexCount(sub) == 0) continue;
-                if (sub == 1 && ArmorView.On) continue;   // the other faces show their thickness color instead
+                if (sub % 2 == 1 && ArmorView.On) continue;   // the other faces show their thickness color instead
+                if (sub >= InsideSubmesh && xray) continue;   // insides: not in the X-ray view
                 Graphics.DrawMesh(overlayMesh, matrix, materials[sub], layer, null, sub, null,
                     ShadowCastingMode.Off, false);
             }
@@ -252,11 +255,16 @@ namespace ArmorFragments
             overlayPart = part;
         }
 
-        // The tint of an armored part, in the space of `frame`: submesh 0 the faces picked (purple), submesh 1 the
-        // other armored faces (blue). picked = AllFaces: every armored face is picked (submesh 1 is empty).
+        // The tint of an armored part, in the space of `frame`. Submeshes: 0 the faces picked (purple), 1 the other
+        // armored faces (blue); 2 and 3 the same faces seen from inside the block. picked = AllFaces: every armored
+        // face is picked (1 and 3 are empty). A plate is met from both sides, so it is tinted on both: a solid
+        // block's face gets a copy facing in, just under its surface; a hollow block's inner wall is the inside of
+        // the face it backs. The inside (2, 3) is left out of the game's X-ray view, where nothing in front hides it.
         // A block armored per face: its armored faces and the armored walls of holes carved into it; open faces
         // are left out. A part armored as a whole: all of its surface. Null when nothing of it is armored.
         // mm (if given) gets the thickness of the armor under each vertex, in the order of the mesh's vertices.
+        internal const int InsideSubmesh = 2;
+
         internal static Mesh BuildMesh(PartScript part, List<KeyValuePair<Mesh, Transform>> filters, int picked,
                                        out Transform frame, List<float> mm = null)
         {
@@ -266,8 +274,7 @@ namespace ArmorFragments
             if (armor == null) return null;
 
             List<Vector3> vertices = new List<Vector3>();
-            List<int> pickedTriangles = new List<int>();
-            List<int> armoredTriangles = new List<int>();
+            List<int>[] sets = { new List<int>(), new List<int>(), new List<int>(), new List<int>() };
             bool all = picked == UI.DesignerSection.AllFaces;
 
             if (!armor.PerFace)
@@ -282,8 +289,8 @@ namespace ArmorFragments
                     Vector3[] points = mesh.vertices;
                     int[] triangles = mesh.triangles;
                     for (int t = 0; t + 2 < triangles.Length; t += 3)
-                        AddTriangle(vertices, pickedTriangles, mm, armor.Thickness, frame, from.TransformPoint(points[triangles[t]]),
-                            from.TransformPoint(points[triangles[t + 1]]), from.TransformPoint(points[triangles[t + 2]]), true);
+                        AddTriangle(vertices, sets[0], sets[2], mm, armor.Thickness, frame, from.TransformPoint(points[triangles[t]]),
+                            from.TransformPoint(points[triangles[t + 1]]), from.TransformPoint(points[triangles[t + 2]]));
                 }
             }
             else
@@ -303,49 +310,49 @@ namespace ArmorFragments
                     if (normal.sqrMagnitude < 1e-14f) continue;
                     normal.Normalize();
 
-                    // A plate is met from both sides, so it is tinted on both: a solid block's face gets a copy facing
-                    // in, just under its surface; a hollow block's inner wall is the inside of the face it backs.
                     int face = ArmorFaces.Classify(shape, (a + b + c) / 3f, normal);
-                    bool inner = face < 0;
+                    bool inner = face < 0;   // an inner wall of a hollow block: the inside of the face it backs
                     if (inner)
                     {
                         if (!shape.Hollow) continue;
                         face = ArmorFaces.Classify(shape, (a + b + c) / 3f, -normal);
                         if (face < 0) continue;
                     }
-                    List<int> target;
-                    if (all) target = armor.Faces[face] > 0f ? pickedTriangles : null;
-                    else if (face == picked) target = pickedTriangles;
-                    else target = armor.Faces[face] > 0f ? armoredTriangles : null;
-                    if (target != null) AddTriangle(vertices, target, mm, armor.Faces[face], frame, a, b, c, !inner && !shape.Hollow);
+                    int set;
+                    if (all) set = armor.Faces[face] > 0f ? 0 : -1;
+                    else if (face == picked) set = 0;
+                    else set = armor.Faces[face] > 0f ? 1 : -1;
+                    if (set < 0) continue;
+                    if (inner) AddTriangle(vertices, sets[set + 2], null, mm, armor.Faces[face], frame, a, b, c);
+                    else AddTriangle(vertices, sets[set], shape.Hollow ? null : sets[set + 2], mm, armor.Faces[face], frame, a, b, c);
                 }
 
                 // Armored walls of holes carved into it ([HOL] on the cutter): blue, or purple with every face picked.
                 float[] wallMm;
                 Vector3[] walls = ArmorSurface.WallsLocal(part, out wallMm);
-                List<int> wallTarget = all ? pickedTriangles : armoredTriangles;
+                int wallSet = all ? 0 : 1;
                 for (int t = 0; t + 2 < walls.Length; t += 3)
-                    AddTriangle(vertices, wallTarget, mm, t / 3 < wallMm.Length ? wallMm[t / 3] : 0f, frame, partFrame.TransformPoint(walls[t]),
-                        partFrame.TransformPoint(walls[t + 1]), partFrame.TransformPoint(walls[t + 2]), true);
+                    AddTriangle(vertices, sets[wallSet], sets[wallSet + 2], mm, t / 3 < wallMm.Length ? wallMm[t / 3] : 0f, frame,
+                        partFrame.TransformPoint(walls[t]), partFrame.TransformPoint(walls[t + 1]), partFrame.TransformPoint(walls[t + 2]));
             }
             if (vertices.Count == 0 || frame == null) return null;
 
             Mesh overlay = new Mesh { name = OverlayName };
             if (vertices.Count > 65000) overlay.indexFormat = IndexFormat.UInt32;
             overlay.SetVertices(vertices);
-            overlay.subMeshCount = 2;
-            overlay.SetTriangles(pickedTriangles, 0);
-            overlay.SetTriangles(armoredTriangles, 1);
+            overlay.subMeshCount = sets.Length;
+            for (int s = 0; s < sets.Length; s++) overlay.SetTriangles(sets[s], s);
             overlay.RecalculateBounds();
             return overlay;
         }
 
-        // One triangle (world points), lifted off the surface along its normal, into `frame`'s space. bothSides: also
-        // a copy facing the other way, just under the surface, seen from the other side (tints draw one side only).
-        private static void AddTriangle(List<Vector3> vertices, List<int> target, List<float> mm, float thickness,
-                                        Transform frame, Vector3 a, Vector3 b, Vector3 c, bool bothSides = false)
+        // One triangle (world points), lifted off the surface along its normal, into `frame`'s space. inside (if
+        // given): also a copy facing the other way, just under the surface, seen from the other side (tints draw
+        // one side only).
+        private static void AddTriangle(List<Vector3> vertices, List<int> target, List<int> inside, List<float> mm,
+                                        float thickness, Transform frame, Vector3 a, Vector3 b, Vector3 c)
         {
-            if (bothSides) AddTriangle(vertices, target, mm, thickness, frame, a, c, b);
+            if (inside != null) AddTriangle(vertices, inside, null, mm, thickness, frame, a, c, b);
             Vector3 normal = Vector3.Cross(b - a, c - a);
             if (normal.sqrMagnitude < 1e-14f) return;
             if (mm != null) { mm.Add(thickness); mm.Add(thickness); mm.Add(thickness); }
@@ -356,6 +363,16 @@ namespace ArmorFragments
             vertices.Add(frame.InverseTransformPoint(b + lift));
             target.Add(vertices.Count);
             vertices.Add(frame.InverseTransformPoint(c + lift));
+        }
+
+        // Is the game's X-ray view on in the designer?
+        internal static bool XRay
+        {
+            get
+            {
+                Designer designer = Designer.Instance;
+                return designer != null && designer.ViewMode == DesignerViewMode.Ghost;
+            }
         }
 
         // Is the edit tint drawn over this part right now (the armor view then leaves it to it)?

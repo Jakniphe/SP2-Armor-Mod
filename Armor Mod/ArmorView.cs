@@ -390,8 +390,7 @@ namespace ArmorFragments
                 if (material == null) return;
             }
             // Solid, except in the game's X-ray view, where armor deeper in the craft shows through the faces in front.
-            Designer designer = Designer.Instance;
-            bool xray = designer != null && designer.ViewMode == DesignerViewMode.Ghost;
+            bool xray = FaceHighlight.XRay;
             Color tint = new Color(1f, 1f, 1f, xray ? XrayAlpha : 1f);
             if (material.color != tint) material.color = tint;
             foreach (KeyValuePair<PartScript, Entry> pair in Parts)
@@ -401,10 +400,15 @@ namespace ArmorFragments
                 if (part == null || entry.Mesh == null || entry.Frame == null) continue;
                 if (!part.gameObject.activeInHierarchy) continue;
                 if (part.PartMaterialScript != null && !part.PartMaterialScript.Visible) continue;   // hidden in the designer
-                if (entry.Mesh.GetIndexCount(0) == 0) continue;
                 int layer = entry.LayerSource != null ? entry.LayerSource.gameObject.layer : part.gameObject.layer;
-                Graphics.DrawMesh(entry.Mesh, entry.Frame.localToWorldMatrix, material, layer, null, 0, null,
-                    ShadowCastingMode.Off, false);
+                Matrix4x4 matrix = entry.Frame.localToWorldMatrix;
+                // The outside, and the inside unless in the X-ray view (nothing in front hides it there).
+                for (int sub = 0; sub <= FaceHighlight.InsideSubmesh; sub += FaceHighlight.InsideSubmesh)
+                {
+                    if (sub >= entry.Mesh.subMeshCount || entry.Mesh.GetIndexCount(sub) == 0) continue;
+                    if (sub == FaceHighlight.InsideSubmesh && xray) continue;
+                    Graphics.DrawMesh(entry.Mesh, matrix, material, layer, null, sub, null, ShadowCastingMode.Off, false);
+                }
             }
         }
 
