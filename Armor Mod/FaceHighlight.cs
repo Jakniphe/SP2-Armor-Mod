@@ -358,8 +358,8 @@ namespace ArmorFragments
         // game's see-through parts (its X-ray view), so the tint stays on them.
         internal static readonly Color PickedColor = new Color(0.40f, 0.10f, 0.70f, 0.75f);
         internal static readonly Color ArmoredColor = new Color(0.15f, 0.45f, 1f, 0.55f);
-        // The face being set over the armor view: the same purple (not on its thickness scale), more solid.
-        internal static readonly Color PickedOverViewColor = new Color(0.40f, 0.10f, 0.70f, 0.9f);
+        // The face being set over the armor view: the same purple (not on its thickness scale), solid like the view.
+        internal static readonly Color PickedOverViewColor = new Color(0.40f, 0.10f, 0.70f, 1f);
         internal const int RenderQueue = 3500;
 
         internal static Material MakeTintMaterial(Color color)

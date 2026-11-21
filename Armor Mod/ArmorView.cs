@@ -42,7 +42,7 @@ namespace ArmorFragments
         // green (thinnest) through yellow and orange to the darkest red (thickest), whatever the values are.
         private static readonly List<float> Legend = new List<float>();
         private static readonly List<Color> LegendColors = new List<Color>();
-        private const float Alpha = 0.9f;
+        private const float Alpha = 1f;   // solid: the armor view shows the armor, not the paint under it
         private static readonly Color[] Ramp =
         {
             new Color(0.62f, 0.96f, 0.45f),   // light green
